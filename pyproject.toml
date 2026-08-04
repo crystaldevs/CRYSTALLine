@@ -29,11 +29,15 @@ dependencies = [
     # loader.py calls CifParser.parse_structures, which landed in 2023.11.10
     # (it replaced get_structures). Anything older breaks every CIF code path.
     "pymatgen>=2023.11.10",
-    "CRYSTALClear>=0.2",
+    "CRYSTALClear>=0.2.16",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-qt>=4"]
+# Exporting a phonon animation as MP4/MOV/WebM needs an ffmpeg encoder, which
+# imageio-ffmpeg ships as a binary wheel. Optional because it is a ~30 MB
+# download and GIF/frame-sequence export — the default — needs nothing extra.
+video = ["imageio>=2.28", "imageio-ffmpeg>=0.4"]
 
 [project.gui-scripts]
 crystalline = "crystalline.__main__:main"

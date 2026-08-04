@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from crystalline.core.phonons import PhononMode, displaced_positions
+from crystalline.core.phonons import PhononMode, displaced_positions, frame_displacement
 from crystalline.viz.renderer import StructureRenderer
 
 # Default peak displacement in Angstrom. Chosen to match the motion the old
@@ -41,8 +41,16 @@ class PhononAnimator:
         self._mode = mode
         self.renderer.set_bond_reference(self._equilibrium)
         # Show the mode as an arrow field too: the animation reads well on screen,
-        # the arrows are what survives into a still image.
-        self.renderer.set_mode_vectors(mode.eigenvector)
+        # the arrows are what survives into a still image. Drawn at the quarter
+        # cycle, where a Gamma mode is at full stretch — for a mode away from
+        # Gamma that is one snapshot of a travelling wave (an atom whose motion
+        # is elliptical is caught mid-ellipse), which is what a still frame of
+        # such a mode can honestly be.
+        # The Bloch phase rides along: it is what tells the arrows of one cell
+        # from the next when the mode is a travelling wave.
+        self.renderer.set_mode_vectors(
+            frame_displacement(mode.eigenvector, np.pi / 2.0), phases=mode.cell_phase
+        )
 
     def clear_mode(self) -> None:
         """Forget the selected mode and take its arrows off the view.

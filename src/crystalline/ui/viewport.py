@@ -170,6 +170,10 @@ class Viewport(QWidget):
         """Draw the Geometry panel's measurements over the structure."""
         self.renderer.set_annotations(annotations)
 
+    def set_symmetry_elements(self, elements, labels: bool = False) -> None:
+        """Draw the Symmetry panel's ticked elements over the structure."""
+        self.renderer.set_symmetry_elements(elements, labels=labels)
+
     def rotate_view(self, azimuth: float = 0.0, elevation: float = 0.0, roll: float = 0.0) -> None:
         """Orbit the camera around the structure by the given angles (degrees).
 

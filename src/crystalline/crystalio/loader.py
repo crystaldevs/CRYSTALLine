@@ -38,17 +38,44 @@ _FREQ_MARKERS = (
     re.compile(r"MODES\s+EIGV\s+FREQUENCIES\s+IRREP"),
 )
 
+# One sampled q, as a dispersion (SCELPHONO) run heads each block:
+#   DISPERSION K POINT NUMBER     2 COORD:  C(  0  0  1 )    WEIGHT:    1.
+# The letter is R for a q that is its own opposite (real eigenvectors) and C
+# otherwise; the triple is in units of the shrinking factors below.
+_QPOINT_HEADER = re.compile(
+    r"DISPERSION K POINT NUMBER\s+(\d+)\s+COORD:\s*[A-Z]?\(\s*"
+    r"(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*\)"
+)
+# The denominators of that triple, in the two spellings CRYSTAL uses: a
+# supercell run states one factor per axis, a plain dispersion run one for all.
+_SHRINK_FACTORS = re.compile(
+    r"WITH SHRINKING FACTORS:\s*IS1\s*=\s*(\d+)\s+IS2\s*=\s*(\d+)\s+IS3\s*=\s*(\d+)"
+)
+_SHRINK_DENOMINATOR = re.compile(r"EXPRESSED IN UNITS\s+OF DENOMINATOR\s+(\d+)")
+
 
 @dataclass
 class LoadedFile:
-    """Result of :func:`load`: a structure and, if present, its phonon modes."""
+    """Result of :func:`load`: a structure and, if present, its phonon modes.
+
+    ``modes`` is the Gamma-point set — what every consumer of a FREQCALC wants —
+    and ``qmodes`` holds one set per sampled q, ``qmodes[0]`` being that same
+    Gamma set. A plain frequency run has exactly one; a SCELPHONO run has as many
+    as its supercell allows.
+    """
 
     structure: Structure
     modes: Optional[PhononModes] = None
+    qmodes: Optional[list] = None
 
     @property
     def has_phonons(self) -> bool:
         return self.modes is not None and len(self.modes) > 0
+
+    @property
+    def qpoints(self) -> list:
+        """The sampled q-points' modes, or an empty list without phonons."""
+        return list(self.qmodes) if self.qmodes else []
 
 
 def has_phonons(path: str) -> bool:
@@ -73,8 +100,8 @@ def load(path: str, initial: bool = False) -> LoadedFile:
     if the output is a frequency calculation, the phonon modes as well.
     """
     if not _is_gui(path) and not _is_cif(path) and has_phonons(path):
-        structure, modes = load_phonons(path)
-        return LoadedFile(structure=structure, modes=modes)
+        structure, qmodes = load_dispersion(path)
+        return LoadedFile(structure=structure, modes=qmodes[0], qmodes=qmodes)
     return LoadedFile(structure=load_structure(path, initial=initial), modes=None)
 
 
@@ -138,7 +165,8 @@ def load_phonons(
 
     Returns the structure the modes are defined on, alongside the modes for the
     requested q-point (Gamma by default). Imaginary/soft modes are kept by
-    default so they remain animatable.
+    default so they remain animatable. Use :func:`load_dispersion` to get every
+    sampled q in one pass — which is what reading the file twice would cost.
 
     Parameters
     ----------
@@ -150,6 +178,30 @@ def load_phonons(
         If True, negative-frequency modes are retained (CRYSTALClear would
         otherwise NaN them out).
     """
+    structure, qmodes = load_dispersion(path, keep_imaginary=keep_imaginary)
+    if not 0 <= qpoint < len(qmodes):
+        raise IndexError(
+            f"q-point {qpoint} out of range: this run sampled {len(qmodes)}"
+        )
+    return structure, qmodes[qpoint]
+
+
+def load_dispersion(
+    path: str,
+    keep_imaginary: bool = True,
+) -> tuple[Structure, list]:
+    """Load the geometry and **every** sampled q-point's modes from a ``.out``.
+
+    Returns ``(structure, [PhononModes, ...])`` with the Gamma-point set first.
+    A plain FREQCALC yields a single set; a SCELPHONO run yields one per q the
+    supercell makes accessible, each mode carrying its complex eigenvector and
+    its q in the structure's own reciprocal basis, ready to be tiled into a
+    visible wave (``core.cells``).
+
+    One pass over the output serves all of them: parsing a large frequency
+    output is the expensive part of opening such a file, and re-reading it per
+    q-point would make selecting one from the panel feel like loading a file.
+    """
     from CRYSTALClear.crystal_io import Crystal_output
 
     out = Crystal_output(path)
@@ -157,35 +209,112 @@ def load_phonons(
 
     # frequency: (nqpoint, nmode) in THz -> converted to cm^-1 below.
     # eigenvector at a q-point comes back per mode either flattened as
-    # (3*natom,) or already (natom, 3), and may be complex (Gamma-point modes
-    # are real up to a global phase -> take the real part).
-    freqs = np.atleast_2d(np.asarray(out.frequency))[qpoint]
-    eigvecs = np.asarray(out.eigenvector)[qpoint]
+    # (3*natom,) or already (natom, 3), and is complex: at Gamma the imaginary
+    # part is zero, away from it it is CRYSTAL's "anti-phase" block.
+    freqs = np.atleast_2d(np.asarray(out.frequency))
+    eigvecs = np.asarray(out.eigenvector)
+    nq = min(len(freqs), len(eigvecs))
+    if nq == 0:
+        raise ValueError("this output reports no phonon modes")
 
-    structure = _structure_for_modes(out, int(np.asarray(eigvecs[0]).size) // 3)
+    structure = _structure_for_modes(out, int(np.asarray(eigvecs[0][0]).size) // 3)
     natom = len(structure)
+    qpoints = _sampled_qpoints(out, nq)
 
-    # IR/Raman selection rules are only printed for the Gamma point.
+    return structure, [
+        _modes_at(freqs[q], eigvecs[q], natom, qpoints[q], activity=(q == 0), out=out)
+        for q in range(nq)
+    ]
+
+
+def _modes_at(freqs, eigvecs, natom: int, qpoint, activity: bool, out) -> PhononModes:
+    """The modes of one q-point, as :class:`PhononMode` objects.
+
+    IR/Raman selection rules and intensities are printed for the Gamma block
+    only — ``activity`` says whether this set is that block — so away from it the
+    modes carry ``None`` and the panel's activity filter switches itself off
+    rather than showing an empty list.
+    """
     nmode = len(freqs)
-    if qpoint == 0:
+    gamma = qpoint is None or not np.any(np.abs(np.asarray(qpoint, dtype=float)) > 1e-6)
+    if activity and gamma:
         ir = _per_mode(getattr(out, "IR", None), nmode)
         raman = _per_mode(getattr(out, "Raman", None), nmode)
         intens = _per_mode(getattr(out, "intens", None), nmode, cast=float)
     else:
         ir = raman = intens = [None] * nmode
 
-    modes = [
-        PhononMode(
-            frequency=float(np.real(freqs[i])) * THZ_TO_CM,
-            eigenvector=np.real(eigvecs[i]).reshape(natom, 3),
-            ir_active=ir[i],
-            raman_active=raman[i],
-            ir_intensity=intens[i],
+    modes = []
+    for i in range(nmode):
+        eigenvector = np.asarray(eigvecs[i]).reshape(natom, 3)
+        # At Gamma the eigenvector is real up to a global phase and CRYSTAL
+        # prints it real, so the (zero) imaginary part is dropped: everything
+        # downstream that predates dispersion goes on seeing real arrays. An
+        # unidentified q counts as Gamma here — with no q there is no phase to
+        # apply, and the in-phase part is the honest half of the answer.
+        if gamma:
+            eigenvector = np.real(eigenvector)
+        modes.append(
+            PhononMode(
+                frequency=float(np.real(freqs[i])) * THZ_TO_CM,
+                eigenvector=eigenvector,
+                ir_active=ir[i],
+                raman_active=raman[i],
+                ir_intensity=intens[i],
+                qpoint=qpoint,
+            )
         )
-        for i in range(nmode)
-    ]
+    return PhononModes(modes)
 
-    return structure, PhononModes(modes)
+
+def _sampled_qpoints(out, nq: int) -> list:
+    """The q of each mode set, in the order CRYSTALClear returns them.
+
+    Read from the output text rather than from ``Crystal_output.qpoint``, which
+    can't be lined up with the frequencies: it omits the Gamma block that heads
+    a dispersion run (leaving ``nqpoint - 1`` entries for ``nqpoint`` mode sets)
+    and divides all three components by the *first* shrinking factor, which is
+    wrong the moment a SCELPHONO supercell isn't cubic.
+
+    Anything that doesn't line up — no q header at all (a plain FREQCALC), or a
+    QHA run whose "q-point" axis counts volumes rather than points in reciprocal
+    space — falls back to ``None`` (Gamma) for every set. Unlabelled beats
+    mislabelled: a wrong q would put a wrong phase on every image atom.
+    """
+    lines = getattr(out, "data", None)
+    if lines is None:
+        return [None] * nq
+    end = getattr(out, "eoo", None)
+    parsed = _qpoints_from_lines(lines[:end] if end else lines)
+    if len(parsed) != nq:
+        return [None] * nq
+    return parsed
+
+
+def _qpoints_from_lines(lines) -> list:
+    """Fractional q of every ``DISPERSION K POINT`` header, in file order.
+
+    Empty when the run reports no q headers, or when their denominators (the
+    shrinking factors) never appear — without those the integer triples cannot
+    be turned into coordinates.
+    """
+    shrink = None
+    qpoints = []
+    for line in lines:
+        if shrink is None:
+            factors = _SHRINK_FACTORS.search(line)
+            if factors:
+                shrink = np.array([int(f) for f in factors.groups()], dtype=float)
+            else:
+                single = _SHRINK_DENOMINATOR.search(line)
+                if single:
+                    shrink = np.full(3, float(single.group(1)))
+        header = _QPOINT_HEADER.search(line)
+        if header:
+            qpoints.append(np.array([int(v) for v in header.groups()[1:]], dtype=float))
+    if not qpoints or shrink is None or np.any(shrink <= 0):
+        return []
+    return [q / shrink for q in qpoints]
 
 
 def load_adp(path: str) -> Optional[ADPSet]:
@@ -572,6 +701,7 @@ def _gui_to_ase(path: str) -> Atoms:
 __all__ = [
     "load_adp",
     "load_structure",
+    "load_dispersion",
     "load_phonons",
     "save_structure_gui",
     "save_structure_cif",

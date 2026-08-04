@@ -88,6 +88,9 @@ class DisplayPanel(QWidget):
         self._measure_point_color = settings.measure_point_color
         self._measure_line_color = settings.measure_line_color
         self._measure_plane_color = settings.measure_plane_color
+        self._symmetry_axis_color = settings.symmetry_axis_color
+        self._symmetry_plane_color = settings.symmetry_plane_color
+        self._symmetry_point_color = settings.symmetry_point_color
         self._mode_arrow_color = settings.mode_arrow_color
         # Which temperature to select the first time a file brings some. After
         # that the picker's own index carries across files.
@@ -176,6 +179,24 @@ class DisplayPanel(QWidget):
         self._arrow_scale = self._float_row(
             arrows, "Arrow length (Å)", settings.mode_arrow_scale, 0.2, 5.0, 0.1
         )
+        self._arrow_proportional = self._check(
+            arrows, "Scale by displacement", settings.mode_arrow_proportional
+        )
+        self._arrow_proportional.setToolTip(
+            "Draw each arrow as long as that atom's displacement, the longest at\n"
+            "the length above — instead of one length for every atom.\n"
+            "This is what shows a mode away from Γ as a wave in a still image:\n"
+            "its cells differ in phase, so only the arrow lengths tell them apart."
+        )
+        self._arrow_phase_colors = self._check(
+            arrows, "Colour by phase (q ≠ Γ)", settings.mode_arrow_phase_colors
+        )
+        self._arrow_phase_colors.setToolTip(
+            "Colour each arrow by the phase of the cell its atom is in, cycling\n"
+            "once per wavelength — the one thing that distinguishes the cells of\n"
+            "a travelling wave, whose amplitude is the same in every one.\n"
+            "Replaces the colour below; nothing to show at Γ."
+        )
         self._arrow_color_btn = self._color_row(arrows, "Colour", "_mode_arrow_color")
 
         # ── Measurements ── (Geometry panel overlays: dots, paths, plane patches)
@@ -183,6 +204,18 @@ class DisplayPanel(QWidget):
         self._measure_point_btn = self._color_row(measure, "Dots", "_measure_point_color")
         self._measure_line_btn = self._color_row(measure, "Lines", "_measure_line_color")
         self._measure_plane_btn = self._color_row(measure, "Planes", "_measure_plane_color")
+
+        # ── Point symmetry ── (Point symmetry panel overlays: axes, planes, centre)
+        symmetry = self._group(layout, "Point symmetry")
+        self._symmetry_axis_btn = self._color_row(
+            symmetry, "Rotation axes", "_symmetry_axis_color"
+        )
+        self._symmetry_plane_btn = self._color_row(
+            symmetry, "Mirror planes", "_symmetry_plane_color"
+        )
+        self._symmetry_point_btn = self._color_row(
+            symmetry, "Inversion centre", "_symmetry_point_color"
+        )
 
         # ── Scene ──
         scene = self._group(layout, "Scene")
@@ -409,10 +442,15 @@ class DisplayPanel(QWidget):
                 adp_temperature_index=max(self._adp_temp.currentIndex(), 0),
                 show_mode_arrows=self._show_arrows.isChecked(),
                 mode_arrow_scale=self._arrow_scale.value(),
+                mode_arrow_proportional=self._arrow_proportional.isChecked(),
+                mode_arrow_phase_colors=self._arrow_phase_colors.isChecked(),
                 mode_arrow_color=self._mode_arrow_color,
                 measure_point_color=self._measure_point_color,
                 measure_line_color=self._measure_line_color,
                 measure_plane_color=self._measure_plane_color,
+                symmetry_axis_color=self._symmetry_axis_color,
+                symmetry_plane_color=self._symmetry_plane_color,
+                symmetry_point_color=self._symmetry_point_color,
                 background_color=self._bg_color,
                 parallel_projection=self._projection.currentIndex() == 1,
             )

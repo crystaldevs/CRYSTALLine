@@ -56,6 +56,20 @@ _ANNOTATION_PLANE_MIN_SIZE = 2.0  # Angstrom, so a tight plane is still visible
 # Depth bias that lifts annotations in front of the atoms they measure.
 _ANNOTATION_DEPTH_OFFSET = -66000.0
 
+# Symmetry elements (Symmetry panel). Drawn with the same three shapes as the
+# measurements — a tube for an axis, a patch for a plane, a dot for the centre —
+# but thinner and fainter: several of them cross the same structure, and they are
+# context for it rather than the thing being looked at.
+_SYMMETRY_LINE_RADIUS = 0.025
+_SYMMETRY_POINT_RADIUS = 0.12
+_SYMMETRY_PLANE_OPACITY = 0.16
+_SYMMETRY_FONT_SIZE = 12
+# How far past the atoms (and the cell) an element is drawn, in Angstrom.
+_SYMMETRY_BOUNDS_MARGIN = 0.5
+# How far back from its far end an element's label sits, as a fraction of the
+# distance to the centre — see _label_anchor.
+_SYMMETRY_LABEL_INSET = 0.08
+
 # Coordination-polyhedra outline: only edges where adjacent faces bend by more
 # than this are real polyhedron edges (the rest are the hull's triangulation of
 # a flat face), drawn this wide in this fraction of the face colour.
@@ -122,6 +136,18 @@ _GIZMO_BOUNDS_PADDING = 1.3
 # atom that barely moves would be flagged as strongly as one that carries the
 # mode — and in a big cell most atoms barely move in any given mode.
 _MIN_ARROW_FRACTION = 0.05
+
+# Colormap for the per-atom Bloch phase of a mode away from Gamma. Cyclic (its
+# two ends are the same colour), because phase is an angle: any other map would
+# draw a false discontinuity somewhere in the middle of a perfectly smooth wave.
+#
+# ``hsv`` over the perceptually better cyclic maps (twilight and friends) for
+# one reason: this is read off *arrows*, a few pixels wide. Twilight spends its
+# saturated tones in the middle of the cycle and its ends on near-greys, which
+# on a thin glyph come out as "grey, black, grey, white" — the phases are all
+# there and none of them are legible. The job here is telling a handful of
+# discrete phases apart at a glance, and hsv does that.
+_PHASE_COLORMAP = "hsv"
 
 # An ADP ellipsoid whose longest semi-axis is below this (Angstrom) is too
 # small to read on screen; that atom keeps its ordinary sphere instead of
@@ -209,6 +235,8 @@ class StructureRenderer:
         self._arrow_actor = None
         # (N, 3) eigenvector of the selected phonon mode, drawn as per-atom arrows.
         self._mode_vectors: Optional[np.ndarray] = None
+        # (N,) Bloch phase of each atom's cell, when the mode is away from Gamma.
+        self._mode_phases: Optional[np.ndarray] = None
         self._adp_actor = None
         self._adp_mesh_obj = None     # kept so animation can move its points
         self._adp_follow = None       # (atom index, offset) per ellipsoid vertex
@@ -219,6 +247,9 @@ class StructureRenderer:
         self._ellipsoid_mask: Optional[np.ndarray] = None
         self._annotations: list = []          # measurements drawn over the structure
         self._annotation_actors: list = []
+        self._symmetry_elements: list = []    # symmetry elements drawn over the structure
+        self._symmetry_actors: list = []
+        self._symmetry_labels = False         # write each element's symbol beside it
         self._bond_structure: Optional[Structure] = None  # clean cell for coordination
         # Geometry that decides *which* atoms are bonded while something moves the
         # atoms without changing the chemistry (a phonon animation). None means
@@ -296,7 +327,7 @@ class StructureRenderer:
         self._frozen_bond_pairs = None
         self._frozen_hbond_pairs = None
 
-    def set_mode_vectors(self, vectors: Optional[np.ndarray]) -> None:
+    def set_mode_vectors(self, vectors: Optional[np.ndarray], phases=None) -> None:
         """Draw ``vectors`` as a per-atom arrow field (``None`` clears them).
 
         Used for the selected phonon mode's eigenvector: an animation shows the
@@ -304,11 +335,17 @@ class StructureRenderer:
         structure looks like a distorted one. Arrows say which atoms move, how
         far, and in which direction, all at once.
 
+        ``phases`` is the optional per-atom Bloch phase (radians) of a mode away
+        from Gamma — the cell-to-cell lag that *is* the wave. With
+        ``mode_arrow_phase_colors`` set it colours the arrows, which is the only
+        way a still image can carry it: the amplitude is the same in every cell.
+
         A vector set that doesn't match the atom count is simply not drawn — the
         displayed structure can be swapped (supercell, cell view, an edit) while
         a mode is still selected.
         """
         self._mode_vectors = None if vectors is None else np.asarray(vectors, dtype=float)
+        self._mode_phases = None if phases is None else np.asarray(phases, dtype=float)
         self._redraw_mode_arrows()
         self.plotter.render()
 
@@ -561,6 +598,7 @@ class StructureRenderer:
         self._adp_follow = None
         self._ellipsoid_mask = None  # settings/geometry may have changed under it
         self._annotation_actors = []  # plotter.clear() dropped them; _draw_annotations re-adds
+        self._symmetry_actors = []    # likewise: _draw_symmetry_elements re-adds them
         self._highlight_actors = {}
         if self._structure is None or len(self._structure) == 0:
             self._restore_camera(saved_camera)
@@ -594,6 +632,7 @@ class StructureRenderer:
             self._draw_atom_labels()
         self._draw_mode_arrows()  # the selected mode's eigenvector, if one is set
         self._draw_annotations()  # measurements survive a rebuild (plotter.clear())
+        self._draw_symmetry_elements()  # and so do the shown symmetry elements
         self._restore_camera(saved_camera)
         self.plotter.render()
 
@@ -974,6 +1013,144 @@ class StructureRenderer:
             _draw_over_scene(actor)
         self._annotation_actors.append(actor)
 
+    # ── symmetry elements (axes / planes / centres) ─────────────────────
+    def set_symmetry_elements(self, elements, labels: bool = False) -> None:
+        """Draw symmetry elements over the structure, replacing any shown.
+
+        ``elements`` are :class:`~crystalline.core.symmetry.SymmetryElement`
+        objects: a rotation axis becomes a tube across the drawn scene, a mirror
+        plane a translucent patch through it, and the inversion centre a dot. All
+        of them pass through the one centre the point group acts about.
+        ``labels`` writes each element's Hermann–Mauguin symbol beside it.
+
+        They are kept and redrawn on every rebuild, so an edit or a settings
+        change doesn't blink them out.
+        """
+        self._symmetry_elements = list(elements)
+        self._symmetry_labels = bool(labels)
+        self._clear_symmetry_elements()
+        self._draw_symmetry_elements()
+        self.plotter.render()
+
+    def _clear_symmetry_elements(self) -> None:
+        for actor in self._symmetry_actors:
+            self.plotter.remove_actor(actor, render=False)
+        self._symmetry_actors = []
+
+    def _draw_symmetry_elements(self) -> None:
+        """(Re)draw the stored symmetry elements. Never raises into a redraw."""
+        from crystalline.core.symmetry import PLANE, POINT
+
+        self._symmetry_actors = []
+        if not self._symmetry_elements:
+            return
+        bounds = self._scene_bounds(_SYMMETRY_BOUNDS_MARGIN)
+        if bounds is None:
+            return
+
+        colors = {
+            POINT: self._settings.symmetry_point_color,
+            PLANE: self._settings.symmetry_plane_color,
+        }
+        labels: list = []
+        anchors: list = []
+        for element in self._symmetry_elements:
+            try:
+                drawn = self._symmetry_mesh(element, bounds)
+            except Exception:  # noqa: BLE001 - one bad element must not kill the redraw
+                continue
+            if drawn is None:
+                continue  # this element doesn't reach the drawn box
+            mesh, spots = drawn
+            self._add_symmetry_actor(
+                mesh,
+                color=colors.get(element.kind, self._settings.symmetry_axis_color),
+                opacity=_SYMMETRY_PLANE_OPACITY if element.kind == PLANE else 1.0,
+                # A plane reads as a slice *through* the structure, like a
+                # measured plane does; an axis has to stay visible in front of it.
+                on_top=element.kind != PLANE,
+            )
+            if self._symmetry_labels:
+                labels.append(element.label)
+                anchors.append(_spread_anchor(spots, anchors))
+
+        if labels:
+            actor = self.plotter.add_point_labels(
+                np.asarray(anchors, dtype=float), labels,
+                font_size=_SYMMETRY_FONT_SIZE, show_points=False, shape_opacity=0.6,
+                always_visible=True, pickable=False, render=False,
+            )
+            actor.SetPickable(False)
+            _use_unicode_font(actor)
+            self._symmetry_actors.append(actor)
+
+    def _symmetry_mesh(self, element, bounds):
+        """``(mesh, label anchor)`` for ``element`` clipped to the box, or ``None``.
+
+        An axis and a plane are both infinite, so each is cut down to the part
+        that crosses the drawn scene: the axis becomes a tube between the two
+        faces it leaves through, and the plane the polygon it slices out of the
+        box — a hexagon across a cube's diagonal as readily as a square.
+        """
+        from crystalline.core.symmetry import AXIS, PLANE, segment_in_box
+
+        if element.kind == AXIS:
+            segment = segment_in_box(element.origin, element.direction, bounds)
+            if segment is None:
+                return None
+            points = np.asarray(segment, dtype=float)
+            return (
+                _polyline_tube(points, _SYMMETRY_LINE_RADIUS),
+                _label_spots(points, element.origin),
+            )
+        if element.kind == PLANE:
+            patch = _plane_in_box(element.origin, element.direction, bounds)
+            if patch is None:
+                return None
+            return patch, _label_spots(np.asarray(patch.points, dtype=float), element.origin)
+        centre = np.asarray(element.origin, dtype=float)
+        return pv.Sphere(radius=_SYMMETRY_POINT_RADIUS, center=centre), centre.reshape(1, 3)
+
+    def _add_symmetry_actor(self, mesh, color: str, opacity: float, on_top: bool) -> None:
+        actor = self.plotter.add_mesh(
+            mesh, color=color, opacity=opacity, smooth_shading=True, render=False
+        )
+        actor.SetPickable(False)  # symmetry elements are never a pick target
+        if on_top:
+            _draw_over_scene(actor)
+        self._symmetry_actors.append(actor)
+
+    def _scene_bounds(self, margin: float = 0.0) -> Optional[tuple]:
+        """The drawn extent as ``(xmin, xmax, …)``, padded by ``margin`` Angstrom.
+
+        Both the atoms and the cell contribute: a symmetry element has to span
+        the whole cell even where no atom sits, and has to reach the atoms a
+        boundary-completed view puts outside it. Only *periodic* lattice vectors
+        count — a slab's formal 500 Å vacuum axis is not part of the scene.
+        """
+        if self._structure is None or len(self._positions) == 0:
+            return None
+        points = [self._positions]
+        cell = self._cell_or_none()
+        if cell is not None:
+            vectors = [cell[i] for i, periodic in enumerate(self._structure.pbc) if periodic]
+            if vectors:
+                points.append(
+                    np.asarray(
+                        [
+                            sum(combination)
+                            for combination in itertools.product(
+                                *[(np.zeros(3), v) for v in vectors]
+                            )
+                        ],
+                        dtype=float,
+                    )
+                )
+        stacked = np.vstack(points)
+        low = stacked.min(axis=0) - margin
+        high = stacked.max(axis=0) + margin
+        return (low[0], high[0], low[1], high[1], low[2], high[2])
+
     def _cell_or_none(self) -> Optional[np.ndarray]:
         """The displayed structure's lattice, or ``None`` if it has no usable one."""
         if self._structure is None:
@@ -1218,19 +1395,26 @@ class StructureRenderer:
         """One glyphed actor holding every displacement arrow.
 
         Arrows start at the atoms as currently *drawn*, so they travel with the
-        atoms through an animation instead of hanging in space. Every arrow is
-        the same length: it shows which way an atom moves, not how far. Scaling
-        by displacement instead would leave the arrows of a delocalised mode —
-        where no atom stands out — as a field of specks, and in a mode dominated
-        by one hydrogen it would erase every other atom's direction entirely.
+        atoms through an animation instead of hanging in space.
 
-        How far each atom moves is still readable, in two better places: the
-        animation itself, and the composition line in the Phonons panel. What
-        the arrows add is direction, and direction reads best at one size.
+        By default every arrow is the same length: it shows which way an atom
+        moves, not how far. Scaling by displacement would leave the arrows of a
+        delocalised mode — where no atom stands out — as a field of specks, and
+        in a mode dominated by one hydrogen it would erase every other atom's
+        direction entirely; how far each atom moves is readable in two better
+        places, the animation itself and the composition line in the Phonons
+        panel.
+
+        ``mode_arrow_proportional`` turns that off, scaling each arrow by the
+        atom's displacement with the longest at ``mode_arrow_scale``. That is
+        the reading a mode away from Gamma needs: its atoms differ from cell to
+        cell only in *phase*, so a snapshot distinguishes them only by how far
+        each is moving at that instant — uniform arrows draw a travelling wave
+        as though every cell were doing the same thing.
 
         Atoms barely involved in the mode get no arrow at all — below a small
-        fraction of the largest displacement, a full-length arrow would claim a
-        motion that isn't there.
+        fraction of the largest displacement, an arrow would claim a motion that
+        isn't there (and, drawn uniform, would claim a large one).
         """
         if not self._settings.show_mode_arrows or self._mode_vectors is None:
             return
@@ -1246,18 +1430,49 @@ class StructureRenderer:
             return
 
         cloud = pv.PolyData(self._positions[keep])
-        # Direction only: unit vectors, all drawn at the one configured length.
         directions = vectors[keep] / lengths[keep, None]
+        if self._settings.mode_arrow_proportional:
+            # Length carries the displacement, normalised so the most-displaced
+            # atom gets the configured length whatever the eigenvector's scale.
+            directions = directions * (lengths[keep, None] / peak)
         cloud["vectors"] = directions * self._settings.mode_arrow_scale
+        phases = self._arrow_phases(keep)
+        if phases is not None:
+            cloud["phase"] = phases
         # factor=1: the glyph is already scaled to Angstrom by "vectors" above.
         # Radii are fractions of the arrow's own length, so a short arrow stays
         # proportioned rather than degenerating into a line.
         glyph = cloud.glyph(geom=pv.Arrow(tip_length=0.3, tip_radius=0.13, shaft_radius=0.05),
                             orient="vectors", scale="vectors", factor=1.0)
-        self._arrow_actor = self.plotter.add_mesh(
-            glyph, color=self._settings.mode_arrow_color, smooth_shading=True, render=False
-        )
+        if phases is not None:
+            # A cyclic colormap, and a full-turn range: phase is an angle, so 0
+            # and 2*pi must land on the same colour or the wave shows a seam
+            # where there is none.
+            self._arrow_actor = self.plotter.add_mesh(
+                glyph, scalars="phase", cmap=_PHASE_COLORMAP, clim=(0.0, 2.0 * np.pi),
+                smooth_shading=True, show_scalar_bar=False, render=False,
+            )
+        else:
+            self._arrow_actor = self.plotter.add_mesh(
+                glyph, color=self._settings.mode_arrow_color, smooth_shading=True, render=False
+            )
         self._arrow_actor.SetPickable(False)  # only atoms are pick targets
+
+    def _arrow_phases(self, keep) -> Optional[np.ndarray]:
+        """Per-arrow Bloch phase in ``[0, 2*pi)``, or ``None`` to use one colour.
+
+        ``None`` whenever the colouring would say nothing: the setting is off,
+        the mode is at Gamma (no phase to show — every cell moves together), or
+        the phases don't match the atoms on screen.
+        """
+        if not self._settings.mode_arrow_phase_colors or self._mode_phases is None:
+            return None
+        if self._mode_phases.shape != (len(self._positions),):
+            return None
+        phases = np.mod(self._mode_phases[keep], 2.0 * np.pi)
+        if np.ptp(phases) <= 0.0:
+            return None  # one phase everywhere: a single colour says it better
+        return phases
 
     def _draw_lattice_vectors(self) -> None:
         """Pin the a/b/c gizmo to a fixed corner of the viewport.
@@ -1558,13 +1773,117 @@ def _draw_over_scene(actor) -> None:
         pass
 
 
-def _polyline_tube(points: np.ndarray) -> pv.PolyData:
+def _polyline_tube(points: np.ndarray, radius: float = _ANNOTATION_LINE_RADIUS) -> pv.PolyData:
     """A thin tube along the path through ``points`` (2+ vertices)."""
     poly = pv.PolyData()
     poly.points = np.asarray(points, dtype=float)
     segments = len(points) - 1
     poly.lines = np.hstack([[2, k, k + 1] for k in range(segments)]).astype(np.int64)
-    return poly.tube(radius=_ANNOTATION_LINE_RADIUS)
+    return poly.tube(radius=radius)
+
+
+@lru_cache(maxsize=1)
+def _unicode_font() -> Optional[str]:
+    """A font file holding the symbols the labels are written in, or ``None``.
+
+    VTK's built-in fonts stop at Latin-1: they have no σ at all, and they drop
+    the combining overbar of 1̄ without a word — which would leave a centre of
+    inversion labelled "1", the identity, and a 4̄ axis labelled "4". matplotlib
+    ships DejaVu Sans, which has both, and arrives with pymatgen, so it is on
+    hand wherever the app runs.
+    """
+    try:
+        from pathlib import Path
+
+        import matplotlib
+
+        font = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
+        return str(font) if font.is_file() else None
+    except Exception:  # noqa: BLE001 - labels fall back to the built-in font
+        return None
+
+
+def _use_unicode_font(actor) -> None:
+    """Draw a label actor's text in :func:`_unicode_font`, if there is one.
+
+    The text property sits on the label *hierarchy* feeding the mapper, not on
+    the actor, so it takes a step through the pipeline to reach. Best-effort: a
+    VTK build that arranges this differently keeps the built-in font.
+    """
+    font = _unicode_font()
+    if font is None:
+        return
+    try:
+        text = actor.GetMapper().GetInputAlgorithm().GetTextProperty()
+        text.SetFontFamily(vtk.VTK_FONT_FILE)
+        text.SetFontFile(font)
+    except Exception:  # noqa: BLE001 - purely cosmetic; never break a redraw
+        pass
+
+
+def _label_spots(points: np.ndarray, centre: np.ndarray) -> np.ndarray:
+    """Where an element's symbol could go: its own extremities, farthest first.
+
+    Not the middle of the element, which is where every one of them meets: point
+    symmetry puts all the axes and all the planes through a single centre, so a
+    label at each element's centre stacks the whole lot on one spot and VTK drops
+    all but the topmost. The reach of the element itself — the far end of an
+    axis, the outer corners of a plane's patch — puts each label out where only
+    that element is. Each spot is drawn back from the very edge so the text sits
+    on the element rather than off the end of it.
+    """
+    points = np.asarray(points, dtype=float)
+    centre = np.asarray(centre, dtype=float)
+    spots = points - (points - centre) * _SYMMETRY_LABEL_INSET
+    reach = np.linalg.norm(spots - centre, axis=1)
+    # Only the outer half of the element's reach. An axis through a corner of the
+    # drawn box leaves it again almost at once on the other side, and that stub is
+    # a spot the spreading below would otherwise take to dodge a crowded corner —
+    # putting the label back in the pile at the centre it was moved out of.
+    spots = spots[reach >= 0.5 * reach.max()] if reach.max() > 0 else spots
+    return spots[np.argsort(-np.linalg.norm(spots - centre, axis=1))]
+
+
+def _spread_anchor(spots: np.ndarray, placed: list) -> np.ndarray:
+    """Of an element's possible label spots, the one farthest from those taken.
+
+    Several elements can reach the same corner of the drawn box — nine mirror
+    planes through one centre certainly do — so first come, first served would
+    still stack their labels. Each label goes to whichever of its own spots is
+    most in the clear.
+    """
+    if not placed:
+        return spots[0]
+    taken = np.asarray(placed, dtype=float)
+    clearance = np.linalg.norm(spots[:, None, :] - taken[None, :, :], axis=2).min(axis=1)
+    return spots[int(np.argmax(clearance))]
+
+
+def _plane_in_box(origin, normal, bounds) -> Optional[pv.PolyData]:
+    """The piece of an infinite plane that lies inside an axis-aligned box.
+
+    A plane primitive is a fixed square, which would hang out of the scene at the
+    corners; cutting it back against the box's six faces leaves exactly the shape
+    the plane makes with the box — a hexagon across a cube's diagonal as readily
+    as a square. ``None`` when the plane misses the box entirely.
+    """
+    limits = np.asarray(bounds, dtype=float)
+    size = float(np.linalg.norm(limits[1::2] - limits[0::2])) * 2.0  # over-large, then cut
+    # One quad, not the default 10×10 grid: the clip below is what shapes it, and
+    # the vertices that survive are then the polygon's own corners — which is
+    # what a label looks for a spot among.
+    patch = pv.Plane(
+        center=origin, direction=normal, i_size=size, j_size=size,
+        i_resolution=1, j_resolution=1,
+    ).triangulate()
+    for axis, name in enumerate("xyz"):
+        for index, invert in ((2 * axis, False), (2 * axis + 1, True)):
+            face = np.zeros(3)
+            face[axis] = limits[index]
+            patch = patch.clip(name, origin=face, invert=invert)
+            if patch.n_points == 0:
+                return None
+    return patch
 
 
 def _annotation_anchor(kind: str, points: np.ndarray, dihedral_kind: str) -> np.ndarray:

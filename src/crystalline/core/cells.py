@@ -26,6 +26,16 @@ across the periodic boundary and translates each into the box. Wrapping is only
 ever integer lattice translations, so atom order — and thus the phonon
 correspondence — is preserved.
 
+**Phonons — the phase that comes with the copy.** Every operation here copies
+atoms into other cells, and a phonon mode has to be copied with them. At Gamma
+that is a plain replication: all cells move together. Away from Gamma (the modes
+a SCELPHONO run reports at the q commensurate with its supercell) cell ``n``
+lags the reference by ``2*pi*q·n``, so each image atom's eigenvector is
+multiplied by that phase — see :func:`_lattice_offsets`, which recovers ``n``
+from the *drawn* positions, and :func:`_replicate_modes`. Tiling is what makes
+such a mode visible at all: on one cell there is nothing for the wave to
+modulate.
+
 pymatgen/ase are imported lazily so ``core`` stays importable (and unit-testable)
 without them, matching ``crystalio.loader``. No function mutates its argument.
 """
@@ -37,7 +47,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-from crystalline.core.phonons import PhononModes
+from crystalline.core.phonons import PhononModes, phase_factors
 from crystalline.core.structure import Structure
 
 # ase array key used to carry each atom's source index through the supercell
@@ -56,16 +66,21 @@ class CellView(str, Enum):
     PRIMITIVE = "primitive"
 
 
-def _conventional_expansion(structure: Structure, symprec: float) -> Tuple["object", np.ndarray]:
+def _conventional_expansion(
+    structure: Structure, symprec: float
+) -> Tuple["object", np.ndarray, np.ndarray]:
     """Build the conventional cell of ``structure`` by centring expansion.
 
-    Returns ``(ase.Atoms, mapping)`` where ``mapping[i]`` is the index of the
-    primitive-cell atom that conventional atom ``i`` is an image of. A
-    non-periodic system, an already-conventional cell, or a P lattice all yield
-    the loaded atoms unchanged with an identity mapping.
+    Returns ``(ase.Atoms, mapping, matrix)`` where ``mapping[i]`` is the index of
+    the primitive-cell atom that conventional atom ``i`` is an image of, and
+    ``matrix`` is the integer ``M`` with ``conventional_vectors = M ·
+    primitive_vectors`` (the identity when nothing was expanded). ``M`` is what
+    re-expresses a phonon q in the conventional basis. A non-periodic system, an
+    already-conventional cell, or a P lattice all yield the loaded atoms
+    unchanged with an identity mapping.
     """
     source = structure.to_ase()
-    identity = (source, np.arange(len(source)))
+    identity = (source, np.arange(len(source)), np.eye(3, dtype=int))
 
     if not structure.is_periodic or np.allclose(structure.cell, 0.0):
         return identity
@@ -102,7 +117,7 @@ def _conventional_expansion(structure: Structure, symprec: float) -> Tuple["obje
         return identity
     mapping = np.asarray(conventional.get_array(_SOURCE_INDEX_KEY), dtype=int)
     del conventional.arrays[_SOURCE_INDEX_KEY]
-    return conventional, mapping
+    return conventional, mapping, matrix
 
 
 def _wrap_molecules(atoms, mult: float = 1.15):
@@ -177,6 +192,62 @@ def _wrap_molecules(atoms, mult: float = 1.15):
     return out
 
 
+def _lattice_offsets(positions, source_positions, mapping, cell) -> Optional[np.ndarray]:
+    """Which cell each image atom was drawn into, relative to its parent's.
+
+    Returns an (N, 3) array of integer lattice translations ``n`` — image atom
+    ``i`` sits at ``parent + n_i · cell`` — or ``None`` when there is no lattice
+    to count in (a molecule, a degenerate cell) or the positions can't be
+    reconciled with one.
+
+    This is what carries a non-Gamma mode onto image atoms: the phase an atom
+    lags its parent by is ``2*pi*q·n``, so the answer has to be read off the
+    *drawn* positions, after every wrap and reassembly the operation performed —
+    not from the order the images were generated in.
+    """
+    cell = np.asarray(cell, dtype=float)
+    if cell.shape != (3, 3) or abs(np.linalg.det(cell)) < 1e-8:
+        return None
+    delta = np.asarray(positions, dtype=float) - np.asarray(source_positions, dtype=float)[mapping]
+    frac = np.linalg.solve(cell.T, delta.T).T
+    offsets = np.rint(frac)
+    if np.any(np.abs(frac - offsets) > 1e-3):
+        # Not a whole number of lattice vectors: the image isn't a pure
+        # translation of its parent, so no phase can be assigned. Better an
+        # in-phase replica (what Gamma modes always got) than a wrong phase.
+        return None
+    return offsets
+
+
+def _replicate_modes(modes, mapping, offsets) -> PhononModes:
+    """Copy each mode's eigenvector onto image atoms, phase included.
+
+    ``mapping[i]`` is the parent of image atom ``i`` and ``offsets[i]`` the
+    lattice translation between them. A Gamma mode is replicated verbatim (every
+    cell moves in phase); away from Gamma each image is multiplied by its
+    ``exp(2*pi*i q·n)``, which is what turns a repeated cell into a wave.
+
+    The phase is also *recorded* per atom, added to whatever the parent already
+    carried, so a mode that reaches the screen through several operations
+    (conventional cell, then tiling, then boundary completion) knows the total
+    Bloch phase of the cell each atom ended up in — see
+    :attr:`~crystalline.core.phonons.PhononMode.cell_phase`.
+    """
+    replicated = []
+    for mode in modes:
+        eigenvector = mode.eigenvector[mapping]
+        inherited = None if mode.cell_phase is None else mode.cell_phase[mapping]
+        factors = phase_factors(mode.qpoint, offsets)
+        if factors is None:
+            phase = inherited
+        else:
+            eigenvector = eigenvector * factors[:, None]
+            added = 2.0 * np.pi * (np.asarray(offsets, dtype=float) @ mode.qpoint)
+            phase = added if inherited is None else inherited + added
+        replicated.append(mode.with_eigenvector(eigenvector, cell_phase=phase))
+    return PhononModes(replicated)
+
+
 # Default for the optional ``per_atom`` argument of the cell operations. A
 # distinct object rather than None, so that passing ``per_atom=None`` — a file
 # that simply has no ADPs — still returns the three-value form the caller asked
@@ -198,7 +269,7 @@ def to_conventional(structure: Structure, symprec: float = 1e-2) -> Structure:
     symprec:
         Symmetry tolerance in Angstrom handed to the space-group analyser.
     """
-    atoms, _ = _conventional_expansion(structure, symprec)
+    atoms, _mapping, _matrix = _conventional_expansion(structure, symprec)
     return Structure.from_ase(_wrap_molecules(atoms))
 
 
@@ -210,24 +281,35 @@ def expand_modes_to_conventional(
 ) -> Tuple[Structure, PhononModes]:
     """Return the conventional cell together with phonon modes defined on it.
 
-    Each conventional atom is an image of a primitive atom; at the Gamma point
-    (the modes we load) every image of a primitive cell moves in phase, so a
-    conventional-cell eigenvector is just the primitive eigenvector replicated
-    onto each atom's parent. When no expansion happens (P lattice, molecule),
-    the modes come back unchanged. The returned structure is molecule-wrapped to
-    match :func:`to_conventional`; wrapping is pure lattice translation, so the
-    per-atom eigenvectors still line up.
+    Each conventional atom is an image of a primitive atom. At Gamma every image
+    of a primitive cell moves in phase, so a conventional-cell eigenvector is
+    just the primitive eigenvector replicated onto each atom's parent; away from
+    Gamma each image also picks up the ``exp(2*pi*i q·n)`` of the primitive cell
+    it lives in. When no expansion happens (P lattice, molecule), the modes come
+    back unchanged. The returned structure is molecule-wrapped to match
+    :func:`to_conventional`; wrapping is pure lattice translation, which the
+    phases are read off *after* so they follow the atoms into the drawn cell.
+
+    The q-point is handed on in the conventional cell's own reciprocal basis
+    (``q_conv = M·q_prim`` for ``conventional = M · primitive``), so a later
+    tiling of that cell can go on counting translations in the cell it sees.
 
     ``per_atom`` (ADP tensors, say) is replicated the same way — see
     :func:`tile_supercell` for what passing it does to the return value.
     """
-    atoms, mapping = _conventional_expansion(structure, symprec)
+    atoms, mapping, matrix = _conventional_expansion(structure, symprec)
+    wrapped = _wrap_molecules(atoms)
+    offsets = _lattice_offsets(
+        wrapped.get_positions(), structure.positions, mapping, structure.cell
+    )
+    expanded = _replicate_modes(modes, mapping, offsets)
     expanded = PhononModes(
-        [m.with_eigenvector(m.eigenvector[mapping]) for m in modes]
+        [
+            m.with_qpoint(None if m.qpoint is None else matrix @ m.qpoint)
+            for m in expanded
+        ]
     )
-    return _with_payload(
-        Structure.from_ase(_wrap_molecules(atoms)), expanded, per_atom, mapping
-    )
+    return _with_payload(Structure.from_ase(wrapped), expanded, per_atom, mapping)
 
 
 def as_view(structure: Structure, view: CellView) -> Structure:
@@ -252,9 +334,12 @@ def tile_supercell(
     Applied on top of whichever cell view is active, so the supercell inherits
     its molecule-wrapped atoms (each image cell stays whole). Non-periodic axes
     are never tiled. If phonon ``modes`` are given they are replicated onto the
-    image atoms — correct at the Gamma point, where every image cell moves in
-    phase — and returned alongside the supercell; the atom order is preserved so
-    each image atom's eigenvector matches its parent.
+    image atoms and returned alongside the supercell; the atom order is
+    preserved so each image atom's eigenvector matches its parent. At Gamma
+    every image cell moves in phase; away from it, image cell ``n`` lags by
+    ``2*pi*q·n``, which is the whole point of tiling such a mode — a wave needs
+    more than one cell to be a wave. :func:`~crystalline.core.phonons.commensurate_repeats`
+    gives the smallest tiling that shows one whole period.
 
     ``per_atom`` is any array indexed by atom along its first axis — ADP tensors,
     say — replicated the same way. *Passing* it adds a third element to the
@@ -280,9 +365,10 @@ def tile_supercell(
 
     tiled_modes = modes
     if modes is not None and mapping is not None:
-        tiled_modes = PhononModes(
-            [m.with_eigenvector(m.eigenvector[mapping]) for m in modes]
+        offsets = _lattice_offsets(
+            supercell.get_positions(), atoms.get_positions(), mapping, structure.cell
         )
+        tiled_modes = _replicate_modes(modes, mapping, offsets)
     elif modes is not None:
         # Couldn't recover the mapping: drop the modes rather than hand back
         # eigenvectors whose atom count no longer matches the supercell.
@@ -436,16 +522,19 @@ def complete_boundary(
 
     Every molecule that partially belongs to the unit cell is drawn whole, at
     each cell position it touches (all corners/edges/faces). Phonon ``modes`` are
-    replicated onto the image atoms (in phase, correct at Gamma), and so is
-    ``per_atom`` — see :func:`tile_supercell` for what that argument does to the
-    return value.
+    replicated onto the image atoms — in phase at Gamma, and with the phase of
+    the cell the image was placed in away from it, so a boundary atom vibrates
+    with the neighbours it is drawn among rather than with its parent across the
+    cell. ``per_atom`` is replicated too — see :func:`tile_supercell` for what
+    that argument does to the return value.
     """
     atoms, mapping = _boundary_completion(structure, tol)
     new_modes = modes
     if modes is not None:
-        new_modes = PhononModes(
-            [m.with_eigenvector(m.eigenvector[mapping]) for m in modes]
+        offsets = _lattice_offsets(
+            atoms.get_positions(), structure.positions, mapping, structure.cell
         )
+        new_modes = _replicate_modes(modes, mapping, offsets)
     return _with_payload(Structure.from_ase(atoms), new_modes, per_atom, mapping)
 
 

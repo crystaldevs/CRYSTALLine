@@ -93,6 +93,17 @@ def _build_cell_menu(window) -> None:
     window._boundary_action.toggled.connect(window._on_boundary_toggled)
     cell_menu.addAction(window._boundary_action)
 
+    # The panel this opens is not one of the docks shown at startup: it is asked
+    # for, from here, when someone wants the analysis.
+    cell_menu.addSeparator()
+    symmetry_action = QAction("Point symmetry analysis", window)
+    symmetry_action.setToolTip(
+        "Find the rotation axes, mirror planes and centre of inversion that hold "
+        "a point of the structure fixed, and draw them over it"
+    )
+    symmetry_action.triggered.connect(window._show_symmetry_panel)
+    cell_menu.addAction(symmetry_action)
+
 
 # ── Edit ──────────────────────────────────────────────────────────────────
 def _build_edit_menu(window) -> None:

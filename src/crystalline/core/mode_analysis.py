@@ -129,12 +129,14 @@ def atom_weights(mode: PhononMode, numbers: Sequence[int]) -> np.ndarray:
 def _atom_weights(mode: PhononMode, numbers: Sequence[int]):
     """``(weights, symbols)``, or ``(None, None)`` when there's nothing to report."""
     numbers = np.asarray(numbers, dtype=int)
-    eigenvector = np.asarray(mode.eigenvector, dtype=float)
+    eigenvector = np.asarray(mode.eigenvector)
     if len(numbers) == 0 or eigenvector.shape != (len(numbers), 3):
         return None, None  # modes and geometry out of step (e.g. a stale selection)
 
     masses = atomic_masses[numbers]
-    energy = masses * np.sum(eigenvector**2, axis=1)
+    # |e|^2, so a complex (non-Gamma) eigenvector is measured by the energy its
+    # atoms carry over a cycle rather than by whichever phase we caught it at.
+    energy = masses * np.sum(np.abs(eigenvector) ** 2, axis=1)
     total = float(energy.sum())
     if not np.isfinite(total) or total <= 0.0:
         return None, None  # a null mode (all-zero eigenvector) has no composition

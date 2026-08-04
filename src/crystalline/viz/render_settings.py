@@ -37,11 +37,26 @@ class RenderSettings:
     # phonon displacement arrows: the selected mode's eigenvector drawn on the
     # atoms, so a mode reads in a still image instead of only while animating.
     # Off by default — the animation is the primary view, and arrows on top of
-    # it are clutter until asked for. Every arrow is drawn the same length: they
-    # mark the *direction* each atom moves, and letting them shrink with each
-    # atom's share leaves the interesting small contributions invisible.
+    # it are clutter until asked for.
+    #
+    # Arrows are drawn at one length by default: they mark the *direction* each
+    # atom moves, and letting them shrink with each atom's share leaves the
+    # interesting small contributions invisible. ``mode_arrow_proportional``
+    # gives the other reading, where an arrow's length is the atom's share of
+    # the motion — the one that matters away from Gamma, where the arrows are
+    # all a still picture has to show that the mode is a *wave*: same direction
+    # cell after cell, amplitude swelling and reversing along q.
+    #
+    # ``mode_arrow_phase_colors`` colours each arrow by the Bloch phase of the
+    # cell its atom sits in. Away from Gamma that phase is the *only* thing
+    # distinguishing one cell from the next — the amplitude is identical
+    # everywhere — so it is what a still image of a travelling wave has to show;
+    # the colour cycles once per wavelength. It replaces the flat arrow colour,
+    # and does nothing at Gamma, where there is one phase for the whole cell.
     show_mode_arrows: bool = False
-    mode_arrow_scale: float = 1.2   # Angstrom, the length every arrow is drawn at
+    mode_arrow_scale: float = 1.2   # Angstrom: arrow length, or the longest one
+    mode_arrow_proportional: bool = False
+    mode_arrow_phase_colors: bool = False
     mode_arrow_color: str = "#d62728"
 
     # thermal ellipsoids (ADP): the surface enclosing `adp_probability` of each
@@ -72,6 +87,13 @@ class RenderSettings:
     measure_point_color: str = "#ff7f0e"  # dot markers
     measure_line_color: str = "#ff7f0e"   # distance / angle / dihedral paths
     measure_plane_color: str = "#1f77b4"  # least-squares plane patches
+
+    # point-symmetry elements (Point symmetry panel), drawn with the same three
+    # shapes as the measurements but in their own colours, so an axis is never
+    # mistaken for a measured distance. Deliberately unlike the palette above.
+    symmetry_axis_color: str = "#9467bd"   # rotation and rotoinversion axes
+    symmetry_plane_color: str = "#17becf"  # mirror planes
+    symmetry_point_color: str = "#e377c2"  # the centre of inversion
 
     # scene / camera
     background_color: str = "white"

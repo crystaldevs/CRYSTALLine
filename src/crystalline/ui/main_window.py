@@ -7,6 +7,7 @@ is: build a panel, dock it, connect its signals here.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import numpy as np
@@ -49,6 +50,7 @@ from crystalline.ui.panels.phonon_panel import PhononPanel
 from crystalline.ui.panels.info_panel import InfoPanel
 from crystalline.ui.panels.display_settings import DisplayPanel
 from crystalline.ui.panels.geometry_panel import GeometryPanel
+from crystalline.ui.panels.symmetry_panel import SymmetryPanel
 from crystalline.ui.panels.plot_view import PlotPanel
 
 # Geometry of the floating Plots window on the first plot: a fraction of the main
@@ -81,6 +83,15 @@ class MainWindow(QMainWindow):
         self._show_boundary = True  # show partially-belonging molecules by default
         self._editing = False
         self._modes: Optional[PhononModes] = None
+        # Every q-point the run sampled (``[Gamma]`` for a plain FREQCALC, one
+        # entry per commensurate q for a SCELPHONO run) and which of them
+        # ``self._modes`` currently holds — the panel offers the choice, the
+        # window rebuilds the view around it.
+        self._qmodes: list = []
+        self._qindex = 0
+        # Supercell to restore when the phonon panel's Untile is pressed, or
+        # ``None`` when the tiling on screen is the user's own doing.
+        self._tile_restore: Optional[tuple] = None
         self._adps: Optional[ADPSet] = None  # thermal ellipsoids, if the run has them
         # source-atom index of each displayed atom, so a per-atom quantity can be
         # laid onto the (expanded, tiled, boundary-completed) cell on screen.
@@ -136,6 +147,17 @@ class MainWindow(QMainWindow):
         info_dock.raise_()  # show Info on top by default
         self.display_panel.set_elements(self.structure.numbers)  # initial element swatches
 
+        # right dock, tabbed with Phonons: the structure's point-symmetry elements.
+        # Hidden until Cell ▸ Point symmetry analysis asks for it — it is an
+        # analysis someone goes looking for, not something every session needs on
+        # screen (and the search itself only runs once the panel is opened).
+        self.symmetry_panel = SymmetryPanel(self._symmetry_source(), self)
+        self._symmetry_dock = self._dock(
+            "Point symmetry", self.symmetry_panel, Qt.RightDockWidgetArea
+        )
+        self.tabifyDockWidget(self._phonon_dock, self._symmetry_dock)
+        self._symmetry_dock.hide()
+
         # bottom dock: property plots (IR/Raman/bands/DOS…), one tab each.
         # Hidden until the first plot is built so it doesn't take up space.
         self.plot_panel = PlotPanel(self)
@@ -173,6 +195,7 @@ class MainWindow(QMainWindow):
         self._update_status()  # atom count may have changed (add/remove)
         self._update_import_action()  # importing needs a non-empty structure
         self._refresh_info()  # symmetry/point group may have changed with the edit
+        self.symmetry_panel.invalidate(self._symmetry_source())  # and so may its elements
         self.viewport.renderer.refresh()
         # Editing the geometry: stop any animation and re-anchor it to the edited
         # geometry (drop the modes if the atom count changed). Passing the new
@@ -249,6 +272,10 @@ class MainWindow(QMainWindow):
         self.structure_panel.selection_changed.connect(self._on_selection_changed)
         # a phonon mode was (de)selected -> refresh the animation-export action
         self.phonon_panel.mode_selected.connect(lambda _row: self._update_export_actions())
+        # another q-point was picked -> show that q's modes on a rebuilt view
+        self.phonon_panel.qpoint_selected.connect(self._set_qpoint)
+        # "Tile n×n×n" next to the q-point -> the supercell one period needs
+        self.phonon_panel.tile_requested.connect(self._tile_to_qpoint)
 
         # Geometry panel: the same edit operations as the Edit menu (so undo and
         # the selection model behave identically), plus measurement overlays.
@@ -259,6 +286,23 @@ class MainWindow(QMainWindow):
         self.geometry_panel.set_element_requested.connect(self._set_element_of_selection)
         self.geometry_panel.add_atom_requested.connect(self._add_atom)
         self.geometry_panel.annotations_changed.connect(self.viewport.set_annotations)
+        # Symmetry panel: the ticked elements are drawn over the structure.
+        self.symmetry_panel.elements_changed.connect(self.viewport.set_symmetry_elements)
+
+    def _symmetry_source(self) -> Structure:
+        """The structure the symmetry search runs on: one clean unit cell.
+
+        Not the one on screen — a supercell has the wrong box and a
+        boundary-completed view holds two copies of every atom that straddles the
+        edge, and a symmetry finder can read neither. The same fold the Info
+        panel's analysis goes through gives a single cell, edits included; the
+        elements it finds repeat with that cell's lattice, so they still fill the
+        drawn box however many cells of it are on screen.
+        """
+        try:
+            return to_analysis_cell(self.structure, self._unit_cell)
+        except Exception:  # noqa: BLE001 - fall back to the shown cell rather than nothing
+            return self.structure
 
     def _dock(self, title: str, widget, area) -> QDockWidget:
         dock = QDockWidget(title, self)
@@ -396,7 +440,7 @@ class MainWindow(QMainWindow):
                 self, "No spectra in this output",
                 "This output carries no IR or Raman intensities.\n\n"
                 "IR needs a FREQCALC with INTENS; Raman additionally needs INTRAMAN "
-                "with a CPHF step; the VSCF/VPT2/VCI levels need ANHARM.",
+                "with a CPHF step.",
             )
             return
 
@@ -656,7 +700,14 @@ class MainWindow(QMainWindow):
         ignored rather than snapping to a distant one: on a broadened spectrum
         most of the x axis is baseline, and jumping to whatever happens to be
         closest would be noise, not an answer.
+
+        An IR or Raman band is a zone-centre quantity, so a click always answers
+        with a Gamma mode: if another q-point is on show, the panel is sent back
+        to Gamma first rather than matching the frequency against modes that
+        cannot have produced the peak.
         """
+        if self._qindex != 0:
+            self.phonon_panel.select_qpoint(0)
         frequencies = self.phonon_panel.frequencies()
         if frequencies is None or len(frequencies) == 0:
             return
@@ -696,6 +747,12 @@ class MainWindow(QMainWindow):
         self._display_dock.show()
         self._display_dock.raise_()
 
+    def _show_symmetry_panel(self) -> None:
+        """Open the point-symmetry panel (a tab beside Phonons) and analyse."""
+        self._symmetry_dock.show()
+        self._symmetry_dock.raise_()
+        self.symmetry_panel.show_analysis()
+
     # ── panels ──────────────────────────────────────────────────────────
     def _panel_docks(self) -> list:
         """``(title, dock)`` for every panel, in the order the View menu lists them.
@@ -708,6 +765,7 @@ class MainWindow(QMainWindow):
             ("Info", self._info_dock),
             ("Display", self._display_dock),
             ("Geometry", self._geometry_dock),
+            ("Point symmetry", self._symmetry_dock),
             ("Phonons", self._phonon_dock),
             ("Plots", self._plot_dock),
         ]
@@ -989,6 +1047,9 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() != QDialog.Accepted:
             return
+        # A supercell chosen here is the user's own: the phonon panel's Untile
+        # must not offer to throw it away for a cell they never asked for.
+        self._tile_restore = None
         self._set_supercell(tuple(box.value() for box in boxes))
         self._apply_cell_view()
 
@@ -1000,6 +1061,83 @@ class MainWindow(QMainWindow):
             na, nb, nc = self._supercell
             suffix = "" if self._supercell == (1, 1, 1) else f"  ({na}×{nb}×{nc})"
             action.setText(f"Supercell…{suffix}")
+        panel = getattr(self, "phonon_panel", None)
+        if panel is not None:
+            # ...and what its Untile would go back to, if it did the tiling.
+            panel.set_supercell(self._supercell, self._tile_restore)
+
+    # ── phonon q-points (a SCELPHONO run samples more than Gamma) ────────
+    def _set_qmodes(self, qmodes) -> None:
+        """Adopt a file's phonon modes: every sampled q-point, Gamma first.
+
+        The window keeps them all so switching q-point is a re-tiling rather
+        than a re-read of the output, and shows the Gamma set — what a
+        frequency calculation is normally opened for.
+        """
+        self._qmodes = list(qmodes or [])
+        self._qindex = 0
+        self._modes = self._qmodes[0] if self._qmodes else None
+        self.phonon_panel.set_qpoints([m.qpoint for m in self._qmodes], 0)
+
+    def _set_qpoint(self, index: int) -> None:
+        """Show the modes of sampled q-point ``index``.
+
+        Changing q changes the *modes*, not the structure: the atoms sit exactly
+        where they did. So only the modes are re-derived — they still have to go
+        through the cell pipeline, since away from Gamma each image atom's
+        displacement carries the phase of the cell it sits in (see
+        ``core.cells``) — and the scene on screen is left alone. Rebuilding it
+        would cost an order of magnitude more (a VTK teardown and redraw of
+        every atom) for a picture identical to the one already there, which is
+        felt as a lag on what should be an instant choice.
+        """
+        if not 0 <= index < len(self._qmodes) or index == self._qindex:
+            return
+        self._qindex = index
+        self._modes = self._qmodes[index]
+        if not self._reload_modes():
+            self._apply_cell_view()  # couldn't reuse the view: rebuild it
+
+    def _reload_modes(self) -> bool:
+        """Put the current q's modes on the displayed structure, as it stands.
+
+        Returns whether that was possible. It isn't when the composed modes no
+        longer fit what is on screen — the structure may have been edited since
+        it was built — in which case the caller falls back to a full rebuild,
+        which re-derives both together.
+        """
+        try:
+            _shown, modes, _cell, _analysis, _index = self._compose_view(
+                self._cell_view, self._supercell, self._modes
+            )
+        except Exception:  # noqa: BLE001 - symmetry analysis can fail; rebuild instead
+            return False
+        if modes is None or len(modes) == 0:
+            return False
+        if modes[0].n_atoms != len(self.structure):
+            return False  # edited since: the modes and the atoms no longer line up
+        self.phonon_panel.set_modes(
+            self.structure.positions, modes, self.structure.numbers
+        )
+        self._update_export_actions()
+        return True
+
+    def _tile_to_qpoint(self, reps) -> None:
+        """Tile the cell to one whole period of the selected q — or undo that.
+
+        The cell the view had before the panel first tiled it is remembered, so
+        the button can put it back: tiling for one q and then moving to another
+        (or to Gamma) must not strand the user in an enlarged cell whose only way
+        out is the Supercell dialog. The restore point survives re-tiling for a
+        different q — it is where the *panel* took over, not the last stop.
+        """
+        reps = tuple(int(r) for r in reps)
+        if reps == self._tile_restore:
+            self._tile_restore = None  # this is the way back; the panel is done
+        elif self._tile_restore is None:
+            self._tile_restore = self._supercell
+        self._set_supercell(reps)
+        self._apply_cell_view()
 
     # ── file actions ────────────────────────────────────────────────────
     def _open_file(self) -> None:
@@ -1019,8 +1157,9 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load failed", str(exc))
             return
         self._source = result.structure
-        self._modes = result.modes if result.has_phonons else None
+        self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = self._load_adps(path)
+        self._tile_restore = None  # nothing of the old file's tiling to go back to
         self._set_supercell((1, 1, 1))  # a fresh file starts at its own unit cell
         # Remember the output file so property plots (IR/Raman/elastic/EOS) can
         # read it directly; geometry-only files (.gui/.34/.cif) carry no such data.
@@ -1247,7 +1386,21 @@ class MainWindow(QMainWindow):
         if not path:
             return
         equilibrium, mode = selection
-        from crystalline.viz.export import render_animation_frames, save_animation
+        from crystalline.viz.export import (
+            MOVIE_EXTS,
+            VIDEO_MISSING_MESSAGE,
+            render_animation_frames,
+            save_animation,
+            video_export_available,
+        )
+
+        # Checked before rendering, not after: the frames are the slow part, and
+        # a missing encoder found at the end wastes the whole wait. The typed
+        # filename decides the format, so this catches a video extension typed
+        # by hand as well as one chosen in the dialog.
+        if os.path.splitext(path)[1].lower() in MOVIE_EXTS and not video_export_available():
+            QMessageBox.warning(self, "Video export unavailable", VIDEO_MISSING_MESSAGE)
+            return
 
         try:
             frames = render_animation_frames(
@@ -1278,12 +1431,25 @@ class MainWindow(QMainWindow):
         of one vibration cycle; FPS the playback speed. A PNG target writes a
         numbered frame sequence rather than a single file.
         """
-        from crystalline.viz.export import DEFAULT_FPS, DEFAULT_FRAMES
+        from crystalline.viz.export import (
+            DEFAULT_FPS,
+            DEFAULT_FRAMES,
+            VIDEO_MISSING_MESSAGE,
+            video_export_available,
+        )
 
+        # Video needs an ffmpeg encoder that isn't part of a plain install. The
+        # entries stay listed when it is missing — removing them would leave
+        # someone hunting for MP4 with no explanation — but are disabled, and
+        # say what to install.
+        video = video_export_available()
         formats = [
-            ("gif", "Animated GIF"),
-            ("mp4", "MP4 video"),
-            ("png", "PNG frame sequence"),
+            ("gif", "Animated GIF", True),
+            ("mp4", "MP4 video", video),
+            ("mov", "QuickTime video", video),
+            ("webm", "WebM video", video),
+            ("png", "PNG frame sequence", True),
+            ("jpg", "JPEG frame sequence", True),
         ]
         resolutions = [
             ("640 × 480", (640, 480)),
@@ -1296,9 +1462,18 @@ class MainWindow(QMainWindow):
         form = QFormLayout(dialog)
 
         fmt_box = QComboBox(dialog)
-        for ext, label in formats:
-            fmt_box.addItem(label, (ext, label))
+        for row, (ext, label, enabled) in enumerate(formats):
+            fmt_box.addItem(label if enabled else f"{label}  — needs imageio-ffmpeg",
+                            (ext, label))
+            if not enabled:
+                item = fmt_box.model().item(row)
+                item.setEnabled(False)
+                item.setToolTip(VIDEO_MISSING_MESSAGE)
         form.addRow("Format:", fmt_box)
+        if not video:
+            hint = QLabel("Video formats need <code>pip install imageio-ffmpeg</code>", dialog)
+            hint.setStyleSheet("color: palette(mid);")
+            form.addRow("", hint)
 
         res_box = QComboBox(dialog)
         for label, size in resolutions:
@@ -1318,9 +1493,9 @@ class MainWindow(QMainWindow):
         fps_box.setSuffix(" fps")
         form.addRow("Frame rate:", fps_box)
 
-        # FPS is meaningless for a still-frame sequence; grey it out for PNG.
+        # FPS is meaningless for a still-frame sequence; grey it out for those.
         def sync_enabled() -> None:
-            fps_box.setEnabled(fmt_box.currentData()[0] != "png")
+            fps_box.setEnabled(fmt_box.currentData()[0] not in ("png", "jpg"))
 
         fmt_box.currentIndexChanged.connect(sync_enabled)
         sync_enabled()
@@ -1438,6 +1613,8 @@ class MainWindow(QMainWindow):
         self.structure_panel.set_structure(self.structure)
         if hasattr(self, "geometry_panel"):
             self.geometry_panel.set_structure(self.structure)
+        if hasattr(self, "symmetry_panel"):
+            self.symmetry_panel.set_structure(self._symmetry_source())
         self._reset_undo()  # edits (and their undo history) don't cross a re-derive
         self._update_view_actions()  # a/b/c alignment depends on the cell just shown
         if hasattr(self, "display_panel"):

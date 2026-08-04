@@ -6,6 +6,12 @@ icons at the top of the panel toggle the timer; amplitude scales the
 displacement and speed scales how fast the phase advances. A filter narrows the
 list to the IR- and/or Raman-active modes when the output reports selection
 rules.
+
+A SCELPHONO run reports modes at several q-points, so the panel also carries a
+q-point selector; it hides itself for the ordinary Gamma-only frequency run,
+where a chooser with one entry is just clutter. Away from Gamma the modes are
+travelling waves, invisible on a single cell — the button beside the selector
+asks the window for the smallest supercell that shows one whole period.
 """
 
 from __future__ import annotations
@@ -30,7 +36,12 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.core.mode_analysis import ModeCharacter, mode_character
-from crystalline.core.phonons import PhononMode, PhononModes
+from crystalline.core.phonons import (
+    PhononMode,
+    PhononModes,
+    commensurate_repeats,
+    qpoint_label,
+)
 from crystalline.viz.phonon_animator import PhononAnimator
 
 # Activity filters: (label, predicate over a PhononMode). ``None`` keeps every
@@ -92,14 +103,25 @@ def _mode_label(index: int, mode: PhononMode) -> str:
 
 
 class PhononPanel(QWidget):
-    """Choose a phonon mode and animate it in the viewport."""
+    """Choose a phonon mode and animate it in the viewport.
+
+    ``qpoint_selected`` asks the window to load another q-point's modes (the
+    view has to be rebuilt around them, which only the window can do), and
+    ``tile_requested`` asks it for a supercell — carrying the ``(na, nb, nc)``
+    that makes the selected q's wave a whole period.
+    """
 
     mode_selected = Signal(int)
+    qpoint_selected = Signal(int)
+    tile_requested = Signal(tuple)
 
     def __init__(self, animator: PhononAnimator, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._animator = animator
         self._modes: Optional[PhononModes] = None
+        self._qpoints: list = []  # one entry per sampled q, as fractional coords
+        self._supercell = (1, 1, 1)  # the tiling on screen, so Tile can say "done"
+        self._restore = None  # what Untile goes back to; None when Tile didn't tile it
         self._equilibrium: Optional[np.ndarray] = None
         self._rows: list[int] = []  # list row -> index into self._modes
         self._numbers: Optional[np.ndarray] = None      # atomic numbers of the geometry
@@ -130,6 +152,29 @@ class PhononPanel(QWidget):
         head_row.addSpacing(6)
         head_row.addWidget(QLabel("Vibrational modes"), 1)
         layout.addLayout(head_row)
+
+        # q-point row: only a dispersion (SCELPHONO) run has anything to choose,
+        # so the whole row is hidden for the ordinary Gamma-only calculation.
+        self.qpoint_row = QWidget(self)
+        qpoint_layout = QHBoxLayout(self.qpoint_row)
+        qpoint_layout.setContentsMargins(0, 0, 0, 0)
+        qpoint_layout.setSpacing(4)
+        qpoint_layout.addWidget(QLabel("q"))
+        self.qpoint_box = QComboBox()
+        self.qpoint_box.setToolTip(
+            "Which q-point's modes to show. A SCELPHONO supercell gives access\n"
+            "to the q commensurate with it; Γ is the zone centre, the only\n"
+            "q an ordinary frequency calculation reaches."
+        )
+        self.qpoint_box.currentIndexChanged.connect(self._on_qpoint_changed)
+        qpoint_layout.addWidget(self.qpoint_box, 1)
+        self.tile_btn = QToolButton(self)
+        self.tile_btn.setText("Tile")
+        self.tile_btn.setAutoRaise(True)
+        self.tile_btn.clicked.connect(self._on_tile_clicked)
+        qpoint_layout.addWidget(self.tile_btn)
+        layout.addWidget(self.qpoint_row)
+        self.qpoint_row.setVisible(False)
 
         filter_row = QHBoxLayout()
         filter_row.addWidget(QLabel("Show"))
@@ -232,6 +277,135 @@ class PhononPanel(QWidget):
         self._populate()
         self.setEnabled(len(modes) > 0)
 
+    def set_qpoints(self, qpoints, current: int = 0) -> None:
+        """List the q-points the run sampled, showing ``current`` as selected.
+
+        ``qpoints`` is one fractional q per mode set in load order (``None`` for
+        Gamma), i.e. what ``crystalio.load`` returns for a dispersion run. Fewer
+        than two and the row hides itself: a Gamma-only frequency calculation has
+        no choice to offer. Selecting an entry only *announces* the choice — the
+        window reloads that q's modes and hands them back through
+        :meth:`set_modes`.
+        """
+        self._qpoints = list(qpoints or [])
+        self.qpoint_box.blockSignals(True)
+        self.qpoint_box.clear()
+        for i, q in enumerate(self._qpoints):
+            self.qpoint_box.addItem(f"{i + 1}: {qpoint_label(q)}")
+        if self._qpoints:
+            self.qpoint_box.setCurrentIndex(min(max(current, 0), len(self._qpoints) - 1))
+        self.qpoint_box.blockSignals(False)
+        self.qpoint_row.setVisible(len(self._qpoints) > 1)
+        self._update_tile_button()
+
+    def current_qpoint_index(self) -> int:
+        """Row of the selected q-point (0, i.e. Gamma, when there is no choice)."""
+        return max(self.qpoint_box.currentIndex(), 0)
+
+    def current_qpoint(self):
+        """Fractional q of the selected q-point, or ``None`` for Gamma."""
+        index = self.current_qpoint_index()
+        if 0 <= index < len(self._qpoints):
+            return self._qpoints[index]
+        return None
+
+    def commensurate_supercell(self) -> tuple:
+        """The tiling that shows one whole period of the selected q's wave."""
+        return commensurate_repeats(self.current_qpoint())
+
+    def select_qpoint(self, index: int) -> bool:
+        """Select q-point ``index``, announcing it as a user choice would.
+
+        Returns whether there was such a q-point. Used to answer a question that
+        belongs to a particular q — clicking an IR peak asks about Gamma, so the
+        panel goes there rather than reading the click against another q's modes.
+        """
+        if not 0 <= index < len(self._qpoints):
+            return False
+        self.qpoint_box.setCurrentIndex(index)  # a no-op if it is already there
+        return True
+
+    def _on_qpoint_changed(self, index: int) -> None:
+        self._update_tile_button()
+        if 0 <= index < len(self._qpoints):
+            self.qpoint_selected.emit(index)
+
+    def _on_tile_clicked(self) -> None:
+        self.tile_requested.emit(self._tile_target())
+
+    def _tile_target(self) -> tuple:
+        """The supercell the button asks for: a whole period, or the way back."""
+        reps = self.commensurate_supercell()
+        return self._restore if self._offers_untile(reps) else reps
+
+    def _offers_untile(self, reps) -> bool:
+        """Whether the button is currently an "undo my tiling" button.
+
+        Tiling has to be a round trip: pick a q, tile it, then move to another q
+        (or back to Γ) and put the cell back the way it was. Undo is offered once
+        the panel's own tiling is on screen and there is nothing left to tile
+        *for the q now selected* — otherwise "Tile 1×1×3" is the more useful
+        thing to show, and the restore point is simply kept for afterwards.
+        """
+        return (
+            self._restore is not None
+            and self._restore != self._supercell
+            and self._shows_whole_period(reps)
+        )
+
+    def set_supercell(self, reps, restore=None) -> None:
+        """Tell the panel what tiling is on screen, and what Tile would undo to.
+
+        ``restore`` is the supercell the view had before *this panel* tiled it,
+        or ``None`` when the tiling on screen is the user's own (set from Cell ▸
+        Supercell…, or never changed). Only a tiling the panel caused is one the
+        panel offers to take back — the button must not quietly discard a
+        supercell someone chose deliberately.
+        """
+        self._supercell = tuple(int(r) for r in reps)
+        self._restore = None if restore is None else tuple(int(r) for r in restore)
+        self._update_tile_button()
+
+    def _shows_whole_period(self, reps) -> bool:
+        """Whether the tiling on screen already spans whole periods of ``reps``.
+
+        A multiple counts: someone looking at a 2x2x4 cell of a mode that repeats
+        every 1x1x4 is already seeing whole waves, and telling them to re-tile
+        would shrink their view.
+        """
+        return all(n % r == 0 for n, r in zip(self._supercell, reps))
+
+    def _update_tile_button(self) -> None:
+        """Label the tile button with the supercell it would build — or undo to.
+
+        Nothing to do at Gamma, where every cell moves in phase and one cell
+        already tells the whole story, nor once the view already spans a whole
+        period the user built themselves. The button stays in place and says so
+        rather than disappearing, so the row doesn't change width as q changes.
+        """
+        reps = self.commensurate_supercell()
+        gamma = reps == (1, 1, 1)
+        done = self._shows_whole_period(reps)
+        if self._offers_untile(reps):
+            self.tile_btn.setText("Untile")
+            self.tile_btn.setEnabled(True)
+            self.tile_btn.setToolTip(
+                "Put the cell back to {}×{}×{}, as it was before tiling.".format(*self._restore)
+            )
+            return
+        self.tile_btn.setEnabled(not gamma and not done)
+        self.tile_btn.setText("Tile" if gamma else "Tile {}×{}×{}".format(*reps))
+        if gamma:
+            tip = "At Γ every cell moves in phase — one cell shows the whole mode."
+        elif done:
+            tip = "The cell on screen already spans a whole period of this q."
+        else:
+            tip = (
+                "Show this mode as the wave it is: repeat the cell "
+                "{}×{}×{}, one full period of q.".format(*reps)
+            )
+        self.tile_btn.setToolTip(tip)
+
     def _analyse(self, modes: PhononModes) -> list:
         """Composition of every mode, or an empty list if the geometry is unknown.
 
@@ -289,6 +463,7 @@ class PhononPanel(QWidget):
         self.mode_list.clear()
         self.character_label.clear()
         self._set_filter_available(False)
+        self.set_qpoints([])  # the new file's q-points are the window's to supply
         self.setEnabled(False)
 
     # ── list building ───────────────────────────────────────────────────

@@ -164,20 +164,73 @@ def _save_gif(frames, path, fps) -> None:
     )
 
 
-def _save_movie(frames, path, fps) -> None:
+VIDEO_MISSING_MESSAGE = (
+    "Video export needs the 'imageio-ffmpeg' package, which ships the ffmpeg "
+    "encoder:\n\n    pip install imageio-ffmpeg\n\n"
+    "GIF and frame-sequence export need no extras."
+)
+
+
+def video_export_available() -> bool:
+    """Whether an ffmpeg backend is installed, so a video can actually be written.
+
+    Checked *before* a mode is rendered rather than after: an animation is
+    dozens of off-screen frames, and discovering the encoder is missing at the
+    end means the whole wait was wasted.
+    """
     try:
-        import imageio
-    except ImportError as exc:  # imageio(-ffmpeg) not installed
-        raise RuntimeError(
-            "Video export needs the 'imageio' and 'imageio-ffmpeg' packages "
-            "(pip install imageio imageio-ffmpeg). GIF export needs no extras."
-        ) from exc
-    writer = imageio.get_writer(path, fps=fps)
+        import imageio_ffmpeg  # noqa: F401 - presence is the whole question
+    except Exception:  # noqa: BLE001 - not installed, or installed but broken
+        return False
+    return True
+
+
+def _save_movie(frames, path, fps) -> None:
+    """Encode ``frames`` to a video container via imageio's ffmpeg plugin.
+
+    The plugin is named explicitly. Left to itself, ``imageio.get_writer`` picks
+    whatever plugin claims the extension, and with imageio-ffmpeg absent an
+    ``.mp4`` lands on one that cannot encode video at all — which surfaced as
+    ``TypeError: write() got an unexpected keyword argument 'fps'`` instead of
+    anything a user could act on.
+    """
+    if not video_export_available():
+        raise RuntimeError(VIDEO_MISSING_MESSAGE)
+    import imageio
+
+    frames = [_even_sized(np.asarray(frame)) for frame in frames]
+    # macro_block_size=1 keeps the resolution that was asked for: the default
+    # (16) silently rescales the whole movie up to the next multiple of 16.
+    # h264 still needs even dimensions, which _even_sized guarantees.
+    writer = imageio.get_writer(
+        path, format="FFMPEG", fps=fps, macro_block_size=1, codec=_codec_for(path)
+    )
     try:
         for frame in frames:
-            writer.append_data(np.asarray(frame))
+            writer.append_data(frame)
     finally:
         writer.close()
+
+
+# Containers that cannot carry the default H.264 stream. Handing ffmpeg a codec
+# its container rejects does not fail: it writes an empty file and reports
+# success, so a .webm export came out as a few hundred bytes of header.
+_CONTAINER_CODECS = {".webm": "libvpx-vp9"}
+
+
+def _codec_for(path: str) -> str:
+    """The video codec to encode ``path`` with, from its container."""
+    return _CONTAINER_CODECS.get(os.path.splitext(path)[1].lower(), "libx264")
+
+
+def _even_sized(frame: np.ndarray) -> np.ndarray:
+    """Trim a frame to even width and height (h264 encodes nothing else).
+
+    A row or column at most, off the bottom/right — invisible, and preferable to
+    the alternative of rescaling every frame.
+    """
+    height, width = frame.shape[:2]
+    return frame[: height - (height % 2), : width - (width % 2)]
 
 
 def _save_frame_sequence(frames, path) -> List[str]:
@@ -198,7 +251,9 @@ __all__ = [
     "VECTOR_IMAGE_EXTS",
     "GIF_EXTS",
     "MOVIE_EXTS",
+    "VIDEO_MISSING_MESSAGE",
     "save_view_image",
     "render_animation_frames",
     "save_animation",
+    "video_export_available",
 ]

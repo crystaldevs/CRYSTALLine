@@ -55,8 +55,18 @@
 - Animate any mode in place — bonds, polyhedra and hydrogen bonds follow the
   motion; the amplitude is the peak displacement of the most-displaced atom,
   so one setting works for a molecule and for a large cell alike, and playback
-  speed is adjustable. Export the animation as GIF / MP4 / PNG frames with
+  speed is adjustable. Export the animation as GIF or a numbered frame sequence
+  with no extra packages, or as MP4 / MOV / WebM with
+  `pip install imageio-ffmpeg` (also `pip install CRYSTALLine[video]`) —
   configurable resolution, frame count and frame rate.
+- Modes away from Γ: a `DISPERSI` run's q-points appear in a selector, and
+  each one animates as the travelling wave it is — every drawn cell carries its
+  own phase, through the conventional cell, supercell tiling and boundary
+  completion alike. One click tiles the cell to a whole period of the wave.
+- For a still image of such a mode, the displacement arrows can be scaled by
+  how far each atom moves and coloured by the phase of the cell it sits in —
+  cycling once per wavelength, which is what a snapshot of a travelling wave
+  has to show, its amplitude being identical in every cell.
 
 **Editing**
 - Select atoms (click / Ctrl-click), drag them in 3D (periodic images move
@@ -74,7 +84,7 @@
   transparency options.
 
 **Input builder**
-- Write a ready-to-run CRYSTAL `.d12` deck for the current structure, with a live
+- Write a ready-to-run CRYSTAL input deck for the current structure, with a live
   preview of the exact input before you save it.
 - Geometry is derived from the structure — space group and asymmetric unit for a
   crystal, and the right coordinate convention for slabs, polymers and molecules.
@@ -109,7 +119,7 @@ The following will be installed if not already present:
 - numpy >= 1.23
 - ase >= 3.23
 - pymatgen >= 2023.11.10
-- CRYSTALClear >= 0.2
+- CRYSTALClear >= 0.2.16
 
 ### Steps
 
@@ -134,7 +144,10 @@ crystalline
 
 Use **File → Open** to load a CRYSTAL `.out`/`.gui`/`.34` file or a `.cif`. If a
 CRYSTAL output contains a vibrational calculation, the phonon modes are loaded
-too — pick one in the **Phonons** panel and press **Play**. Otherwise the
+too — pick one in the **Phonons** panel and press **Play**. If the run sampled
+more than Γ (`DISPERSI`), choose the q-point above the mode list and press
+**Tile** to repeat the cell over one period of that wave — the same button turns
+into **Untile** and puts the cell back. Otherwise the
 geometry is shown on its own. Tweak the look from the **Display** panel, measure
 geometry from the **Geometry** panel, and build property plots from the **Plot**
 menu.
