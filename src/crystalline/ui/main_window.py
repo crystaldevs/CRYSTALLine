@@ -11,7 +11,7 @@ import os
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import QRect, Qt
+from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSpinBox,
+    QWidget,
 )
 
 from crystalline.core.cells import (
@@ -37,14 +38,19 @@ from crystalline.core.cells import (
     expand_modes_to_conventional,
     tile_supercell,
     to_analysis_cell,
+    to_conventional,
 )
 from crystalline.core.adp import ADPSet
 from crystalline.core.phonons import PhononModes
 from crystalline.core.structure import Structure
 from crystalline.core.undo import UndoHistory
+
+# Orbital energies are stored in Hartree and shown in the unit bands are quoted in.
+_HARTREE_TO_EV = 27.211386245988
 from crystalline.viz.phonon_animator import PhononAnimator
 from crystalline.ui import menus
 from crystalline.ui.viewport import Viewport
+from crystalline.ui.widgets import BusyOverlay, DropHint, Worker
 from crystalline.ui.panels.structure_panel import StructurePanel
 from crystalline.ui.panels.phonon_panel import PhononPanel
 from crystalline.ui.panels.info_panel import InfoPanel
@@ -103,6 +109,16 @@ class MainWindow(QMainWindow):
         self._suppress_undo = False
         self._output_path: Optional[str] = None  # last-loaded CRYSTAL .out, for plots
         self._output_props: dict = {}  # parsed CRYSTAL-output rows for the Info panel
+        # The orbital currently shown, if any: what it takes to rebuild it when
+        # the displayed cell changes (a supercell is how you see more of one).
+        self._orbital: Optional[dict] = None
+        # Workers in flight. Held because a dropped one is collected mid-run and
+        # takes its QThread down with it.
+        self._workers: list = []
+        # What each plot dialog was last set to, keyed by dialog. These are tuned
+        # rather than answered — a broadening width, a frequency window — so
+        # reopening one starts from the last accepted settings, not the defaults.
+        self._plot_dialog_state: dict = {}
         self._axis_actions: list = []  # a/b/c view-alignment actions (menu + toolbar)
         (self.structure, _, self._unit_cell, self._bond_structure,
          self._adp_index) = self._compose_view(self._cell_view, self._supercell, None)
@@ -151,7 +167,7 @@ class MainWindow(QMainWindow):
         # Hidden until Cell ▸ Point symmetry analysis asks for it — it is an
         # analysis someone goes looking for, not something every session needs on
         # screen (and the search itself only runs once the panel is opened).
-        self.symmetry_panel = SymmetryPanel(self._symmetry_source(), self)
+        self.symmetry_panel = SymmetryPanel(self._analysis_cell(), self)
         self._symmetry_dock = self._dock(
             "Point symmetry", self.symmetry_panel, Qt.RightDockWidgetArea
         )
@@ -162,6 +178,18 @@ class MainWindow(QMainWindow):
         # Hidden until the first plot is built so it doesn't take up space.
         self.plot_panel = PlotPanel(self)
         self._plot_dock = self._dock("Plots", self.plot_panel, Qt.BottomDockWidgetArea)
+        # The Plots window is the exception to the fixed layout. A figure is
+        # looked at beside the structure, moved around, and shut when it has been
+        # read — so it can be closed and dragged, and it is *not* allowed to dock:
+        # without that it snaps back into the main window whenever it drifts near
+        # an edge, which is maddening when the whole point is to place it.
+        self._plot_dock.setAllowedAreas(Qt.NoDockWidgetArea)
+        self._plot_dock.setFeatures(
+            QDockWidget.DockWidgetClosable
+            | QDockWidget.DockWidgetMovable
+            | QDockWidget.DockWidgetFloatable
+        )
+        self._plot_dock.setTitleBarWidget(None)  # it keeps its own bar, and its ×
         self._plot_dock.hide()
         self._plot_dock_floated = False  # floated once, on the first plot built
 
@@ -181,7 +209,22 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._editing_status)
         self._editing_status.hide()
 
+        self._settle_docks()
+        # Long work shows this rather than a wait cursor, and runs off the main
+        # thread so it can actually animate — see crystalline.ui.widgets.busy.
+        self._busy = BusyOverlay(self)
+        # Drag-and-drop: the window takes the drop, the hint sits over the 3D
+        # view — the part of the window a file is aimed at.
+        self.setAcceptDrops(True)
+        self._drop_hint = DropHint(self.viewport)
+
         self._connect_signals()
+        # The theme is painted on the application before this window exists, so
+        # the change that normally carries the 3D ground along with it has
+        # already happened by the time there is a viewport to carry it to:
+        # without this, launching in dark mode gave a dark app around a white
+        # 3D view until the theme was next switched.
+        self._follow_theme_background()
         menus.build_menus(self)
         self._reset_undo()
         self._update_export_actions()
@@ -195,7 +238,10 @@ class MainWindow(QMainWindow):
         self._update_status()  # atom count may have changed (add/remove)
         self._update_import_action()  # importing needs a non-empty structure
         self._refresh_info()  # symmetry/point group may have changed with the edit
-        self.symmetry_panel.invalidate(self._symmetry_source())  # and so may its elements
+        self.symmetry_panel.invalidate(self._analysis_cell())  # and so may its elements
+        # The Geometry panel's position boxes show a live atom, so they go stale
+        # the moment anything moves it — a drag, an arrow-key nudge, an undo.
+        self.geometry_panel.sync_position()
         self.viewport.renderer.refresh()
         # Editing the geometry: stop any animation and re-anchor it to the edited
         # geometry (drop the modes if the atom count changed). Passing the new
@@ -268,6 +314,9 @@ class MainWindow(QMainWindow):
         self.viewport.nudge_requested.connect(self._nudge_selection)
         # starting to drag an atom -> stop any running phonon animation
         self.viewport.interaction_started.connect(self.phonon_panel.stop)
+        # moving the camera -> suspend the animation for the duration, so the
+        # drag gets the whole event loop and the view keeps up with the pointer
+        self.viewport.camera_busy.connect(self.phonon_panel.hold)
         # the panel owns the selection -> highlight it + refresh the Edit menu
         self.structure_panel.selection_changed.connect(self._on_selection_changed)
         # a phonon mode was (de)selected -> refresh the animation-export action
@@ -284,20 +333,24 @@ class MainWindow(QMainWindow):
         self.geometry_panel.duplicate_requested.connect(self._duplicate_selected)
         self.geometry_panel.translate_requested.connect(self._translate_selected)
         self.geometry_panel.set_element_requested.connect(self._set_element_of_selection)
+        self.geometry_panel.set_position_requested.connect(self._set_position_of_selection)
         self.geometry_panel.add_atom_requested.connect(self._add_atom)
         self.geometry_panel.annotations_changed.connect(self.viewport.set_annotations)
         # Symmetry panel: the ticked elements are drawn over the structure.
         self.symmetry_panel.elements_changed.connect(self.viewport.set_symmetry_elements)
 
-    def _symmetry_source(self) -> Structure:
-        """The structure the symmetry search runs on: one clean unit cell.
+    def _analysis_cell(self) -> Structure:
+        """The shown structure folded back into one clean unit cell, edits included.
 
-        Not the one on screen — a supercell has the wrong box and a
+        Not the structure as displayed — a supercell has the wrong box and a
         boundary-completed view holds two copies of every atom that straddles the
-        edge, and a symmetry finder can read neither. The same fold the Info
-        panel's analysis goes through gives a single cell, edits included; the
-        elements it finds repeat with that cell's lattice, so they still fill the
-        drawn box however many cells of it are on screen.
+        edge, and neither a symmetry finder nor a CRYSTAL deck can be built from
+        that. Not the pristine loaded cell either: that has the right box but
+        none of the user's edits. The fold gives both.
+
+        Used by the point-symmetry search (the elements it finds repeat with the
+        cell's lattice, so they still fill the drawn box however many cells are
+        on screen) and by the input builder, which needs one cell to symmetrise.
         """
         try:
             return to_analysis_cell(self.structure, self._unit_cell)
@@ -305,19 +358,168 @@ class MainWindow(QMainWindow):
             return self.structure
 
     def _dock(self, title: str, widget, area) -> QDockWidget:
+        """Dock a panel: fixed in place, named by its tab rather than a title bar.
+
+        Panels are not movable, floatable or closable by hand. The layout is part
+        of the design — where the Display panel is relative to the view is not a
+        preference — and a dock dragged out or shut by accident was work to get
+        back. Visibility stays available, deliberately, in View ▸ Panels.
+        """
         dock = QDockWidget(title, self)
         dock.setWidget(widget)
+        dock.setFeatures(QDockWidget.NoDockWidgetFeatures)
         self.addDockWidget(area, dock)
         return dock
 
+    def _settle_docks(self) -> None:
+        """Put the tabs at the foot of every dock area, and stop them being dragged.
+
+        Called once the tabifying is done. A tabbed dock is named twice — a title
+        bar above it and a tab below — so the title bar comes off and the tab is
+        the name. A dock that ends up alone in its area has no tab, so it keeps
+        its title bar or it would have no label at all.
+        """
+        from PySide6.QtWidgets import QTabBar, QTabWidget
+
+        for area in (
+            Qt.LeftDockWidgetArea, Qt.RightDockWidgetArea,
+            Qt.TopDockWidgetArea, Qt.BottomDockWidgetArea,
+        ):
+            self.setTabPosition(area, QTabWidget.South)
+
+        for _title, dock in self._panel_docks():
+            if self.tabifiedDockWidgets(dock):
+                dock.setTitleBarWidget(QWidget(dock))
+
+        for bar in self.findChildren(QTabBar):
+            bar.setMovable(False)      # the tab order is not the user's to shuffle
+            bar.setTabsClosable(False)
+
     def _show_about(self) -> None:
         menus.show_about(self)
+
+    def _set_cell_view(self, view: CellView) -> None:
+        """Draw the crystallographic (conventional) cell, or the primitive one.
+
+        Re-derived from the pristine source through the ordinary pipeline, so a
+        shown orbital is rebuilt over whichever cell this makes — the two must
+        never drift apart. Editing the shown structure and then switching is a
+        re-derive, so those edits are dropped, as they are for every other Cell
+        action.
+        """
+        if view is self._cell_view:
+            return
+        self._cell_view = view
+        self._apply_cell_view()
+        self._update_cell_view_controls()
+
+    def _update_cell_view_controls(self) -> None:
+        """Point the menu entries and toolbar chips at the cell actually shown.
+
+        Set without re-emitting: they are a display of the current view, and
+        echoing a change back would re-derive it a second time — and for the
+        toolbar switch, would fight the user's click.
+        """
+        for view, action in getattr(self, "_cell_view_actions", {}).items():
+            blocked = action.blockSignals(True)
+            action.setChecked(view is self._cell_view)
+            action.blockSignals(blocked)
+        switch = getattr(self, "_conventional_switch", None)
+        if switch is not None:
+            blocked = switch.blockSignals(True)
+            switch.setChecked(self._cell_view is CellView.CRYSTALLOGRAPHIC)
+            switch.blockSignals(blocked)
+
+    # ── appearance ──────────────────────────────────────────────────────
+    def _set_appearance(self, mode: str) -> None:
+        """Switch the app between the system, light and dark looks, and remember it."""
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        theme.set_mode(QApplication.instance(), mode)
+        for name, action in getattr(self, "_appearance_actions", {}).items():
+            blocked = action.blockSignals(True)
+            action.setChecked(name == mode)
+            action.blockSignals(blocked)
+
+    def _toggle_appearance(self) -> None:
+        """Flip between the light and dark themes from the toolbar lamp.
+
+        An explicit choice, not a nudge to the system one: pressing it while
+        following the desktop settles on whichever of the two is *not* showing,
+        which is what someone reaching for the lamp is asking for. "Match system"
+        stays available in View ▸ Appearance.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        showing_dark = theme.palette_for(QApplication.instance()) is theme.DARK
+        self._set_appearance("light" if showing_dark else "dark")
+
+    # kept for the menu route; the toolbar drives _set_appearance directly
+
+    def refresh_theme(self) -> None:
+        """Redraw anything that baked a theme colour in.
+
+        The theme calls this on every window after a change. A stylesheet
+        restyles itself, but the toolbar's glyphs are rendered once in the text
+        colour — left alone they would stay dark on a dark toolbar — and the
+        lamp's tooltip names the theme it would switch *to*.
+        """
+        from crystalline.ui.menus import refresh_appearance_button, refresh_history_icons
+
+        refresh_history_icons(self)
+        refresh_appearance_button(self)
+        for panel, method in (
+            (getattr(self, "phonon_panel", None), "refresh_theme_icons"),
+            (getattr(self, "geometry_panel", None), "refresh_theme_icons"),
+        ):
+            refresh = getattr(panel, method, None)
+            if callable(refresh):
+                refresh()
+        self._follow_theme_background()
+
+    def _follow_theme_background(self) -> None:
+        """Move the 3D ground to match the app theme — unless it is the user's.
+
+        A dark chrome around a white viewport reads as a bug rather than a
+        choice. But the background is a real setting in Display ▸ Scene, so a
+        colour someone chose deliberately must survive a theme change: only a
+        ground that is still one of the themes' own is moved.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        from PySide6.QtGui import QColor
+
+        panel = getattr(self, "display_panel", None)
+        if panel is None:
+            return
+
+        def same(a: str, b: str) -> bool:
+            """Compare as colours, not as strings.
+
+            The default ground is spelled ``"white"`` and a theme's is
+            ``"#ffffff"`` — the same colour written two ways, and comparing the
+            text would take a fresh app's untouched background for a deliberate
+            choice and never move it.
+            """
+            first, second = QColor(a), QColor(b)
+            return first.isValid() and second.isValid() and first.rgb() == second.rgb()
+
+        if not any(same(panel.background(), ground) for ground in theme.scene_backgrounds()):
+            return  # chosen by the user; leave it alone
+        panel.set_background(theme.active_palette(QApplication.instance()).scene)
 
     def _update_view_actions(self) -> None:
         """Enable a/b/c view alignment only when there's a cell to align to."""
         enabled = self.viewport.can_align_axes()
         for widget in (*self._axis_actions, *getattr(self, "_axis_buttons", [])):
             widget.setEnabled(enabled)
+        self._update_cell_view_controls()
 
     def _update_plot_actions(self) -> None:
         """Enable each plot action according to the loaded file.
@@ -345,15 +547,25 @@ class MainWindow(QMainWindow):
             path, _ = QFileDialog.getOpenFileName(self, kind.caption, "", kind.file_filter)
             if not path:
                 return
-        try:
-            figure = kind.build(path)
-        except Exception as exc:  # noqa: BLE001 - surface any read/plot error to the user
-            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
-            return
-        # No pick handler: none of these plots is drawn against a wavenumber
-        # axis. The spectra dialog's figures are, and pass one themselves.
-        self.plot_panel.add_figure(figure, kind.label.rstrip("… "))
-        self._reveal_plot_dock()
+        # Some of these take seconds — an elastic surface is evaluated over a
+        # grid of directions — so the build goes to a thread and the window shows
+        # the busy overlay instead of locking up.
+        #
+        # Only the *figure* is built there. CRYSTALClear draws on matplotlib's
+        # Agg backend (forced in crystalio.plotting), which needs no display and
+        # no Qt; the canvas that wraps it is created here, on the UI thread,
+        # where every Qt object belongs.
+        def build():
+            return kind.build(path)
+
+        def show(figure) -> None:
+            # No pick handler: none of these plots is drawn against a wavenumber
+            # axis. The spectra dialog's figures are, and pass one themselves.
+            self.plot_panel.add_figure(figure, kind.label.rstrip("… "))
+            self._reveal_plot_dock()
+
+        self._run_busy(build, f"Building {kind.label.rstrip('… ').lower()}…",
+                       show, "Plot failed")
 
     # ── thermal ellipsoids (ADP) ────────────────────────────────────────
     def _load_adps(self, path: str) -> Optional[ADPSet]:
@@ -445,8 +657,10 @@ class MainWindow(QMainWindow):
             return
 
         dialog = SpectraDialog(kinds, self)
+        self._restore_dialog(dialog, "spectra")
         if dialog.exec() != QDialog.Accepted:
             return
+        self._remember_dialog(dialog, "spectra")
         chosen = dialog.selected_kinds()
         try:
             data = load_spectra(path)
@@ -507,8 +721,10 @@ class MainWindow(QMainWindow):
             return
 
         dialog = VCIDialog(run, self)
+        self._restore_dialog(dialog, "vci")
         if dialog.exec() != QDialog.Accepted:
             return
+        self._remember_dialog(dialog, "vci")
         try:
             figure = plot_vci(out, **dialog.options())
         except Exception as exc:  # noqa: BLE001 - surface any plot error
@@ -528,8 +744,6 @@ class MainWindow(QMainWindow):
         ANSCANWF.DAT, so the file next to it is used when there is one and the
         user is asked only when there is not.
         """
-        import os
-
         from crystalline.crystalio import (
             WF_FILTER,
             anscan_run,
@@ -573,8 +787,10 @@ class MainWindow(QMainWindow):
             return
 
         dialog = AnscanDialog(run, self)
+        self._restore_dialog(dialog, "anscan")
         if dialog.exec() != QDialog.Accepted:
             return
+        self._remember_dialog(dialog, "anscan")
         try:
             figure = plot_anscan(out, **dialog.options())
         except Exception as exc:  # noqa: BLE001 - surface any plot error
@@ -634,8 +850,10 @@ class MainWindow(QMainWindow):
             return
 
         dialog = PESDialog(run, self)
+        self._restore_dialog(dialog, "pes")
         if dialog.exec() != QDialog.Accepted:
             return
+        self._remember_dialog(dialog, "pes")
         try:
             figure = plot_pes(out, **dialog.options())
         except Exception as exc:  # noqa: BLE001 - surface any plot error
@@ -655,6 +873,271 @@ class MainWindow(QMainWindow):
             action.setEnabled(has_pes(self._output_path))
 
     # ── plot typography ─────────────────────────────────────────────────
+    def _open_orbitals(self) -> None:
+        """Draw a crystalline orbital from an ORBITALS run over the structure.
+
+        The Molden files a ``PROPERTIES``/``ORBITALS`` run writes sit beside the
+        loaded output, so they are found rather than asked for — as the ANSCAN
+        wavefunctions already are.
+
+        The chosen file's own cell replaces what is displayed. The orbital is
+        expanded on *that* cell's atoms, so drawing it over anything else (a
+        supercell, a boundary-completed view, a different file) would put the
+        lobes on the wrong atoms.
+
+        Away from Γ the dialog can also tile the view to one whole period of the
+        orbital's k, which is where the phase relation between cells becomes
+        visible — the same thing the phonon panel's Tile does for a mode at that
+        q, for the same reason.
+        """
+        from crystalline.crystalio import molden
+        from crystalline.ui.panels.orbital_dialog import OrbitalDialog
+
+        found = molden.find_orbital_files(self._output_path) if self._output_path else []
+        if not found:
+            QMessageBox.information(
+                self, "No orbitals found",
+                "No ORBITALS Molden files were found beside the loaded output.\n\n"
+                "They are written by a PROPERTIES run with the ORBITALS keyword, "
+                "one per sampled k-point, and are expected in the same folder as "
+                "the .out file.",
+            )
+            return
+
+        dialog = OrbitalDialog(found, self, view_cell=self._orbital_view_cell(found))
+        self._restore_dialog(dialog, "orbitals")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "orbitals")
+        choice = dialog.selection()
+
+        try:
+            data = molden.load(choice["path"])
+            imaginary = (
+                molden.load(choice["imaginary_path"]) if choice["imaginary_path"] else None
+            )
+        except Exception as exc:  # noqa: BLE001 - surface any read error
+            QMessageBox.critical(
+                self, "Orbital unavailable", f"Could not read the orbital file:\n{exc}"
+            )
+            return
+
+        # The previously shown orbital goes first, and the view is settled
+        # second: every step below re-derives the displayed cell, and each one
+        # would otherwise kick off a full rebuild of an orbital that is about to
+        # be replaced anyway — which is no longer cheap now that a tiled orbital
+        # is sampled as finely per cell as a single one.
+        self._clear_orbital()
+        self._show_orbital_structure(data)
+        tiling = self._tile_to_period(choice["kpoint"], data.cell) if choice["tile"] else None
+        self._orbital = {
+            "data": data,
+            "imaginary": imaginary,
+            "index": choice["index"],
+            "isovalue": choice["isovalue"],
+            "samples": choice["samples"],
+            "kpoint": choice["kpoint"],
+            "draw": choice["draw"],
+            "phase": choice["phase"],
+        }
+        if not self._refresh_orbital():
+            self._orbital = None
+            return
+        energy = data.orbitals[choice["index"]].energy * _HARTREE_TO_EV
+        drawn = "amplitude" if imaginary is None else {
+            "phase": "|ψ|, coloured by cell phase",
+            "modulus": "|ψ|",
+        }.get(choice["draw"], "amplitude")
+        self.statusBar().showMessage(
+            f"Orbital {choice['index'] + 1} of {len(data.orbitals)}"
+            f"  ·  {energy:.3f} eV"
+            f"  ·  {drawn}"
+            f"  ·  surface at {choice['isovalue']:.0%}"
+            + ("" if tiling is None else "  ·  tiled {}×{}×{}".format(*tiling)),
+            10000,
+        )
+
+    def _orbital_view_cell(self, paths) -> Optional[np.ndarray]:
+        """The unit cell an orbital from ``paths`` will be displayed on.
+
+        The dialog needs it to say how many cells one period of k spans, and it
+        cannot know: the Molden file carries the primitive cell, and the view
+        shows the crystallographic one unless told otherwise. Derived the same
+        way :meth:`_compose_view` derives it, from the same two calls, so the
+        number named in the dialog is the number that will be tiled.
+
+        ``None`` if the file can't be read — the dialog then offers no tiling
+        rather than offering a wrong one.
+        """
+        from ase import Atoms
+
+        from crystalline.crystalio import molden
+
+        for path in paths:
+            try:
+                data = molden.load(path)
+            except Exception:  # noqa: BLE001 - try the next file, then give up
+                continue
+            if data.cell is None:
+                return None
+            primitive = Structure.from_ase(
+                Atoms(numbers=data.numbers, positions=data.positions,
+                      cell=np.asarray(data.cell, dtype=float), pbc=True)
+            )
+            try:
+                if self._cell_view is CellView.CRYSTALLOGRAPHIC:
+                    return to_conventional(primitive).cell.copy()
+                return as_view(primitive, self._cell_view).cell.copy()
+            except Exception:  # noqa: BLE001 - no symmetry found: the file's own cell
+                return np.asarray(data.cell, dtype=float)
+        return None
+
+    def _tile_to_period(self, kpoint, cell) -> Optional[tuple]:
+        """Put one whole period of ``kpoint`` on screen.
+
+        The same offer the phonon panel's Tile makes for a mode at that q, and
+        the tiling is worked out here rather than in the dialog because it
+        depends on the cell being shown: k is quoted against the Molden file's
+        (primitive) lattice, and the crystallographic cell of a rhombohedral
+        crystal already holds three of those — one hexagonal cell of corundum
+        spans a whole period of k = (1/3, 1/3, 1/3), where three primitive cells
+        along each axis would be asked for otherwise.
+
+        ``kpoint`` is fractional against ``cell``, the lattice it was quoted on.
+        Returns the tiling applied, or ``None`` if one cell already shows a
+        period; the view is left alone in that case.
+        """
+        from crystalline.core.orbitals import commensurate_repeats_in
+
+        reps = commensurate_repeats_in(kpoint, cell, self._unit_cell)
+        if reps == (1, 1, 1):
+            return None
+        self._tile_restore = None  # this tiling is the user's, not the panel's
+        self._set_supercell(reps)
+        self._apply_cell_view()
+        return reps
+
+    def _run_busy(self, work, message: str, done, failed_title: str) -> None:
+        """Run ``work`` off the main thread behind the busy overlay.
+
+        ``done`` receives the result back on the UI thread, which is where any
+        drawing has to happen: VTK and Qt widgets belong to the thread that made
+        them, so only the computation moves.
+        """
+        self._busy.start(message)
+        worker = Worker(work)
+        self._workers.append(worker)  # held: a dropped worker takes its thread down
+
+        def cleanup() -> None:
+            self._busy.stop()
+            if worker in self._workers:
+                self._workers.remove(worker)
+
+        def on_failed(exc) -> None:
+            cleanup()
+            QMessageBox.critical(self, failed_title, str(exc))
+
+        worker.finished.connect(lambda result: (cleanup(), done(result)))
+        worker.failed.connect(on_failed)
+        worker.start()
+
+    def _refresh_orbital(self) -> bool:
+        """(Re)build the shown orbital over the displayed cell. False if it failed.
+
+        Called whenever the displayed cell changes — a supercell, or a switch
+        between the primitive and crystallographic views — so the orbital always
+        covers exactly the cell being drawn — which is the way to see more of one than
+        a single cell holds. The orbital is re-evaluated over the larger box
+        rather than the single-cell result being tiled: away from Gamma it picks
+        up the phase e^(2πi k·T) from cell to cell, and only its modulus repeats.
+        """
+        if self._orbital is None:
+            return False
+        from crystalline.core import orbitals as orbital_maths
+
+        chosen = dict(self._orbital)
+        box_cell, repeat = self._unit_cell, self._supercell
+
+        def build():
+            # Pure numpy on data already parsed — safe away from the UI thread.
+            return orbital_maths.evaluate(
+                chosen["data"], chosen["index"], samples=chosen["samples"],
+                # The cell actually on screen — the crystallographic one unless
+                # the view says otherwise — and the supercell of it being shown.
+                box_cell=box_cell, repeat=repeat, imaginary=chosen["imaginary"],
+                # k is what makes the images add with a phase instead of in
+                # step; without it this would draw the Γ orbital of these
+                # coefficients, which is a different orbital entirely.
+                kpoint=chosen.get("kpoint"),
+                draw=chosen.get("draw", orbital_maths.AMPLITUDE),
+                phase=chosen.get("phase", 0.0),
+            )
+
+        def draw(field) -> None:
+            self.viewport.renderer.set_orbital(field, chosen["isovalue"])
+            self._update_orbital_actions()
+
+        self._run_busy(build, "Building the orbital…", draw, "Orbital unavailable")
+        return True
+
+    def _show_orbital_structure(self, data) -> None:
+        """Display the cell the orbital is defined on, replacing the current view.
+
+        The Molden file carries its own geometry, so that becomes the source the
+        view is derived from — but the *view* is left alone, crystallographic by
+        default. The orbital is then sampled over whichever cell is on screen
+        (see :meth:`_refresh_orbital`): the conventional cell is a different
+        region of the same crystal, not a different crystal, and the Bloch sum
+        runs over the file's own lattice either way.
+
+        What must not happen is the two drifting apart — the orbital sampled on
+        the file's rhombohedral cell while the view shows the hexagonal
+        conventional one, three times the volume, which put lobes where no atom
+        was and atoms where no lobe was.
+
+        The supercell is deliberately *kept*: it is how you ask to see more of an
+        orbital than one cell holds, and the orbital is rebuilt across it.
+        """
+        from ase import Atoms
+
+        self._source = Structure.from_ase(
+            Atoms(
+                numbers=data.numbers, positions=data.positions,
+                cell=np.asarray(data.cell, dtype=float), pbc=True,
+            )
+        )
+        self._modes = None
+        self._qmodes = []
+        self._qindex = 0
+        self._adps = None
+        self.phonon_panel.clear()
+        self._apply_cell_view()
+        self._update_view_actions()
+
+    def _clear_orbital(self) -> None:
+        """Take a shown orbital off the view."""
+        self.viewport.renderer.set_orbital(None)
+        self._orbital = None
+        self._update_orbital_actions()
+
+    def _update_orbital_actions(self) -> None:
+        """Enable the orbital entries according to what is loaded and shown."""
+        from crystalline.crystalio import molden
+
+        action = getattr(self, "_orbitals_action", None)
+        if action is not None:
+            available = bool(
+                self._output_path and molden.find_orbital_files(self._output_path)
+            )
+            action.setEnabled(available)
+            action.setToolTip(
+                "" if available
+                else "No ORBITALS Molden files beside the loaded output"
+            )
+        clear = getattr(self, "_clear_orbital_action", None)
+        if clear is not None:
+            clear.setEnabled(self._orbital is not None)
+
     def _open_plot_font(self) -> None:
         """Set the font of the plots built from now on.
 
@@ -726,9 +1209,9 @@ class MainWindow(QMainWindow):
         elastic sections, elastic surfaces, XRD). So the first plot pops the dock
         out into a free-floating window sized 4:3 beside the main window.
 
-        It stays a dock, not a separate window class: drag it back to re-attach.
-        Whatever the user settles on is then left alone — the float happens once,
-        not on every plot.
+        It never re-docks: it is the one panel whose place is the user's, and a
+        window that snaps back into the frame every time it nears an edge cannot
+        be placed. The float happens once, not on every plot.
         """
         if not self._plot_dock_floated:
             self._plot_dock_floated = True
@@ -907,6 +1390,20 @@ class MainWindow(QMainWindow):
         # The redraw rebuilds the scene and drops the selection halos; the
         # selection itself is unchanged, so re-apply them to keep it visible.
         self.viewport.set_selection(indices)
+
+    def _set_position_of_selection(self, position) -> None:
+        """Place the one selected atom at the cartesian coordinates typed in the
+        Geometry panel.
+
+        Routed through the viewport's :meth:`~crystalline.ui.viewport.Viewport.move_atom_to`
+        — the same call a finished drag makes — so a typed move and a dragged one
+        are the same operation: one undo step, and the atom's periodic images
+        travel with it instead of being left behind.
+        """
+        indices = self.structure_panel.selected_indices()
+        if not self._editing or len(indices) != 1:
+            return
+        self.viewport.move_atom_to(indices[0], position)
 
     def _set_element_selected(self) -> None:
         """Edit-menu route: ask for the symbol, then apply it to the selection."""
@@ -1139,6 +1636,92 @@ class MainWindow(QMainWindow):
         self._set_supercell(reps)
         self._apply_cell_view()
 
+    # ── drag and drop ───────────────────────────────────────────────────
+    def dragEnterEvent(self, event) -> None:
+        """Accept a dragged file the app can do something with, and say what.
+
+        Only the *first* usable file is considered. Opening is a replacement, so
+        opening four files in a row would leave three of them having flashed
+        past; and the hint has to name one thing, not four.
+        """
+        path, action = self._dropped_file(event)
+        if action is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self._drop_hint.show_hint(
+            f"Open {os.path.basename(path)}" if action == "open"
+            else f"Add the atoms in {os.path.basename(path)}",
+            "replaces the structure on screen" if action == "open"
+            else "appends to the current structure — undoable",
+        )
+
+    def dragMoveEvent(self, event) -> None:
+        # Qt asks again on every move; without this the drop is refused whatever
+        # dragEnterEvent said.
+        if self._dropped_file(event)[1] is None:
+            event.ignore()
+        else:
+            event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:
+        self._drop_hint.hide_hint()
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        """Take the file, and open it on the *next* turn of the event loop.
+
+        Not inside this handler. A drop arrives in the middle of the platform's
+        drag session, and opening a file tears the VTK scene down and builds a
+        new one — re-entering VTK from inside a drag it is itself dispatching
+        segfaults outright when the drop lands on the 3D view. Accepting first
+        and deferring also lets the application the file came from see the drag
+        finish immediately, instead of holding its pointer for the second or so
+        a large output takes to parse.
+        """
+        self._drop_hint.hide_hint()
+        path, action = self._dropped_file(event)
+        if action is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        ignored = [p for p in self._dropped_paths(event) if p != path]
+        QTimer.singleShot(0, lambda: self._handle_drop(path, action, ignored))
+
+    def _handle_drop(self, path: str, action: str, ignored: list) -> None:
+        """Open or import a dropped file, once the drag itself is over."""
+        done = self._load_path(path) if action == "open" else self._import_path(path)
+        if done and ignored:
+            # Said rather than silently dropped: a multiple selection dragged in
+            # one gesture looks like it should all arrive.
+            verb = "Opened" if action == "open" else "Imported"
+            self.statusBar().showMessage(
+                f"{verb} {os.path.basename(path)} — {len(ignored)} other dropped "
+                f"file{'' if len(ignored) == 1 else 's'} ignored",
+                8000,
+            )
+
+    def _dropped_file(self, event):
+        """The first usable dropped file as ``(path, action)``; ``(None, None)`` if none."""
+        from crystalline.crystalio import file_action
+
+        for path in self._dropped_paths(event):
+            action = file_action(path)
+            if action is not None:
+                return path, action
+        return None, None
+
+    @staticmethod
+    def _dropped_paths(event) -> list:
+        """The local files a drag carries, in order. Non-file drags give none."""
+        data = event.mimeData()
+        if data is None or not data.hasUrls():
+            return []
+        return [
+            url.toLocalFile() for url in data.urls()
+            if url.isLocalFile() and url.toLocalFile()
+        ]
+
     # ── file actions ────────────────────────────────────────────────────
     def _open_file(self) -> None:
         """Single open: loads geometry, and phonon modes too if the file has them."""
@@ -1149,13 +1732,34 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self._load_path(path)
+
+    def _load_path(self, path: str) -> bool:
+        """Open ``path``, replacing everything on screen. False if it wouldn't read.
+
+        Split out of :meth:`_open_file` so a file arriving any other way — dropped
+        on the window — goes through exactly the same sequence. There is a lot of
+        it, and a second copy would drift: the plots and the orbital of the
+        previous file both have to be let go, the supercell and the tiling reset,
+        and eight menu sections re-enabled against what this file turns out to
+        contain.
+        """
         try:
             from crystalline.crystalio import load
 
             result = load(path)
         except Exception as exc:  # noqa: BLE001 - surface any parse error to the user
             QMessageBox.critical(self, "Load failed", str(exc))
-            return
+            return False
+        # The previous file's plots belong to the previous file: their figures
+        # stay live otherwise, and a spectrum's peak-pick handler would select
+        # modes in a structure it knows nothing about.
+        self.plot_panel.clear()
+        # And the orbital. Forgetting our record of it was not enough: the
+        # renderer keeps the field it was given, so the rebuild for the new
+        # structure drew the *previous* file's orbital over it — lobes from one
+        # crystal on the atoms of another.
+        self._clear_orbital()
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = self._load_adps(path)
@@ -1170,11 +1774,13 @@ class MainWindow(QMainWindow):
         self._update_adp_controls(autoshow=True)
         self._update_info(path)
         self._update_plot_actions()  # enable only the plots this file supports
+        self._update_orbital_actions()  # and the orbitals, if the run wrote any
         self._update_spectra_action()
         self._update_vci_action()
         self._update_anscan_action()
         self._update_pes_action()
         self._update_import_action()  # a structure is now loaded — allow importing
+        return True
 
     def _import_atoms(self) -> None:
         """Read atoms from an .xyz/.pdb/.cif file and add them to the current structure.
@@ -1188,28 +1794,38 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
+        self._import_path(path)
+
+    def _import_path(self, path: str) -> bool:
+        """Append the atoms in ``path`` to the current structure. False if it failed.
+
+        Split out of :meth:`_import_atoms` for the same reason as
+        :meth:`_load_path`: a dropped file must land in the undo history and pick
+        up the selection the same way a chosen one does.
+        """
         try:
             from crystalline.crystalio import read_atoms
 
             atoms = read_atoms(path)
         except Exception as exc:  # noqa: BLE001 - surface any read/parse error
             QMessageBox.critical(self, "Import failed", f"Could not read atoms:\n{exc}")
-            return
+            return False
         symbols = list(atoms.get_chemical_symbols())
         if not symbols:
             QMessageBox.information(self, "Nothing imported", "No atoms found in that file.")
-            return
+            return False
         try:
             new = self.structure.add_atoms(symbols, atoms.get_positions())  # -> undo + redraw
         except Exception as exc:  # noqa: BLE001 - e.g. an unknown element symbol
             QMessageBox.critical(self, "Import failed", f"Could not add the atoms:\n{exc}")
-            return
+            return False
         self.display_panel.set_elements(self.structure.numbers)  # new elements may appear
         # Turn editing on and select the imported atoms so they can be dragged
         # into place as a whole straight away.
         if not self._editing:
             self._edit_mode_action.setChecked(True)  # toggles _set_editing(True)
         self.structure_panel.set_selection(new)
+        return True
 
     def _update_info(self, path: str) -> None:
         """Refresh the crystallographic info panel for the loaded system."""
@@ -1264,20 +1880,53 @@ class MainWindow(QMainWindow):
             self._report_save_error("CIF", exc)
 
     def _build_crystal_input(self) -> None:
-        """Open the CRYSTAL ``.d12`` input builder for the current unit cell.
+        """Open the CRYSTAL ``.d12`` input builder for the structure as edited.
 
-        Uses ``_source`` (the pristine loaded cell), not the displayed structure,
-        so symmetry reduction sees the real unit cell rather than a supercell
-        tiling or boundary-completed duplicates.
+        Built from :meth:`_analysis_cell` — the shown structure folded back into
+        a single unit cell — so symmetry reduction sees one clean cell rather
+        than a supercell tiling or boundary-completed duplicates, *and* the deck
+        describes the geometry currently on screen.
+
+        This used to pass ``_source``, the pristine loaded cell. That got the
+        cell right but silently discarded every edit made since the file was
+        opened: a dragged atom, an added or deleted one, a changed element all
+        came out as the original geometry, with nothing on screen to say so.
+        (Lattice-parameter edits were the exception — those are applied to
+        ``_source`` itself, so they came through either way.)
         """
-        if len(self._source) == 0:
+        structure = self._analysis_cell()
+        if len(structure) == 0:
             QMessageBox.information(
                 self, "Build CRYSTAL input", "Open or build a structure first."
             )
             return
         from crystalline.ui.panels.input_builder import InputBuilderDialog
 
-        InputBuilderDialog(self._source, self).exec()
+        InputBuilderDialog(structure, self).exec()
+
+    # ── remembered plot-dialog settings ─────────────────────────────────
+    def _restore_dialog(self, dialog, key: str) -> None:
+        """Reopen a plot dialog on the settings it was last accepted with.
+
+        Also tidies its forms. Every plot dialog is opened through here, so it is
+        the one place that reaches all of them — see :func:`theme.tidy_forms` for
+        why they need it.
+        """
+        from crystalline.ui import theme
+        from crystalline.ui.panels.dialog_state import restore
+
+        theme.tidy_forms(dialog)
+        restore(dialog, self._plot_dialog_state.get(key))
+
+    def _remember_dialog(self, dialog, key: str) -> None:
+        """Keep an accepted dialog's settings for the next time it is opened.
+
+        Only on accept: a cancelled dialog is the user backing out, and having it
+        still change what comes up next time would make Cancel do something.
+        """
+        from crystalline.ui.panels.dialog_state import capture
+
+        self._plot_dialog_state[key] = capture(dialog)
 
     def _report_save_error(self, what: str, exc: BaseException) -> None:
         """Tell the user a save failed — never with an empty dialog.
@@ -1548,6 +2197,10 @@ class MainWindow(QMainWindow):
         else:
             self.phonon_panel.clear()
         self._update_export_actions()  # modes may have appeared/disappeared
+        # A shown orbital belongs to the cell on screen, so it is rebuilt across
+        # whatever that now is — taking a supercell redraws it over the supercell.
+        if self._orbital is not None:
+            self._refresh_orbital()
 
     def _compose_view(self, view: CellView, supercell, modes):
         """Return ``(structure, modes, unit_cell, analysis, adp)`` for the view.
@@ -1614,7 +2267,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "geometry_panel"):
             self.geometry_panel.set_structure(self.structure)
         if hasattr(self, "symmetry_panel"):
-            self.symmetry_panel.set_structure(self._symmetry_source())
+            self.symmetry_panel.set_structure(self._analysis_cell())
         self._reset_undo()  # edits (and their undo history) don't cross a re-derive
         self._update_view_actions()  # a/b/c alignment depends on the cell just shown
         if hasattr(self, "display_panel"):

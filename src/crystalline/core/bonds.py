@@ -164,27 +164,6 @@ _HBOND_MIN_ANGLE = 120.0  # degrees: minimum D–H···A angle
 _NO_HBONDS = np.empty((0, 2, 3), dtype=float)  # the "no hydrogen bonds" result
 
 
-def hydrogen_bonds(structure: Structure, periodic: bool = True) -> np.ndarray:
-    """Return hydrogen bonds as an ``(M, 2, 3)`` array of ``[H, A]`` endpoints.
-
-    Each row is the cartesian segment from a hydrogen to the acceptor it points
-    at. Empty when there are no hydrogens or no qualifying contacts.
-
-    With ``periodic=True`` the search uses the minimum-image convention, so a
-    bond may cross the cell boundary (its acceptor endpoint can lie outside the
-    cell). Pass ``periodic=False`` to bond only atoms as positioned — the right
-    choice for a *displayed* (already boundary-completed) structure, where using
-    the cell as well would double-count each contact against its periodic image.
-    """
-    atoms = structure.to_ase()
-    numbers = np.asarray(atoms.get_atomic_numbers(), dtype=int)
-    positions = np.asarray(atoms.get_positions(), dtype=float)
-    if len(atoms) == 0 or not np.any(numbers == 1):
-        return _NO_HBONDS.copy()
-    src, dst, vec = _neighbour_pairs(atoms, _HBOND_MAX_HA, periodic)
-    return _hydrogen_bond_segments(positions, numbers, src, dst, vec)
-
-
 def hydrogen_bonds_from_positions(positions, numbers, reference=None) -> np.ndarray:
     """Hydrogen bonds among atoms at ``positions``, treated non-periodically.
 
@@ -192,8 +171,11 @@ def hydrogen_bonds_from_positions(positions, numbers, reference=None) -> np.ndar
     *which* contacts count while ``positions`` decides where they are drawn: an
     animation passes the equilibrium geometry so the same set of bonds is drawn
     throughout the cycle instead of appearing and vanishing as atoms swing past
-    the distance and angle cut-offs. Same ``(M, 2, 3)`` result as
-    :func:`hydrogen_bonds` with ``periodic=False``.
+    the distance and angle cut-offs.
+
+    Non-periodic by design: the displayed cell is already boundary-completed, so
+    searching its periodic images too would draw each contact twice — once to a
+    visible atom and once to an image out in space.
     """
     positions = np.asarray(positions, dtype=float)
     numbers = np.asarray(numbers, dtype=int)
@@ -252,39 +234,6 @@ def _hydrogen_bond_contacts(numbers, src, dst, vec) -> List[tuple]:
     return contacts
 
 
-def _hydrogen_bond_segments(positions, numbers, src, dst, vec) -> np.ndarray:
-    """Turn neighbour pairs into ``[H, A]`` segments for the qualifying contacts.
-
-    Used by the periodic path, where the acceptor may be a periodic image: the
-    segment ends on ``H + vec`` rather than on the acceptor's own site.
-    """
-    contacts = _hydrogen_bond_contacts(numbers, src, dst, vec)
-    if not contacts:
-        return _NO_HBONDS.copy()
-    return np.asarray(
-        [[positions[h], positions[h] + a_vec] for h, _a, a_vec in contacts], dtype=float
-    )
-
-
-def _neighbour_pairs(atoms, cutoff: float, periodic: bool = True):
-    """``(src, dst, vec)`` neighbour pairs within ``cutoff`` (Å).
-
-    ``vec[k]`` is the displacement from atom ``src[k]`` to atom ``dst[k]`` (to its
-    nearest periodic image when ``periodic`` and there's a real cell). Uses ASE's
-    neighbour list in that case, else a plain KD-tree on the atoms as positioned.
-    """
-    cell = np.asarray(atoms.get_cell(), dtype=float)
-    if periodic and abs(np.linalg.det(cell)) > 1e-8 and np.any(atoms.get_pbc()):
-        try:
-            from ase.neighborlist import neighbor_list
-
-            i, j, disp = neighbor_list("ijD", atoms, cutoff)
-            return np.asarray(i), np.asarray(j), np.asarray(disp, dtype=float)
-        except Exception:  # noqa: BLE001 - fall through to the non-periodic search
-            pass
-    return _kdtree_pairs(np.asarray(atoms.get_positions(), dtype=float), cutoff)
-
-
 def _kdtree_pairs(positions: np.ndarray, cutoff: float):
     """``(src, dst, vec)`` pairs within ``cutoff`` by cartesian distance (no PBC)."""
     from scipy.spatial import cKDTree
@@ -313,6 +262,5 @@ __all__ = [
     "Connectivity",
     "connectivity",
     "replicate_polyhedra",
-    "hydrogen_bonds",
     "hydrogen_bonds_from_positions",
 ]

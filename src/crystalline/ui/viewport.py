@@ -1,12 +1,18 @@
 """The 3D viewport widget: a pyvistaqt interactor with atom pick + drag.
 
 This is where PyVista/VTK meets Qt. It embeds a ``QtInteractor``, owns a
-:class:`StructureRenderer`, and drives an :class:`AtomDragController` that turns
-mouse interaction into two Qt signals:
+:class:`StructureRenderer`, and installs the
+:class:`~crystalline.ui.drag_controller.AtomDragStyle` interactor style, turning
+mouse and key interaction into Qt signals:
 
 * ``atom_picked`` — a click on an atom (selection),
 * ``atom_moved``  — an atom was dragged to a new position (already committed to
-  the model).
+  the model),
+* ``selection_cleared`` — a click on empty space,
+* ``interaction_started`` — an atom drag began (e.g. stop the animation),
+* ``camera_busy`` — the camera is being moved, or has stopped being moved,
+* ``delete_requested`` / ``nudge_requested`` — Del and the arrow keys, which the
+  embedded VTK widget would otherwise swallow.
 
 The viewport keeps a reference to the current :class:`Structure` so drags can be
 committed via ``move_atom``; it's refreshed whenever a new structure is shown.
@@ -18,7 +24,7 @@ from typing import Optional
 
 import numpy as np
 from pyvistaqt import QtInteractor
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from crystalline.core.structure import Structure
@@ -34,6 +40,20 @@ _NUDGE_STEP = 0.1
 _NUDGE_STEP_COARSE = 0.5
 _ARROW_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
 
+# Wheel zoom. A mouse notch is 120 units of angleDelta; a trackpad sends much
+# smaller amounts, many times. Scaling the zoom by the actual delta makes both
+# continuous instead of stepping by VTK's fixed ~21% per event.
+_ZOOM_PER_NOTCH = 1.15
+_WHEEL_UNITS_PER_NOTCH = 120.0
+# One gesture should never invert or teleport the view, however large a delta a
+# device reports.
+_MAX_ZOOM_PER_EVENT = 4.0
+
+# A wheel zoom has no "end": it is a stream of discrete events, and a trackpad
+# sends a long one. The camera counts as still busy until this long after the
+# last of them, so a two-finger zoom stands other work down the way a drag does.
+_WHEEL_IDLE_MS = 250
+
 
 class Viewport(QWidget):
     """3D view of the current structure: click to select, drag to move atoms."""
@@ -42,6 +62,11 @@ class Viewport(QWidget):
     atom_moved = Signal(int)   # emits the index of a dragged atom (post-commit)
     selection_cleared = Signal()
     interaction_started = Signal()  # an atom drag began (e.g. stop animation)
+    # True while the user is moving the camera, False when they stop. Continuous
+    # work — the phonon animation above all — stands down in between: a frame and
+    # a camera render are each a synchronous, display-locked render, so running
+    # both halves the rate at which the view can follow the pointer.
+    camera_busy = Signal(bool)
     delete_requested = Signal()  # Del/Backspace pressed while the 3D view has focus
     nudge_requested = Signal(object)  # arrow key: (dx, dy, dz) world vector to move the selection
 
@@ -52,6 +77,18 @@ class Viewport(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.interactor)
 
+        # Qt hands a drop to the innermost widget under the pointer that accepts
+        # drops, walking up the parents from there — so this is what lets a file
+        # dropped on the 3D view reach the window, which is the only thing that
+        # knows what to do with it. It also turns off pyvistaqt's own handler,
+        # which reads whatever is dropped as a mesh and adds it to the scene:
+        # a CRYSTAL output is not a mesh, and the scene is not its to add to.
+        #
+        # Forwarding the event instead does not work, and fails loudly: Qt
+        # re-dispatches a drag to the widget under the pointer, so sending it on
+        # to the window comes straight back here and recurses until the stack
+        # runs out.
+        self.interactor.setAcceptDrops(False)
         self.renderer = StructureRenderer(self.interactor)
         self._structure: Optional[Structure] = None
         self._reference_cell: Optional[np.ndarray] = None  # original cell, for axis views
@@ -65,19 +102,45 @@ class Viewport(QWidget):
             on_click=self._on_click_atom,
             on_click_empty=self._on_click_empty,
             on_grab=lambda _index: self.interaction_started.emit(),
+            on_camera=self._set_camera_busy,
             editing=False,
         )
+        self._camera_busy = False
+        # Only the wheel needs it: a drag says when it ends, a wheel doesn't.
+        self._wheel_idle = QTimer(self)
+        self._wheel_idle.setSingleShot(True)
+        self._wheel_idle.setInterval(_WHEEL_IDLE_MS)
+        self._wheel_idle.timeout.connect(lambda: self._set_camera_busy(False))
         # A QtInteractor can quietly swap back to its default trackball style on
         # focus changes, which kills atom-dragging. Re-assert our style when the
         # view is (re)entered/refocused. Do NOT do it on plain presses —
         # SetInteractorStyle during the press that starts a drag disrupts it.
         self.interactor.installEventFilter(self)
 
+    def _set_camera_busy(self, busy: bool) -> None:
+        """Announce that the camera started or stopped moving (idempotent)."""
+        busy = bool(busy)
+        if busy == self._camera_busy:
+            return
+        self._camera_busy = busy
+        self.camera_busy.emit(busy)
+
     def eventFilter(self, obj, event) -> bool:
         if obj is self.interactor:
             etype = event.type()
             if etype in (QEvent.Enter, QEvent.FocusIn):
                 self._drag.reactivate()
+            elif etype == QEvent.MouseButtonRelease:
+                # Belt and braces for the camera-busy bracket. VTK pairs its
+                # start/end interaction events reliably, but a gesture that ends
+                # any other way — the window losing the grab mid-drag — would
+                # otherwise leave the animation suspended with no way back but
+                # pressing Play. A release always arrives, and clearing an
+                # already-clear flag emits nothing.
+                self._set_camera_busy(False)
+            elif etype == QEvent.Wheel:
+                self._zoom_from_wheel(event)
+                return True  # consumed: VTK's own fixed-step dolly must not also run
             elif etype == QEvent.KeyPress:
                 key = event.key()
                 if key in (Qt.Key_Delete, Qt.Key_Backspace):
@@ -90,6 +153,27 @@ class Viewport(QWidget):
                     self.nudge_requested.emit(self._nudge_vector(key, event.modifiers()))
                     return True  # consume: arrows nudge the selection, not the camera
         return super().eventFilter(obj, event)
+
+    def _zoom_from_wheel(self, event) -> None:
+        """Zoom by however much was actually scrolled.
+
+        VTK's trackball style dollies a fixed amount per wheel *event*, ignoring
+        the delta — so a mouse notch and the faintest trackpad nudge move the
+        camera equally far, which is what reads as stepping. Taking the delta and
+        raising the per-notch factor to it makes the zoom continuous, and gives a
+        trackpad's stream of small events a proportionally small effect each.
+        """
+        delta = event.angleDelta().y() or event.angleDelta().x()
+        if not delta:
+            return
+        notches = float(delta) / _WHEEL_UNITS_PER_NOTCH
+        factor = float(np.clip(_ZOOM_PER_NOTCH ** notches,
+                               1.0 / _MAX_ZOOM_PER_EVENT, _MAX_ZOOM_PER_EVENT))
+        # A wheel zoom is a camera move like any other, and a trackpad's is a
+        # long one; it just has no end event of its own, so it is timed out.
+        self._set_camera_busy(True)
+        self._wheel_idle.start()
+        self._drag.zoom_by(factor)
 
     def _nudge_vector(self, key, modifiers) -> np.ndarray:
         """World-space move for an arrow key, in the screen plane of the camera.
@@ -262,11 +346,6 @@ class Viewport(QWidget):
         return save_view_image(self.interactor, path, scale=scale, transparent=transparent)
 
     @property
-    def camera_position(self):
-        """The current camera placement (to reproduce this view off-screen)."""
-        return self.interactor.camera_position
-
-    @property
     def camera_state(self):
         """Full camera snapshot — placement *and* zoom — for off-screen renders.
 
@@ -277,20 +356,29 @@ class Viewport(QWidget):
         camera = self.interactor.camera
         return (self.interactor.camera_position, camera.GetParallelScale(), camera.GetViewAngle())
 
-    # ── drag-controller callbacks ───────────────────────────────────────
-    def _commit_move(self, index: int, position: np.ndarray) -> None:
-        """Persist a drag to the model; the whole move group shifts by the same vector.
+    def move_atom_to(self, index: int, position) -> None:
+        """Put atom ``index`` at cartesian ``position``, move group and all.
 
-        The move group (the dragged atom's periodic images, plus the rest of a
-        multi-atom selection) translates together — matching the live preview —
-        so a selected fragment moves as one piece and periodicity is preserved.
+        The move group (the atom's periodic images, plus the rest of a multi-atom
+        selection) translates by the same vector, so a selected fragment moves as
+        one piece and periodicity is preserved.
+
+        This is what committing a drag does, and it is public so that typing
+        coordinates goes through exactly the same path — the two ways of moving
+        an atom cannot drift apart into one that carries the periodic images and
+        one that leaves them behind.
         """
-        if self._structure is None:
+        if self._structure is None or not 0 <= index < len(self._structure):
             return
         group = self.renderer.active_move_group(index)  # same group the preview used
         delta = np.asarray(position, dtype=float) - self._structure.positions[index]
         self._structure.translate_atoms([index, *group], delta)  # -> refresh via listener
         self.atom_moved.emit(index)
+
+    # ── drag-controller callbacks ───────────────────────────────────────
+    def _commit_move(self, index: int, position: np.ndarray) -> None:
+        """Persist a drag to the model (see :meth:`move_atom_to`)."""
+        self.move_atom_to(index, position)
 
     def _on_click_atom(self, index: int, additive: bool) -> None:
         self.atom_picked.emit(index, additive)

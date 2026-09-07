@@ -4,7 +4,8 @@
 draws. It wraps ``ase.Atoms`` (chosen for its light, ergonomic editing API and
 because CRYSTALClear already depends on ase) and adds:
 
-* a small, explicit editing vocabulary (add / remove / move atoms),
+* a small, explicit editing vocabulary (add / remove / move atoms) — the
+  multi-atom forms fire a single change notification per user action,
 * a change-notification hook so views can refresh without ``core`` importing Qt.
 
 Keeping this Qt-free is deliberate: the same model is exercised directly in
@@ -160,26 +161,12 @@ class Structure:
         self._notify()
         return list(range(start, start + len(symbols)))
 
-    def remove_atom(self, index: int) -> None:
-        self._check_index(index)
-        del self._atoms[index]
-        self._notify()
-
     def move_atom(self, index: int, position: Iterable[float]) -> None:
         """Set an atom's cartesian position (used by drag-to-edit)."""
         self._check_index(index)
         pos = self._atoms.get_positions()
         pos[index] = list(position)
         self._atoms.set_positions(pos)
-        self._notify()
-
-    def set_symbol(self, index: int, symbol: str) -> None:
-        """Change the element of an existing atom."""
-        self._check_index(index)
-        _validate_symbol(symbol)
-        syms = self._atoms.get_chemical_symbols()
-        syms[index] = symbol
-        self._atoms.set_chemical_symbols(syms)
         self._notify()
 
     # ── batch editing (multi-atom selection) ────────────────────────────

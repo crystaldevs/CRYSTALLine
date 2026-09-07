@@ -134,8 +134,6 @@ def _wrap_molecules(atoms, mult: float = 1.15):
     (and with it the phonon-eigenvector correspondence). Non-periodic systems
     are returned unchanged.
     """
-    import numpy as np
-
     if not atoms.pbc.any() or np.allclose(np.asarray(atoms.cell), 0.0):
         return atoms
 
@@ -486,17 +484,44 @@ def _boundary_completion(structure: Structure, tol: float, mult: float = 1.15):
     # CRYSTAL's formal 500 Å vector, and shifting by it would spawn phantom copies
     # of the whole system 500 Å away in the vacuum.
     per_axis = [(-1, 0, 1) if p else (0,) for p in atoms.get_pbc()]
-    shifts = list(itertools.product(*per_axis))
+    shifts = np.asarray(list(itertools.product(*per_axis)), dtype=float)  # (S, 3)
+    cart_shifts = shifts @ cell
+
+    # Which (shift, atom) images land in the box, worked out for all of them at
+    # once. Two things make this a single vectorised pass instead of a test per
+    # cluster per shift:
+    #
+    #   * a shift by an integer lattice vector is that same integer shift in
+    #     fractional coordinates, so one solve for the whole cell serves every
+    #     shift — there is no need to re-solve per image;
+    #   * the test itself is elementwise, so it broadcasts over (shift, atom).
+    #
+    # It used to be a solve plus a numpy reduction inside the double loop below.
+    # An extended framework is imaged atom by atom, so that was 27 of each per
+    # *atom* — 27650 solves and 27650 reductions on a 1024-atom framework,
+    # together about three quarters of this function's cost.
+    #
+    # frac_base must come after the loop above, which rewrites base_pos for
+    # percolating components.
+    #
+    # One solve plus an exact integer add is also *more* accurate than solving
+    # the shifted cartesian position was, so an atom lying exactly on a cell
+    # face now comes out at a fractional 1.0 instead of 1.0 + 2e-16. At the
+    # tolerance this is called with that changes nothing; at tol=0 it means such
+    # an atom is kept rather than dropped, which is what "inside or just
+    # touching the box" says it should be.
+    frac_base = np.linalg.solve(cell.T, base_pos.T).T
+    frac_images = frac_base[None, :, :] + shifts[:, None, :]           # (S, N, 3)
+    in_box = np.all((frac_images >= -tol) & (frac_images <= 1.0 + tol), axis=2)  # (S, N)
+
     for comp in clusters:
-        cluster_pos = base_pos[comp]
-        for shift in shifts:
-            image = cluster_pos + np.asarray(shift, dtype=float) @ cell
-            frac = np.linalg.solve(cell.T, image.T).T
-            touches = np.any(np.all((frac >= -tol) & (frac <= 1.0 + tol), axis=1))
-            if not touches:
-                continue
+        # One reduction per cluster rather than one per cluster and shift, and
+        # the inner loop then only runs for the shifts that actually hit.
+        for s in np.nonzero(in_box[:, comp].any(axis=1))[0]:
+            image = base_pos[comp] + cart_shifts[s]
+            keys = np.round(image, 3)
             for k, idx in enumerate(comp):
-                key = tuple(np.round(image[k], 3))
+                key = tuple(keys[k])
                 if key in seen:
                     continue
                 seen.add(key)

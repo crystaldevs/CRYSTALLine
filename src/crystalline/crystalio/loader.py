@@ -156,36 +156,6 @@ def _structure_for_modes(out, natom_modes: int) -> Structure:
     )
 
 
-def load_phonons(
-    path: str,
-    qpoint: int = 0,
-    keep_imaginary: bool = True,
-) -> tuple[Structure, PhononModes]:
-    """Load equilibrium geometry + phonon modes from a CRYSTAL ``.out`` file.
-
-    Returns the structure the modes are defined on, alongside the modes for the
-    requested q-point (Gamma by default). Imaginary/soft modes are kept by
-    default so they remain animatable. Use :func:`load_dispersion` to get every
-    sampled q in one pass — which is what reading the file twice would cost.
-
-    Parameters
-    ----------
-    path:
-        CRYSTAL ``.out`` file from a frequency calculation.
-    qpoint:
-        Index of the q-point to extract (0 = Gamma).
-    keep_imaginary:
-        If True, negative-frequency modes are retained (CRYSTALClear would
-        otherwise NaN them out).
-    """
-    structure, qmodes = load_dispersion(path, keep_imaginary=keep_imaginary)
-    if not 0 <= qpoint < len(qmodes):
-        raise IndexError(
-            f"q-point {qpoint} out of range: this run sampled {len(qmodes)}"
-        )
-    return structure, qmodes[qpoint]
-
-
 def load_dispersion(
     path: str,
     keep_imaginary: bool = True,
@@ -607,13 +577,52 @@ def _to_pymatgen_molecule(structure: Structure):
 
 
 # ── internal conversions (avoid CRYSTALClear.convert's broken wrappers) ────
+def file_action(path: str) -> Optional[str]:
+    """What the app can do with ``path``: ``"open"``, ``"import"`` or ``None``.
+
+    The two are different operations, not two ways of doing one. An *open*
+    replaces what is on screen and brings a cell, an output's phonons and its
+    plots with it; an *import* appends bare atoms to the structure already
+    loaded and goes in the undo history. Which one a file is for is decided by
+    what the file can carry, so a caller that has been handed a path — from a
+    file dialog, or dropped on the window — does not have to guess.
+
+    A ``.cif`` can be read either way and counts as an open: it describes a
+    whole structure with a cell, and appending its atoms to an unrelated one is
+    the rarer thing to want. It is still offered in the import dialog for when
+    that *is* what someone wants.
+    """
+    if _is_gui(path) or _is_cif(path):
+        return "open"
+    if os.path.splitext(path)[1].lower() in _OPEN_SUFFIXES:
+        return "open"
+    if os.path.splitext(path)[1].lower() in _IMPORT_SUFFIXES:
+        return "import"
+    return None
+
+
 def _is_gui(path: str) -> bool:
+    """Whether ``path`` is a CRYSTAL geometry file (``fort.34`` and its kin).
+
+    ``.34`` counts as well as ``.gui``: the Open dialog has always offered
+    ``*.34``, but only a file still *called* ``fort.34`` was recognised, so a
+    renamed one — which is how anybody keeps more than one — was offered, chosen,
+    and then parsed as an output, which it is not.
+    """
     ext = os.path.splitext(path)[1].lower()
-    return ext == ".gui" or os.path.basename(path).startswith("fort.34")
+    return ext in (".gui", ".34") or os.path.basename(path).startswith("fort.34")
 
 
 def _is_cif(path: str) -> bool:
     return os.path.splitext(path)[1].lower() == ".cif"
+
+
+# What :func:`file_action` recognises, beyond the ``.gui``/``fort.34``/``.cif``
+# forms the predicates above already know. ``.out`` is a CRYSTAL output — the
+# geometry, and the phonons and property plots that come with it.
+_OPEN_SUFFIXES = (".out",)
+# Atom-list formats: coordinates and elements, no cell worth keeping.
+_IMPORT_SUFFIXES = (".xyz", ".pdb")
 
 
 def _out_to_ase(path: str, initial: bool) -> Atoms:
@@ -699,10 +708,10 @@ def _gui_to_ase(path: str) -> Atoms:
 
 
 __all__ = [
+    "file_action",
     "load_adp",
     "load_structure",
     "load_dispersion",
-    "load_phonons",
     "save_structure_gui",
     "save_structure_cif",
     "read_atoms",

@@ -58,16 +58,6 @@ class ModeCharacter:
     effective_atoms: float
     n_atoms: int
 
-    @property
-    def dominant(self) -> str:
-        """Symbol of the element carrying most of the mode (``""`` if none)."""
-        return self.composition[0][0] if self.composition else ""
-
-    @property
-    def participation_ratio(self) -> float:
-        """``effective_atoms / n_atoms`` — 1 is fully delocalised, ~1/N localised."""
-        return self.effective_atoms / self.n_atoms if self.n_atoms else 0.0
-
     def composition_text(self, limit: int = 3) -> str:
         """``"H 91%, N 8%"`` — the leading elements, at most ``limit`` of them."""
         parts = [f"{sym} {share * 100:.0f}%" for sym, share in self.composition[:limit]]
@@ -116,16 +106,6 @@ def mode_character(mode: PhononMode, numbers: Sequence[int]) -> ModeCharacter:
     )
 
 
-def atom_weights(mode: PhononMode, numbers: Sequence[int]) -> np.ndarray:
-    """Per-atom share of the mode's kinetic energy, summing to 1.
-
-    The same ``w_a`` behind :func:`mode_character`, exposed for colouring atoms
-    by how much they take part. All zeros for a null or mismatched mode.
-    """
-    weights, _symbols = _atom_weights(mode, numbers)
-    return np.zeros(len(numbers)) if weights is None else weights
-
-
 def _atom_weights(mode: PhononMode, numbers: Sequence[int]):
     """``(weights, symbols)``, or ``(None, None)`` when there's nothing to report."""
     numbers = np.asarray(numbers, dtype=int)
@@ -144,4 +124,4 @@ def _atom_weights(mode: PhononMode, numbers: Sequence[int]):
     return energy / total, symbols
 
 
-__all__ = ["ModeCharacter", "atom_weights", "mode_character"]
+__all__ = ["ModeCharacter", "mode_character"]

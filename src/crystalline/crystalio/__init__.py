@@ -7,12 +7,12 @@ shifts, changes are localised here rather than spread through the UI.
 
 from crystalline.crystalio.loader import (
     LoadedFile,
+    file_action,
     has_phonons,
     load,
     load_adp,
     load_dispersion,
     load_structure,
-    load_phonons,
     output_properties,
     read_atoms,
     save_structure_gui,
@@ -64,11 +64,11 @@ from crystalline.crystalio.pes import (
 __all__ = [
     "load",
     "LoadedFile",
+    "file_action",
     "has_phonons",
     "load_adp",
     "load_dispersion",
     "load_structure",
-    "load_phonons",
     "output_properties",
     "read_atoms",
     "save_structure_gui",

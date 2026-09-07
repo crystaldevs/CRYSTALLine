@@ -4,21 +4,36 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "CRYSTALLine"
-version = "0.1.7"
+version = "0.2.0"
 description = "A desktop GUI for building/editing CRYSTAL structures and visualising vibrational modes, built on CRYSTALClear."
 readme = "README.md"
-requires-python = ">=3.9"
+# pymatgen requires 3.11+ as of its 2025 releases, and PySide6/pyvista/ase all
+# require 3.10+. Claiming anything lower doesn't fail the install - pip just
+# backsolves to whatever ancient pymatgen still supports that interpreter,
+# quite possibly older than the 2023.11.10 floor below, and the CIF paths then
+# break at runtime instead of at install time.
+requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "CRYSTAL devs" }]
 classifiers = [
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
 ]
 dependencies = [
+    # PySide6-Essentials, not PySide6: the latter is a metapackage for
+    # Essentials + Addons, and Addons is 847 MB of Qt we never touch — WebEngine,
+    # Multimedia, 3D, Charts, DataVisualization and the rest. The app imports
+    # QtWidgets, QtCore, QtGui and QtSvg, and pyvistaqt adds QtOpenGL(Widgets);
+    # every one of those is in Essentials, and nothing else in the tree asks for
+    # the metapackage. (qtpy does try to import QtDataVisualization, but inside a
+    # contextlib.suppress(ImportError) — it is an optional shim, not a
+    # requirement.) Verified by running the app and the whole suite with every
+    # Addons module blocked at import.
+    #
     # Qt 6.10 breaks pyvistaqt: QtInteractor's first paintEvent never returns, so
     # the main window is created but never becomes visible. Upstream tracking is
     # pyvistaqt#793 and pyvista#8285; 6.9.3 is the last known-good release.
     # Lift this cap once pyvistaqt ships a fix.
-    "PySide6>=6.5,<6.10",
+    "PySide6-Essentials>=6.5,<6.10",
     "pyvista>=0.43",
     "pyvistaqt>=0.11",
     "numpy>=1.23",
@@ -30,6 +45,20 @@ dependencies = [
     # (it replaced get_structures). Anything older breaks every CIF code path.
     "pymatgen>=2023.11.10",
     "CRYSTALClear>=0.2.16",
+    # The four below all arrive transitively today (pymatgen pulls scipy,
+    # matplotlib and spglib; pyvista pulls vtk and Pillow), but CRYSTALLine
+    # imports them itself and must say so - viz/renderer.py imports scipy and
+    # vtk at module level, so a resolver that ever drops one of those transitive
+    # edges would break `import crystalline.viz.renderer` outright.
+    "scipy>=1.9",        # cKDTree/ConvexHull (renderer, bonds), chi2 (adp)
+    "vtk>=9.1",          # prop assemblies + caption actors the gizmo is built from
+    "matplotlib>=3.6",   # every property plot, and the DejaVu font the labels use
+    # 2.5 is where a dataset became an object with attributes. symmetry.py reads
+    # its fields either way, but crystallography.py's layer-group lookup uses
+    # attribute access inside a best-effort try - so on an older spglib a slab
+    # would silently lose its layer group rather than fail visibly.
+    "spglib>=2.5",
+    "Pillow>=9.0",       # GIF and frame-sequence animation export
 ]
 
 [project.optional-dependencies]
