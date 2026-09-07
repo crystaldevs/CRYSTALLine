@@ -20,15 +20,14 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLabel,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from crystalline.ui.panels.controls import Section, range_row, slider_row
 from crystalline.crystalio.vci import (
     DEFAULT_THRESHOLD,
     MAX_STATES,
@@ -60,29 +59,24 @@ class VCIDialog(QDialog):
             note.setEnabled(False)
             layout.addWidget(note)
 
-        form = QFormLayout()
+        options = Section(layout, "States")
         self.representation = QComboBox(self)
         for label, key in REPRESENTATIONS:
             self.representation.addItem(label, key)
         self.representation.currentIndexChanged.connect(self._sync)
-        form.addRow("Representation", self.representation)
+        options.add("Representation", self.representation)
 
         # A wavenumber window rather than a count: a band one wants to look at is
         # known by where it sits in the spectrum, not by its rank.
         top = run.energies[-1] if run.energies else 4000.0
         default_min, default_max = run.default_window()
-        self.fmin = QDoubleSpinBox(self)
-        self.fmax = QDoubleSpinBox(self)
-        for spin, value in ((self.fmin, default_min), (self.fmax, default_max)):
-            spin.setRange(0.0, max(top, default_max) + 1000.0)
-            spin.setDecimals(0)
-            spin.setSingleStep(50.0)
-            spin.setValue(value)
-            spin.valueChanged.connect(self._sync_window)
+        ceiling = max(top, default_max) + 1000.0
+        _slider, self.fmin, self.fmax = range_row(
+            options, "Window (cm⁻¹)", default_min, default_max, 0.0, ceiling,
+            decimals=0, step=50.0, on_change=lambda _a, _b: self._sync_window(),
+        )
         self.fmin.setToolTip("Lower edge of the window, as ENE - ZPE.")
         self.fmax.setToolTip("Upper edge of the window, as ENE - ZPE.")
-        form.addRow("From (cm⁻¹)", self.fmin)
-        form.addRow("To (cm⁻¹)", self.fmax)
 
         # A blocked VCI matrix numbers its states within each irrep, and states
         # of different irreps do not mix, so one block at a time is the reading
@@ -94,25 +88,21 @@ class VCIDialog(QDialog):
             self.irrep.addItem(f"Irrep {value}", value)
         self.irrep.setEnabled(bool(run.irreps))
         self.irrep.currentIndexChanged.connect(self._sync_window)
-        form.addRow("Symmetry block", self.irrep)
+        options.add("Symmetry block", self.irrep)
 
         # How many states the window catches, live: a run spans thousands, so
         # widening it by a few hundred cm⁻¹ can quietly ask for an unreadable
         # figure. Saying so up front beats failing after the parse.
         self._count = QLabel(self)
-        form.addRow("", self._count)
+        options.add_wide(self._count)
 
-        self.threshold = QDoubleSpinBox(self)
-        self.threshold.setRange(0.0, 1.0)
-        self.threshold.setDecimals(3)
-        self.threshold.setSingleStep(0.005)
-        self.threshold.setValue(DEFAULT_THRESHOLD)
+        self.threshold = slider_row(
+            options, "Threshold", DEFAULT_THRESHOLD, 0.0, 1.0, 0.005, decimals=3,
+        )
         self.threshold.setToolTip(
             "Drop contributions smaller than this.\n"
             "Raise it for a sparser figure, lower it to see weak mixing."
         )
-        form.addRow("Threshold", self.threshold)
-        layout.addLayout(form)
 
         self._map_box = QGroupBox("Coefficient map", self)
         map_form = QFormLayout(self._map_box)

@@ -65,7 +65,6 @@ class PlotFontDialog(QDialog):
         self.installed.addItems(installed_font_names())
         self.installed.setEditable(True)
         form.addRow("Font", self.installed)
-        self._installed_row = self.installed
 
         self.size = QDoubleSpinBox(self)
         self.size.setRange(4.0, 48.0)

@@ -22,14 +22,26 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFormLayout,
     QLabel,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from crystalline.ui.panels.controls import Section, VALUE_WIDTH, left, slider_row
 from crystalline.crystalio.anscan import AnscanRun
+
+
+def _scale_bounds(value: float) -> tuple:
+    """A decade either side of ``value``, so the run's own suggestion is central.
+
+    The scale that suits one mode is nothing like the one that suits another —
+    it is set from the level spacing — so a fixed range would put most runs hard
+    against a stop. Anchoring the range on the suggestion keeps the useful part
+    of the travel where the hand is.
+    """
+    value = float(value) if value and value > 0 else 1.0
+    return (value / 10.0, value * 10.0, value / 10.0)
 
 
 class AnscanDialog(QDialog):
@@ -45,37 +57,44 @@ class AnscanDialog(QDialog):
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        form = QFormLayout()
+        overlays = Section(layout, "Overlays")
 
-        self.wavefunctions = QCheckBox("Wavefunctions (scale factor)", self)
+        # A scale factor is judged by ratio — twice as tall, half as tall — so the
+        # slider is logarithmic and the run's own suggested value sits mid-track.
+        self.wavefunctions = QCheckBox("Wavefunctions", self)
         self.wavefunctions.setChecked(True)
         self.wavefunctions.toggled.connect(self._sync)
-        self.scale_wf = QDoubleSpinBox(self)
-        self._setup_scale(self.scale_wf, run.scale_wf)
+        overlays.add_wide(self.wavefunctions)
+        self.scale_wf = slider_row(
+            overlays, "ψ scale", run.scale_wf,
+            *_scale_bounds(run.scale_wf), decimals=1, logarithmic=True,
+        )
         self.scale_wf.setToolTip(
             "ψ is multiplied by this before being drawn on its level.\n"
             "The states are normalised, so the factor is what sets their "
             "height in cm⁻¹; it opens on the mean level spacing of the run."
         )
-        form.addRow(self.wavefunctions, self.scale_wf)
 
-        self.densities = QCheckBox("Probability densities (scale factor)", self)
+        self.densities = QCheckBox("Probability densities", self)
         self.densities.toggled.connect(self._sync)
-        self.scale_prob = QDoubleSpinBox(self)
-        self._setup_scale(self.scale_prob, run.scale_prob)
+        overlays.add_wide(self.densities)
+        self.scale_prob = slider_row(
+            overlays, "|ψ|² scale", run.scale_prob,
+            *_scale_bounds(run.scale_prob), decimals=1, logarithmic=True,
+        )
         self.scale_prob.setToolTip("|ψ|² is multiplied by this before being drawn.")
-        form.addRow(self.densities, self.scale_prob)
 
         # Only the states CRYSTAL wrote coefficients for can carry a curve; the
         # levels above them are still drawn, they just have nothing on them.
         self.nstates = QSpinBox(self)
         self.nstates.setRange(1, max(run.nwf, 1))
         self.nstates.setValue(max(run.nwf, 1))
+        self.nstates.setFixedWidth(VALUE_WIDTH)
         self.nstates.setToolTip(
             f"Counting up from the ground state. CRYSTAL wrote {run.nwf} "
             "wavefunctions for this run."
         )
-        form.addRow("States", self.nstates)
+        overlays.add("States", left(self.nstates))
 
         self.harmonic = QCheckBox("Harmonic potential", self)
         self.harmonic.setToolTip(
@@ -83,7 +102,7 @@ class AnscanDialog(QDialog):
             + (" It opens downwards for this mode, which is imaginary."
                if run.imaginary else "")
         )
-        form.addRow(self.harmonic)
+        overlays.add_wide(self.harmonic)
 
         self.points = QCheckBox("Scanned points", self)
         self.points.setChecked(True)
@@ -91,8 +110,7 @@ class AnscanDialog(QDialog):
             "The energies ANSCAN actually computed, which the potential is a "
             "fit to."
         )
-        form.addRow(self.points)
-        layout.addLayout(form)
+        overlays.add_wide(self.points)
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self
