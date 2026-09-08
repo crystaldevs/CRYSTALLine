@@ -1021,9 +1021,14 @@ def _dispersion_body(opts: DispersionOptions) -> List[str]:
             raise CrystalInputError(
                 "Phonon BANDS needs at least one path segment (I1 I2 I3 J1 J2 J3)."
             )
+        # ISS and NSUB on one record, NLINE on the next. The manual's layout is
+        # ambiguous about this and they were written on one line; a real working
+        # deck (a SCELPHONO ZnO dispersion) settles it — CRYSTAL reads NLINE
+        # from its own record, so the three-on-a-line form loses the path.
         lines += [
             "BANDS",
-            f"{int(opts.bands_shrink)} {int(opts.bands_points)} {len(segments)}",
+            f"{int(opts.bands_shrink)} {int(opts.bands_points)}",
+            str(len(segments)),
             *segments,
         ]
     if opts.pdos is not None:

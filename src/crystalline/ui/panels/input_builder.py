@@ -753,6 +753,18 @@ class InputBuilderDialog(QDialog):
         form.addRow("Points per line (NSUB)", self._disp_bands_points)
         self._disp_bands_path = _extra_box("One segment per line:  I1 I2 I3  J1 J2 J3")
         form.addRow("Path segments", self._disp_bands_path)
+        fill = QPushButton("Fill with the conventional path")
+        fill.setToolTip(
+            "The standard Setyawan–Curtarolo path for this Bravais lattice, "
+            "written as the integers over a shrinking factor that BANDS reads. "
+            "It also sets the shrinking factor to match."
+        )
+        fill.clicked.connect(self._fill_conventional_phonon_path)
+        form.addRow("", fill)
+        self._disp_bands_route = QLabel()
+        self._disp_bands_route.setWordWrap(True)
+        self._disp_bands_route.setStyleSheet("color: palette(mid);")
+        form.addRow("", self._disp_bands_route)
 
         self._disp_pdos = QCheckBox("Phonon DOS (PDOS)")
         form.addRow(self._disp_pdos)
@@ -1009,6 +1021,40 @@ class InputBuilderDialog(QDialog):
             editor.textChanged.connect(self._refresh_preview)
 
     # ── reactivity ──────────────────────────────────────────────────────
+    def _fill_conventional_phonon_path(self) -> None:
+        """Put the lattice's conventional path into the BANDS box.
+
+        The same path the electronic band structure uses, in the same integers
+        -over-a-shrinking-factor form — a phonon dispersion is asked along the
+        same route, and writing it out by hand is a dozen lines of arithmetic
+        nobody should be doing twice.
+        """
+        from crystalline.core.properties_input import (
+            PropertiesInputError, band_path, band_shrink,
+        )
+
+        try:
+            labels, segments = band_path(self._structure)
+            shrink = band_shrink(segments)
+        except PropertiesInputError as exc:
+            QMessageBox.information(self, "No conventional path", str(exc))
+            return
+        # Numbers only. A trailing "# G -> X" would read nicely, but CRYSTAL's
+        # list-directed input is not reliably tolerant of text after the values
+        # it wants, and no working deck carries any — the route goes in the
+        # label below the box instead, where it costs nothing to be wrong.
+        rows = [" ".join(str(int(round(v * shrink))) for v in (*start, *end))
+                for start, end in segments]
+        self._disp_bands_shrink.setValue(shrink)
+        self._disp_bands_path.setPlainText("\n".join(rows))
+        self._disp_bands.setChecked(True)
+        route = labels[0][0] + "".join(
+            (" | " if index and start != labels[index - 1][1] else " ") + end
+            for index, (start, end) in enumerate(labels)
+        )
+        self._disp_bands_route.setText(f"conventional path:  {route}")
+        self._on_form_changed()
+
     def _on_form_changed(self) -> None:
         """A change that alters which rows apply, then refreshes the preview."""
         self._sync_enabled()

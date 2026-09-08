@@ -631,9 +631,12 @@ def test_dispersion_bands_counts_its_path_segments():
         ),
     )
     lines = _lines(deck)
+    # Against a real SCELPHONO dispersion deck: "12 100" then "6" then the
+    # segments — ISS and NSUB share a record, NLINE has its own.
     i = lines.index("BANDS")
-    assert lines[i + 1] == "16 30 3"  # NLINE derived from the three segments
-    assert lines[i + 2] == "0 0 0  8 0 0"
+    assert lines[i + 1] == "16 30"
+    assert lines[i + 2] == "3"  # NLINE derived from the three segments
+    assert lines[i + 3] == "0 0 0  8 0 0"
 
 
 def test_bands_without_a_path_raises():

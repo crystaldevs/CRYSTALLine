@@ -219,7 +219,10 @@ def test_dispersion_bands_and_pdos(qapp):
     dlg._disp_bands_path.setPlainText("0 0 0  8 0 0\n8 0 0  8 8 0")
     dlg._disp_pdos.setChecked(True)
     block = _task_block(dlg, "FREQCALC")
-    assert block[block.index("BANDS") + 1] == "16 30 2"
+    # ISS and NPOINTS on one record, then NLINE on its own — as in a working
+    # deck (~/Desktop/phonon_dispersion_forClaude/ZnO_LDA_scelphono444_bands.out).
+    assert block[block.index("BANDS") + 1] == "16 30"
+    assert block[block.index("BANDS") + 2] == "2"
     assert block[block.index("PDOS") + 1] == "2500 250"
     # BANDS implies NOKSYMDISP, so its own switch stops applying
     assert not dlg._disp_noksym.isEnabled()
