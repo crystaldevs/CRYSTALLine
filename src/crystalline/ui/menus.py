@@ -134,6 +134,13 @@ def _build_cell_menu(window) -> None:
     symmetry_action.triggered.connect(window._show_symmetry_panel)
     cell_menu.addAction(symmetry_action)
 
+    zone_action = QAction("Brillouin zone…", window)
+    zone_action.setToolTip(
+        "Draw the first Brillouin zone of this lattice and its high-symmetry points"
+    )
+    zone_action.triggered.connect(window._show_brillouin_zone)
+    cell_menu.addAction(zone_action)
+
 
 # ── Edit ──────────────────────────────────────────────────────────────────
 def _build_edit_menu(window) -> None:

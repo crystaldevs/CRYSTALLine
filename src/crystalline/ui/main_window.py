@@ -1248,6 +1248,23 @@ class MainWindow(QMainWindow):
         self._symmetry_dock.raise_()
         self.symmetry_panel.show_analysis()
 
+    def _show_brillouin_zone(self) -> None:
+        """Draw this lattice's first Brillouin zone, on its own.
+
+        On the clean analysis cell, like the band path in the input builders: a
+        supercell's zone is a folded fraction of the real one, and drawing that
+        under the same name would be a lie.
+        """
+        structure = self._analysis_cell()
+        if len(structure) == 0:
+            QMessageBox.information(
+                self, "Brillouin zone", "Open or build a structure first."
+            )
+            return
+        from crystalline.ui.panels.zone_picker import ZonePickerDialog
+
+        ZonePickerDialog.visualise(structure, self)
+
     # ── panels ──────────────────────────────────────────────────────────
     def _panel_docks(self) -> list:
         """``(title, dock)`` for every panel, in the order the View menu lists them.
