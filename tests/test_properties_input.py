@@ -429,3 +429,91 @@ def test_a_checkable_group_box_has_a_visible_indicator():
         # and a disabled-but-checked box keeps a filled ground, or the white
         # tick is drawn on the light theme's pale one and disappears
         assert "QGroupBox::indicator:checked:disabled" in sheet
+
+
+# ── the editable band path ────────────────────────────────────────────────
+def _builder():
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    QApplication.instance() or QApplication([])
+    return PropertiesBuilderDialog(_mgo())
+
+
+def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
+    dialog = _builder()
+    conventional = dialog._path_list.count()
+    assert conventional > 1
+    dialog._path_list.setCurrentRow(0)
+    dialog._remove_segment()
+    assert dialog._path_list.count() == conventional - 1
+    dialog._reset_path()
+    assert dialog._path_list.count() == conventional
+
+
+def test_a_sub_path_is_expressible():
+    """The whole point of A: the conventional walk is a starting point, not the
+    only thing you can ask for."""
+    dialog = _builder()
+    while dialog._path_list.count() > 1:
+        dialog._path_list.setCurrentRow(1)
+        dialog._remove_segment()
+    lines = dialog._preview.toPlainText().splitlines()
+    assert lines[2].split()[0] == "1", "one segment should mean NLINE = 1"
+
+
+def test_a_custom_point_the_conventional_path_never_visits_can_be_added():
+    dialog = _builder()
+    dialog._path_from.setEditText("X")
+    dialog._path_to.setEditText("1/2 1/4 3/4")
+    dialog._add_segment()
+    labels = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    assert any("(0.5 0.25 0.75)" in text for text in labels)
+    segments = [seg for _labels, seg in dialog._segments()]
+    assert (0.5, 0.25, 0.75) in [end for _start, end in segments]
+
+
+def test_an_unreadable_endpoint_is_refused_with_a_reason():
+    """Not quietly rounded to the origin, which would be a band structure of a
+    path nobody asked for."""
+    dialog = _builder()
+    before = dialog._path_list.count()
+    dialog._path_from.setEditText("nonsense")
+    dialog._path_to.setEditText("G")
+    dialog._add_segment()
+    assert dialog._path_list.count() == before
+    assert "not a point on this lattice" in dialog._path_note.text()
+
+
+def test_segments_can_be_reordered():
+    dialog = _builder()
+    first = dialog._path_list.item(0).text()
+    dialog._path_list.setCurrentRow(0)
+    dialog._move_segment(1)
+    assert dialog._path_list.item(1).text() == first
+    assert dialog._path_list.currentRow() == 1
+
+
+def test_moving_past_the_ends_does_nothing():
+    dialog = _builder()
+    rows = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    dialog._path_list.setCurrentRow(0)
+    dialog._move_segment(-1)
+    dialog._path_list.setCurrentRow(dialog._path_list.count() - 1)
+    dialog._move_segment(1)
+    assert [dialog._path_list.item(i).text()
+            for i in range(dialog._path_list.count())] == rows
+
+
+def test_a_typed_point_may_be_a_label_in_any_case_or_three_numbers():
+    from crystalline.ui.panels.properties_builder import _read_kpoint
+
+    points = {"G": (0.0, 0.0, 0.0), "X": (0.5, 0.0, 0.5)}
+    assert _read_kpoint("X", points) == ("X", (0.5, 0.0, 0.5))
+    assert _read_kpoint("  x ", points)[0] == "X"
+    assert _read_kpoint("1/2 0 1/2", points)[1] == (0.5, 0.0, 0.5)
+    assert _read_kpoint("0.5, 0, 0.5", points)[1] == (0.5, 0.0, 0.5)
+    for bad in ("", "Z", "0.5 0.5", "a b c"):
+        with pytest.raises(ValueError):
+            _read_kpoint(bad, points)

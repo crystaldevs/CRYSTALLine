@@ -15,9 +15,11 @@ from __future__ import annotations
 
 from typing import Optional
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -30,12 +32,15 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QListWidget,
+    QListWidgetItem,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
+from crystalline.core.brillouin import special_points
 from crystalline.core.crystal_input import suggest_shrink
 from crystalline.core.properties_input import (
     BandOptions,
@@ -48,6 +53,7 @@ from crystalline.core.properties_input import (
     PropertiesInputError,
     PropertiesSpec,
     XrdOptions,
+    band_path,
     build_properties_input,
 )
 from crystalline.core.structure import Structure
@@ -133,10 +139,55 @@ class PropertiesBuilderDialog(QDialog):
         form.addRow("Points along the path", self._band_points)
         form.addRow("First band", self._band_first)
         form.addRow("Last band", self._band_last)
-        self._band_path_label = _muted()
-        form.addRow("Path", self._band_path_label)
         layout.addWidget(band)
         self._band = band
+
+        path = QGroupBox("Path through the Brillouin zone")
+        path_layout = QVBoxLayout(path)
+        self._path_list = QListWidget()
+        self._path_list.setToolTip(
+            "The segments the band structure is computed along, in order. Each "
+            "carries its own endpoints, so a sub-path or a point the conventional "
+            "walk never visits is as expressible as the default."
+        )
+        self._path_list.setMinimumHeight(96)
+        path_layout.addWidget(self._path_list)
+
+        add_row = QHBoxLayout()
+        add_row.setContentsMargins(0, 0, 0, 0)
+        self._path_from = _kpoint_combo(self._structure)
+        self._path_to = _kpoint_combo(self._structure)
+        add = QPushButton("Add")
+        add.clicked.connect(self._add_segment)
+        add_row.addWidget(self._path_from, 1)
+        add_row.addWidget(QLabel("→"))
+        add_row.addWidget(self._path_to, 1)
+        add_row.addWidget(add)
+        path_layout.addWidget(_page_of(add_row))
+
+        buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        for label, slot in (("Remove", self._remove_segment),
+                            ("Up", lambda: self._move_segment(-1)),
+                            ("Down", lambda: self._move_segment(1)),
+                            # a lambda, not the bound method: clicked(bool)
+                            # would pass the checked state as its first argument
+                            ("Reset", lambda: self._reset_path())):
+            button = QPushButton(label)
+            button.clicked.connect(slot)
+            buttons.addWidget(button)
+        buttons.addStretch(1)
+        pick = QPushButton("Pick on the zone…")
+        pick.setToolTip("Choose the path by clicking points on the Brillouin zone.")
+        pick.clicked.connect(self._pick_path)
+        buttons.addWidget(pick)
+        path_layout.addWidget(_page_of(buttons))
+
+        self._path_note = _muted()
+        path_layout.addWidget(self._path_note)
+        layout.addWidget(path)
+        self._path = path
+        self._fill_conventional_path()
 
         doss = _checkable("DOSS — density of states")
         form = QFormLayout(doss)
@@ -317,6 +368,8 @@ class PropertiesBuilderDialog(QDialog):
             band=BandOptions(
                 enabled=self._band.isChecked(),
                 title=self._band_title.text().strip() or "Band structure",
+                segments=tuple(seg for _labels, seg in self._segments()),
+                labels=tuple(labels for labels, _seg in self._segments()),
                 points=self._band_points.value(),
                 first_band=self._band_first.value(),
                 last_band=last or None,
@@ -356,6 +409,83 @@ class PropertiesBuilderDialog(QDialog):
             extra_keywords=self._extra.toPlainText(),
         )
 
+    # ── the band path ───────────────────────────────────────────────────
+    def _segments(self) -> list:
+        """The path as ``[((label_a, label_b), (start, end)), ...]``."""
+        rows = []
+        for index in range(self._path_list.count()):
+            rows.append(self._path_list.item(index).data(Qt.UserRole))
+        return rows
+
+    def _add_row(self, labels, segment) -> None:
+        item = QListWidgetItem(f"{labels[0]}  →  {labels[1]}")
+        item.setData(Qt.UserRole, (labels, segment))
+        self._path_list.addItem(item)
+
+    def _fill_conventional_path(self) -> None:
+        """Populate the list with the lattice's conventional path.
+
+        Separate from :meth:`_reset_path` because it also runs during
+        construction, before the later tabs exist — refreshing the preview from
+        there reaches for widgets that have not been built yet.
+        """
+        self._path_list.clear()
+        try:
+            labels, segments = band_path(self._structure)
+        except PropertiesInputError as exc:
+            self._path_note.setText(str(exc))
+            return
+        for pair, segment in zip(labels, segments):
+            self._add_row(pair, segment)
+        self._path_note.setText("the conventional path for this lattice")
+
+    def _reset_path(self) -> None:
+        """Back to the lattice's conventional path, and redraw."""
+        self._fill_conventional_path()
+        self._refresh()
+
+    def _add_segment(self) -> None:
+        points = special_points(self._structure)
+        try:
+            start_label, start = _read_kpoint(self._path_from.currentText(), points)
+            end_label, end = _read_kpoint(self._path_to.currentText(), points)
+        except ValueError as exc:
+            self._path_note.setText(str(exc))
+            return
+        self._add_row((start_label, end_label), (start, end))
+        self._path_note.setText("edited")
+        self._refresh()
+
+    def _remove_segment(self) -> None:
+        row = self._path_list.currentRow()
+        if row >= 0:
+            self._path_list.takeItem(row)
+            self._path_note.setText("edited")
+            self._refresh()
+
+    def _move_segment(self, delta: int) -> None:
+        row = self._path_list.currentRow()
+        target = row + delta
+        if row < 0 or not 0 <= target < self._path_list.count():
+            return
+        item = self._path_list.takeItem(row)
+        self._path_list.insertItem(target, item)
+        self._path_list.setCurrentRow(target)
+        self._path_note.setText("edited")
+        self._refresh()
+
+    def _pick_path(self) -> None:
+        from crystalline.ui.panels.zone_picker import ZonePickerDialog
+
+        picked = ZonePickerDialog.pick(self._structure, self)
+        if not picked:
+            return
+        self._path_list.clear()
+        for pair, segment in picked:
+            self._add_row(pair, segment)
+        self._path_note.setText("picked on the zone")
+        self._refresh()
+
     def _refresh(self) -> None:
         for widget in (self._doss_low, self._doss_high):
             widget.setEnabled(self._doss_window.isChecked())
@@ -363,15 +493,8 @@ class PropertiesBuilderDialog(QDialog):
             text = build_properties_input(self._structure, self.spec())
         except (PropertiesInputError, ValueError) as exc:
             self._preview.setPlainText(f"# {exc}")
-            self._band_path_label.setText("")
             return
         self._preview.setPlainText(text)
-        for line in text.splitlines()[:2]:
-            if "(" in line and line.endswith(")"):
-                self._band_path_label.setText(line[line.index("(") + 1:-1])
-                break
-        else:
-            self._band_path_label.setText("")
 
     def _save(self) -> None:
         try:
@@ -466,6 +589,53 @@ def _parse_directions(text: str) -> tuple:
             except ValueError:
                 continue
     return tuple(directions)
+
+
+def _kpoint_combo(structure) -> QComboBox:
+    """A combo of the lattice's special points, editable for anything else.
+
+    Editable because the conventional set is not everything anyone wants: a
+    point part-way along a line, or one this lattice's classification does not
+    name, has to be typeable or the path editor is only a reordering tool.
+    """
+    combo = QComboBox()
+    combo.setEditable(True)
+    for label in special_points(structure):
+        combo.addItem(label)
+    combo.setToolTip(
+        "A labelled special point, or three fractional coordinates — "
+        "'0.5 0 0.5', or '1/2 0 1/2'."
+    )
+    return combo
+
+
+def _read_kpoint(text: str, points: dict):
+    """``"X"`` or ``"1/2 0 1/2"`` -> ``(label, (x, y, z))``.
+
+    Raises ValueError with something actionable: an unreadable endpoint has to
+    stop the segment being added, not be quietly rounded to the origin.
+    """
+    from fractions import Fraction
+
+    text = text.strip()
+    if not text:
+        raise ValueError("Give a point label, or three fractional coordinates.")
+    if text in points:
+        return text, tuple(points[text])
+    for label, point in points.items():          # tolerate a different case
+        if label.lower() == text.lower():
+            return label, tuple(point)
+    values = [t for t in text.replace(",", " ").split() if t]
+    if len(values) != 3:
+        raise ValueError(
+            f"{text!r} is not a point on this lattice, and not three coordinates."
+        )
+    try:
+        coords = tuple(float(Fraction(v)) for v in values)
+    except (ValueError, ZeroDivisionError):
+        raise ValueError(f"Could not read {text!r} as three numbers.") from None
+    label = " ".join(f"{c:g}" for c in coords)
+    return f"({label})", coords
 
 
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
