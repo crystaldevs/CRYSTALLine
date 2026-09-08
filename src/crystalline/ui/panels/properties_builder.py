@@ -31,9 +31,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPlainTextEdit,
-    QPushButton,
     QListWidget,
     QListWidgetItem,
+    QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -57,6 +58,9 @@ from crystalline.core.properties_input import (
     build_properties_input,
 )
 from crystalline.core.structure import Structure
+
+
+_CONVENTIONAL_NOTE = "the conventional path for this lattice"
 
 
 class PropertiesBuilderDialog(QDialog):
@@ -108,7 +112,7 @@ class PropertiesBuilderDialog(QDialog):
         tabs.addTab(self._tab_density(), "Density && potential")
         tabs.addTab(self._tab_orbitals(), "Orbitals")
         tabs.addTab(self._tab_analysis(), "Analysis")
-        tabs.setMinimumWidth(360)
+        tabs.setMinimumWidth(330)
         self._connect_refresh()
         return tabs
 
@@ -144,6 +148,16 @@ class PropertiesBuilderDialog(QDialog):
 
         path = QGroupBox("Path through the Brillouin zone")
         path_layout = QVBoxLayout(path)
+        self._path_conventional = QCheckBox(
+            "Use the conventional path (Setyawan–Curtarolo)")
+        self._path_conventional.setChecked(True)
+        self._path_conventional.setToolTip(
+            "The standard path for this Bravais lattice, derived from the "
+            "lattice itself — so it follows the cell if the structure changes, "
+            "and is what a reader will expect to see.\n\n"
+            "Untick to edit the segments by hand."
+        )
+        path_layout.addWidget(self._path_conventional)
         self._path_list = QListWidget()
         self._path_list.setToolTip(
             "The segments the band structure is computed along, in order. Each "
@@ -167,6 +181,7 @@ class PropertiesBuilderDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
+        edit_buttons = []
         for label, slot in (("Remove", self._remove_segment),
                             ("Up", lambda: self._move_segment(-1)),
                             ("Down", lambda: self._move_segment(1)),
@@ -176,6 +191,7 @@ class PropertiesBuilderDialog(QDialog):
             button = QPushButton(label)
             button.clicked.connect(slot)
             buttons.addWidget(button)
+            edit_buttons.append(button)
         buttons.addStretch(1)
         pick = QPushButton("Pick on the zone…")
         pick.setToolTip("Choose the path by clicking points on the Brillouin zone.")
@@ -185,6 +201,9 @@ class PropertiesBuilderDialog(QDialog):
 
         self._path_note = _muted()
         path_layout.addWidget(self._path_note)
+        # Everything the conventional-path tick greys out.
+        self._path_editors = [self._path_list, self._path_from, self._path_to,
+                              add, pick] + edit_buttons
         layout.addWidget(path)
         self._path = path
         self._fill_conventional_path()
@@ -225,7 +244,7 @@ class PropertiesBuilderDialog(QDialog):
         self._coop = coop
 
         layout.addStretch(1)
-        return _page_of(layout)
+        return _scrollable(layout)
 
     def _tab_density(self) -> QWidget:
         layout = _column()
@@ -263,7 +282,7 @@ class PropertiesBuilderDialog(QDialog):
         self._emd = emd
 
         layout.addStretch(1)
-        return _page_of(layout)
+        return _scrollable(layout)
 
     def _tab_orbitals(self) -> QWidget:
         layout = _column()
@@ -288,7 +307,7 @@ class PropertiesBuilderDialog(QDialog):
         self._orbitals = orbitals
 
         layout.addStretch(1)
-        return _page_of(layout)
+        return _scrollable(layout)
 
     def _tab_analysis(self) -> QWidget:
         layout = _column()
@@ -322,7 +341,7 @@ class PropertiesBuilderDialog(QDialog):
         self._extra.setFixedHeight(70)
         layout.addWidget(self._extra)
         layout.addStretch(1)
-        return _page_of(layout)
+        return _scrollable(layout)
 
     def _shrink_guess(self) -> int:
         return suggest_shrink(self._structure) if self._structure.is_periodic else 1
@@ -330,6 +349,7 @@ class PropertiesBuilderDialog(QDialog):
     def _connect_refresh(self) -> None:
         """Every control re-renders the preview; the checkable ones also re-run
         the enable rules."""
+        self._path_conventional.toggled.connect(self._on_conventional_toggled)
         for widget in (self._band, self._doss, self._coop, self._density,
                        self._potential, self._emd, self._orbitals, self._xrd,
                        self._ppan, self._pato,
@@ -411,7 +431,14 @@ class PropertiesBuilderDialog(QDialog):
 
     # ── the band path ───────────────────────────────────────────────────
     def _segments(self) -> list:
-        """The path as ``[((label_a, label_b), (start, end)), ...]``."""
+        """The path as ``[((label_a, label_b), (start, end)), ...]``.
+
+        Empty while the conventional path is in force: the builder derives that
+        one from the lattice itself, so passing the list's copy of it would
+        freeze the path against a structure that may since have changed.
+        """
+        if self._path_conventional.isChecked():
+            return []
         rows = []
         for index in range(self._path_list.count()):
             rows.append(self._path_list.item(index).data(Qt.UserRole))
@@ -421,6 +448,17 @@ class PropertiesBuilderDialog(QDialog):
         item = QListWidgetItem(f"{labels[0]}  →  {labels[1]}")
         item.setData(Qt.UserRole, (labels, segment))
         self._path_list.addItem(item)
+
+    def _on_conventional_toggled(self, conventional: bool) -> None:
+        """Ticking it restores the standard path; unticking leaves it to edit.
+
+        Unticking deliberately keeps whatever is on the list rather than
+        clearing it — the conventional path is the natural thing to start
+        editing from, and clearing it would make the tick a destructive action.
+        """
+        if conventional:
+            self._fill_conventional_path()
+        self._refresh()
 
     def _fill_conventional_path(self) -> None:
         """Populate the list with the lattice's conventional path.
@@ -437,7 +475,7 @@ class PropertiesBuilderDialog(QDialog):
             return
         for pair, segment in zip(labels, segments):
             self._add_row(pair, segment)
-        self._path_note.setText("the conventional path for this lattice")
+        self._path_note.setText(_CONVENTIONAL_NOTE)
 
     def _reset_path(self) -> None:
         """Back to the lattice's conventional path, and redraw."""
@@ -445,6 +483,8 @@ class PropertiesBuilderDialog(QDialog):
         self._refresh()
 
     def _add_segment(self) -> None:
+        if self._path_conventional.isChecked():
+            return
         points = special_points(self._structure)
         try:
             start_label, start = _read_kpoint(self._path_from.currentText(), points)
@@ -457,6 +497,8 @@ class PropertiesBuilderDialog(QDialog):
         self._refresh()
 
     def _remove_segment(self) -> None:
+        if self._path_conventional.isChecked():
+            return
         row = self._path_list.currentRow()
         if row >= 0:
             self._path_list.takeItem(row)
@@ -464,6 +506,8 @@ class PropertiesBuilderDialog(QDialog):
             self._refresh()
 
     def _move_segment(self, delta: int) -> None:
+        if self._path_conventional.isChecked():
+            return
         row = self._path_list.currentRow()
         target = row + delta
         if row < 0 or not 0 <= target < self._path_list.count():
@@ -475,6 +519,9 @@ class PropertiesBuilderDialog(QDialog):
         self._refresh()
 
     def _pick_path(self) -> None:
+        # Picking a path on the zone *is* asking for a path of one's own, so it
+        # unticks for you rather than refusing.
+        self._path_conventional.setChecked(False)
         from crystalline.ui.panels.zone_picker import ZonePickerDialog
 
         picked = ZonePickerDialog.pick(self._structure, self)
@@ -487,6 +534,11 @@ class PropertiesBuilderDialog(QDialog):
         self._refresh()
 
     def _refresh(self) -> None:
+        # Every path editor refuses while the tick is set, so there is nothing
+        # to undo here: disabling them is the whole enforcement.
+        conventional = self._path_conventional.isChecked()
+        for widget in self._path_editors:
+            widget.setEnabled(not conventional)
         for widget in (self._doss_low, self._doss_high):
             widget.setEnabled(self._doss_window.isChecked())
         try:
@@ -524,10 +576,26 @@ def _column() -> QVBoxLayout:
     return layout
 
 
-def _page_of(layout: QVBoxLayout) -> QWidget:
+def _page_of(layout) -> QWidget:
+    """Wrap a layout so it can sit in another layout or a form row."""
     holder = QWidget()
     holder.setLayout(layout)
     return holder
+
+
+def _scrollable(layout) -> QWidget:
+    """A tab page that can be made smaller than its own contents.
+
+    Without this the dialog's minimum height is the tallest tab's — 910 pixels
+    once the Bands tab grew a path editor — so it opened that tall and could not
+    be shrunk at all, whatever it was asked to resize to. A tab whose contents
+    do not fit should scroll, not hold the whole window open.
+    """
+    area = QScrollArea()
+    area.setWidgetResizable(True)
+    area.setFrameShape(QScrollArea.NoFrame)
+    area.setWidget(_page_of(layout))
+    return area
 
 
 def _checkable(title: str, checked: bool = False) -> QGroupBox:

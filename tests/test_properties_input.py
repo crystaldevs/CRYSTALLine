@@ -441,8 +441,20 @@ def _builder():
     return PropertiesBuilderDialog(_mgo())
 
 
-def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
+def _editable_builder():
+    """A builder with the conventional-path tick off, ready to be edited.
+
+    The tick is on by default and every path editor refuses while it is set —
+    that is what it is for. A test of the editors has to untick it first,
+    exactly as a user does.
+    """
     dialog = _builder()
+    dialog._path_conventional.setChecked(False)
+    return dialog
+
+
+def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
+    dialog = _editable_builder()
     conventional = dialog._path_list.count()
     assert conventional > 1
     dialog._path_list.setCurrentRow(0)
@@ -455,16 +467,19 @@ def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
 def test_a_sub_path_is_expressible():
     """The whole point of A: the conventional walk is a starting point, not the
     only thing you can ask for."""
-    dialog = _builder()
-    while dialog._path_list.count() > 1:
+    dialog = _editable_builder()
+    # Bounded, not `while count > 1`: a removal that silently does nothing would
+    # spin that loop forever instead of failing the test.
+    for _ in range(dialog._path_list.count() - 1):
         dialog._path_list.setCurrentRow(1)
         dialog._remove_segment()
+    assert dialog._path_list.count() == 1
     lines = dialog._preview.toPlainText().splitlines()
     assert lines[2].split()[0] == "1", "one segment should mean NLINE = 1"
 
 
 def test_a_custom_point_the_conventional_path_never_visits_can_be_added():
-    dialog = _builder()
+    dialog = _editable_builder()
     dialog._path_from.setEditText("X")
     dialog._path_to.setEditText("1/2 1/4 3/4")
     dialog._add_segment()
@@ -477,7 +492,7 @@ def test_a_custom_point_the_conventional_path_never_visits_can_be_added():
 def test_an_unreadable_endpoint_is_refused_with_a_reason():
     """Not quietly rounded to the origin, which would be a band structure of a
     path nobody asked for."""
-    dialog = _builder()
+    dialog = _editable_builder()
     before = dialog._path_list.count()
     dialog._path_from.setEditText("nonsense")
     dialog._path_to.setEditText("G")
@@ -487,7 +502,7 @@ def test_an_unreadable_endpoint_is_refused_with_a_reason():
 
 
 def test_segments_can_be_reordered():
-    dialog = _builder()
+    dialog = _editable_builder()
     first = dialog._path_list.item(0).text()
     dialog._path_list.setCurrentRow(0)
     dialog._move_segment(1)
@@ -496,7 +511,7 @@ def test_segments_can_be_reordered():
 
 
 def test_moving_past_the_ends_does_nothing():
-    dialog = _builder()
+    dialog = _editable_builder()
     rows = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
     dialog._path_list.setCurrentRow(0)
     dialog._move_segment(-1)
@@ -517,3 +532,31 @@ def test_a_typed_point_may_be_a_label_in_any_case_or_three_numbers():
     for bad in ("", "Z", "0.5 0.5", "a b c"):
         with pytest.raises(ValueError):
             _read_kpoint(bad, points)
+
+
+def test_the_tick_makes_every_path_editor_refuse():
+    """The tick is the authority, not just a greying-out.
+
+    The editors are disabled while it is set, so this is unreachable by mouse —
+    but an edit that slipped through used to be undone by the next refresh,
+    which turned "remove until one segment is left" into an endless loop.
+    """
+    dialog = _builder()
+    assert dialog._path_conventional.isChecked()
+    before = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    dialog._path_list.setCurrentRow(0)
+    dialog._remove_segment()
+    dialog._move_segment(1)
+    dialog._add_segment()
+    after = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    assert after == before
+
+
+def test_an_edited_path_survives_a_refresh():
+    """What the removed self-repair used to eat."""
+    dialog = _editable_builder()
+    dialog._path_list.setCurrentRow(0)
+    dialog._remove_segment()
+    shortened = dialog._path_list.count()
+    dialog._refresh()
+    assert dialog._path_list.count() == shortened
