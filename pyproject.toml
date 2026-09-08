@@ -28,14 +28,17 @@ dependencies = [
     # contextlib.suppress(ImportError) — it is an optional shim, not a
     # requirement.) Verified by running the app and the whole suite with every
     # Addons module blocked at import.
-    #
-    # Qt 6.10 breaks pyvistaqt: QtInteractor's first paintEvent never returns, so
-    # the main window is created but never becomes visible. Upstream tracking is
-    # pyvistaqt#793 and pyvista#8285; 6.9.3 is the last known-good release.
-    # Lift this cap once pyvistaqt ships a fix.
-    "PySide6-Essentials>=6.5,<6.10",
+    "PySide6-Essentials>=6.5",
     "pyvista>=0.43",
-    "pyvistaqt>=0.11",
+    # 0.11.4 is the floor, not 0.11: Qt 6.10 broke QtInteractor on macOS —
+    # the first paintEvent never returned, so the window was created but never
+    # became visible — and pyvistaqt#810 (in 0.11.4) is the fix. That bug is why
+    # PySide6 was capped below 6.10 until now; capping Qt was treating the
+    # symptom, and it also held the app on Python <= 3.13, since PySide6 6.9.3
+    # declares requires-python <3.14. Verified on 3.14 with PySide6 6.11.2 and
+    # pyvistaqt 0.13.0: window visible and exposed, viewport painted, rotation
+    # and resize intact, suite green.
+    "pyvistaqt>=0.11.4",
     "numpy>=1.23",
     # 3.22 calls the numpy.product alias that numpy 2 removed, and declares no
     # numpy upper bound - so a resolver happily pairs it with numpy 2 and every

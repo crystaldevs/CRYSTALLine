@@ -123,10 +123,10 @@ pymatgen brings with it.
 
 The following will be installed if not already present:
 
-- PySide6-Essentials >= 6.5, < 6.10 — the Qt modules the app uses, without the
-  847 MB of PySide6-Addons (WebEngine, Multimedia, 3D, Charts…) that it doesn't
+- PySide6-Essentials >= 6.5 — the Qt modules the app uses, without the 847 MB of
+  PySide6-Addons (WebEngine, Multimedia, 3D, Charts…) that it doesn't
 - pyvista >= 0.43
-- pyvistaqt >= 0.11
+- pyvistaqt >= 0.11.4
 - numpy >= 1.23
 - ase >= 3.23
 - pymatgen >= 2023.11.10
@@ -139,7 +139,7 @@ The following will be installed if not already present:
    ```sh
    conda create --name crystal python=3.12
    ```
-   Any Python from 3.11 up will do; 3.12 is what the project is tested and
+   Any Python from 3.11 up will do, 3.14 included; 3.12 is what the project is
    released on.
 2. Activate the environment (suggested)
    ```sh

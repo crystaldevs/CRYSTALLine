@@ -235,13 +235,24 @@ def test_a_switch_does_not_animate_into_its_initial_state(qapp):
 
 def test_the_switch_takes_its_colours_from_the_palette(qapp):
     """Painted, not styled — so it has to read the palette or it would keep its
-    light colours on a dark toolbar."""
+    light colours on a dark toolbar.
+
+    The event pump is not incidental. Qt hands an application palette change to
+    widgets as a posted ``ApplicationPaletteChange``, so a widget read in the
+    same breath as ``setPalette`` still holds the *previous* palette. PySide6
+    6.9 happened to resolve it lazily and answered correctly without one; 6.11
+    does not, and the test failed there for a reason that was never about the
+    widget. The app returns to its event loop after every theme change, so it
+    only ever sees the settled value.
+    """
     from crystalline.ui.widgets import ToggleSwitch
 
     switch = ToggleSwitch()
     theme._paint(qapp, theme.DARK)
+    qapp.processEvents()
     dark_highlight = switch.palette().highlight().color().name()
     theme._paint(qapp, theme.LIGHT)
+    qapp.processEvents()
     light_highlight = switch.palette().highlight().color().name()
 
     assert dark_highlight == QColor(theme.DARK.accent).name()
