@@ -35,8 +35,8 @@
 - A rich, dockable **Display** panel: atom size/opacity, per-element colours,
   bond radius/tolerance, hydrogen bonds, cell, axes, polyhedra, measurement
   colours, background colour, projection, an orientation marker and element labels.
-- Crystallographic **Info** panel, dimensionality-aware: space group(3D) or
-  layer group(2D slabs), point group, lattice parameters, cell volume/area,
+- Crystallographic **Info** panel, dimensionality-aware: space group (3D) or
+  layer group (2D slabs), point group, lattice parameters, cell volume/area,
   density and formula — recomputed live as you edit.
 - The same panel summarises the CRYSTAL run itself: code version, task,
   Hamiltonian and exchange/correlation functional (with the exact-exchange
@@ -117,14 +117,9 @@ Public releases of the code are distributed through Pypi.
 CRYSTALLine's own code: pymatgen requires 3.11+, and PySide6, pyvista and ase all
 require 3.10+.
 
-Expect around **1.3 GB** installed. Most of it is Qt and VTK (~800 MB between
-them, both irreducible for a 3D desktop app); the rest is the scientific stack
-pymatgen brings with it.
-
 The following will be installed if not already present:
 
-- PySide6-Essentials >= 6.5 — the Qt modules the app uses, without the 847 MB of
-  PySide6-Addons (WebEngine, Multimedia, 3D, Charts…) that it doesn't
+- PySide6-Essentials >= 6.5 
 - pyvista >= 0.43
 - pyvistaqt >= 0.11.4
 - numpy >= 1.23
@@ -135,8 +130,7 @@ The following will be installed if not already present:
 
 ### Steps
 
-Install into an environment of its own rather than your system Python — around
-1.3 GB of Qt, VTK and the scientific stack arrives with it. Either kind of
+Install into an environment of its own rather than your system Python. Either kind of
 environment works; the only real difference is that conda can *supply* the
 Python version, where a venv uses whichever `python` you already have.
 
