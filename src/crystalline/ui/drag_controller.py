@@ -45,6 +45,7 @@ class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
         on_click: Optional[Callable[[int, bool], None]] = None,
         on_click_empty: Optional[Callable[[], None]] = None,
         on_grab: Optional[Callable[[int], None]] = None,
+        on_camera: Optional[Callable[[bool], None]] = None,
         editing: bool = False,
     ) -> None:
         super().__init__()
@@ -55,6 +56,7 @@ class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
         self._on_click = on_click
         self._on_click_empty = on_click_empty
         self._on_grab = on_grab
+        self._on_camera = on_camera
         self._editing = editing
         self._picker = vtk.vtkPropPicker()
 
@@ -69,6 +71,10 @@ class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
         self.AddObserver("LeftButtonPressEvent", self._on_press)
         self.AddObserver("MouseMoveEvent", self._on_move)
         self.AddObserver("LeftButtonReleaseEvent", self._on_release)
+        # Bracket every camera move (rotate/pan/dolly). ``on_camera`` lets the
+        # app stand other continuous work down for the duration — see
+        # Viewport.camera_busy.
+        self.AddObserver("StartInteractionEvent", self._on_start_interaction)
         # Fires after any camera move (rotate/pan/dolly/wheel) — clamp zoom there.
         self.AddObserver("EndInteractionEvent", self._on_end_interaction)
 
@@ -80,8 +86,39 @@ class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
         """Cap how far the camera may pull back from the focal point (None = no cap)."""
         self._max_distance = distance
 
+    def zoom_by(self, factor: float) -> None:
+        """Zoom by ``factor`` (>1 moves in), continuously rather than in steps.
+
+        VTK's trackball style dollies a fixed ~21% per wheel event whatever the
+        scroll was, which is what makes the wheel feel notched — and on a
+        trackpad, where a gentle two-finger swipe delivers many small events, it
+        makes the view leap. The viewport reads the real scroll delta and calls
+        this with a factor proportional to it.
+
+        Handles both projections: under parallel projection the "zoom" is the
+        camera's parallel scale, not its distance, so dollying would do nothing.
+        """
+        if factor <= 0.0 or not np.isfinite(factor):
+            return
+        camera = self._vtk_ren.GetActiveCamera()
+        if camera.GetParallelProjection():
+            scale = camera.GetParallelScale() / factor
+            if scale > 0.0 and np.isfinite(scale):
+                camera.SetParallelScale(scale)
+        else:
+            camera.Dolly(factor)
+        self._clamp_zoom()
+        self._vtk_ren.ResetCameraClippingRange()
+        self._plotter.render()
+
+    def _on_start_interaction(self, *_args) -> None:
+        if self._on_camera is not None:
+            self._on_camera(True)
+
     def _on_end_interaction(self, *_args) -> None:
         self._clamp_zoom()
+        if self._on_camera is not None:
+            self._on_camera(False)
 
     def _clamp_zoom(self) -> None:
         """Pull the camera back in if it zoomed out past the cap, so the
@@ -201,11 +238,12 @@ def _install_style(plotter, style) -> None:
 
 
 def install_atom_drag(
-    plotter, renderer, on_commit, on_click=None, on_click_empty=None, on_grab=None, editing=False
+    plotter, renderer, on_commit, on_click=None, on_click_empty=None, on_grab=None,
+    on_camera=None, editing=False,
 ) -> AtomDragStyle:
     """Create and activate the drag style on ``plotter``'s interactor."""
     style = AtomDragStyle(
-        plotter, renderer, on_commit, on_click, on_click_empty, on_grab, editing
+        plotter, renderer, on_commit, on_click, on_click_empty, on_grab, on_camera, editing
     )
     _install_style(plotter, style)
     return style

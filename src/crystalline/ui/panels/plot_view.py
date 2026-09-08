@@ -96,8 +96,12 @@ class _PlotTab(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._build_toolbar())
+        # Toolbar under the figure, not over it. Above, it sits between the tab
+        # that names the plot and the plot itself, so the eye crosses a row of
+        # controls to reach the thing it opened; the figure should be the first
+        # thing in the panel and the controls the last.
         layout.addWidget(self.canvas, 1)  # stretch: the canvas takes the space
+        layout.addWidget(self._build_toolbar())
         if self._on_pick is not None:
             self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
             # Connected *after* the toolbar's own cursor handler (built above),
@@ -301,9 +305,21 @@ class _PlotTab(QWidget):
             self.canvas.unsetCursor()
 
     def close_figure(self) -> None:
-        """Release the matplotlib figure when this tab goes away."""
+        """Release the matplotlib figure when this tab goes away.
+
+        The canvas is taken out of the widget tree *first*. matplotlib draws
+        lazily — a resize or a data change queues an idle draw — and that draw
+        fires on the next turn of the event loop, by which time the tab's C++
+        side may be gone. It then raises ``Internal C++ object already deleted``
+        from inside the backend, nowhere near the close that caused it.
+        """
         import matplotlib.pyplot as plt
 
+        try:
+            self.canvas.setParent(None)
+            self.canvas.close()
+        except Exception:  # noqa: BLE001 - already torn down; the close below still runs
+            pass
         plt.close(self.figure)
 
 
@@ -349,6 +365,21 @@ class PlotPanel(QWidget):
         index = self._tabs.addTab(tab, title)
         self._tabs.setCurrentIndex(index)
         self._stack.setCurrentWidget(self._tabs)
+
+    def clear(self) -> None:
+        """Close every plot, releasing its figure.
+
+        Called when a new file is loaded. Nothing used to close them, so the
+        figures of every file opened in a session stayed live — each one a
+        matplotlib ``Figure`` and a Qt canvas that Qt still repaints — and the
+        window grew heavier with every plot ever drawn.
+
+        Correctness, not only weight: a spectrum carries a pick handler wired to
+        *its* file's modes, so a plot left behind from the previous structure
+        would select modes in the new one.
+        """
+        while self._tabs.count():
+            self._close_tab(0)
 
     # ── internals ───────────────────────────────────────────────────────
     def _close_tab(self, index: int) -> None:

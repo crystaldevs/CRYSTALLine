@@ -73,6 +73,12 @@ def _category(symbol: str) -> str:
     return "transition"  # everything else in the d-block region
 
 
+# A cell has to hold a two-letter symbol at the app's font size, with the ring
+# the current element is drawn with, and nothing else.
+_CELL_WIDTH = 40
+_CELL_HEIGHT = 34
+
+
 class PeriodicTableDialog(QDialog):
     """Modal element picker. Emits :attr:`element_selected` and closes on a click."""
 
@@ -101,14 +107,32 @@ class PeriodicTableDialog(QDialog):
                 )
 
     def _element_button(self, symbol: str, is_current: bool) -> QPushButton:
+        """One cell of the table: the symbol on its category colour.
+
+        ``padding: 0`` is not cosmetic. The application stylesheet gives every
+        push button comfortable padding, which is right for a button with a word
+        on it and fatal in a 38-pixel cell: it left about a dozen pixels for the
+        text and every two-letter symbol came out clipped ("Mg", "Zn", "Cd").
+        A cell sizes itself, so it has to opt out.
+
+        The selection ring is the app's accent rather than a fixed near-black,
+        which was invisible against the dark theme.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        accent = theme.active_palette(QApplication.instance()).accent
         button = QPushButton(symbol)
-        button.setFixedSize(38, 34)
+        button.setFixedSize(_CELL_WIDTH, _CELL_HEIGHT)
+        button.setCursor(Qt.PointingHandCursor)
         color = _CATEGORY_COLORS[_category(symbol)]
-        border = "2px solid #263238" if is_current else "1px solid #90a4ae"
+        border = f"2px solid {accent}" if is_current else "1px solid rgba(0, 0, 0, 0.22)"
         button.setStyleSheet(
-            f"QPushButton {{ background-color: {color}; color: #212121; font-weight: bold;"
-            f" border: {border}; border-radius: 3px; }}"
-            "QPushButton:hover { border: 2px solid #263238; }"
+            f"QPushButton {{ background-color: {color}; color: #17202a;"
+            f" font-weight: 700; font-size: 12px; padding: 0; margin: 0;"
+            f" border: {border}; border-radius: 4px; }}"
+            f"QPushButton:hover {{ border: 2px solid {accent}; }}"
         )
         button.setToolTip(symbol)
         button.clicked.connect(lambda _=False, s=symbol: self._choose(s))

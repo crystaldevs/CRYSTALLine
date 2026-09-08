@@ -516,7 +516,7 @@ def build_input(structure: Structure, spec: Optional[CrystalInputSpec] = None) -
 
     lines: List[str] = []
     lines += _geometry_lines(structure, spec.geometry)
-    lines += _supercel_lines(spec.geometry)
+    lines += _supercel_geometry_lines(spec.geometry)
     lines += _task_lines(spec.task)  # OPTGEOM sits in block 1, before BASISSET
     lines += ["BASISSET", spec.basis.name.strip()]  # replaces block-1 END
     lines += _hamiltonian_lines(structure, spec)
@@ -791,7 +791,7 @@ def _task_lines(task: TaskOptions) -> List[str]:
     sub-block closed by its own terminator, leaving ``BASISSET`` to close block 1.
     """
     # SCELPHONO belongs to the geometry block, so it precedes the task keyword.
-    lines = _supercell_lines(task.supercell)
+    lines = _scelphono_lines(task.supercell)
     return lines + _task_block_lines(task)
 
 
@@ -815,11 +815,15 @@ def _check_two_component(spec: "CrystalInputSpec") -> None:
             )
 
 
-def _supercel_lines(geometry: GeometryOptions) -> List[str]:
+def _supercel_geometry_lines(geometry: GeometryOptions) -> List[str]:
     """A general ``SUPERCEL`` expansion, optionally preceded by ``NOSHIFT``.
 
     NOSHIFT must come *before* SUPERCEL: without it CRYSTAL first shifts the
     origin to minimise symmetry operators with translational components.
+
+    Not to be confused with :func:`_scelphono_lines`, which writes the *other*
+    CRYSTAL supercell keyword — the two used to be named one letter apart, so
+    swapping the call sites emitted a different calculation that still parsed.
     """
     if geometry.supercell is None:
         return []
@@ -834,8 +838,12 @@ def _matrix_rows(matrix, keyword: str) -> List[str]:
     return [" ".join(str(int(v)) for v in row) for row in rows]
 
 
-def _supercell_lines(matrix) -> List[str]:
-    """A ``SCELPHONO`` expansion matrix, written one row per line."""
+def _scelphono_lines(matrix) -> List[str]:
+    """A ``SCELPHONO`` expansion matrix, written one row per line.
+
+    The phonon supercell — the cell force constants are computed in — not the
+    general geometry expansion :func:`_supercel_geometry_lines` writes.
+    """
     if matrix is None:
         return []
     return ["SCELPHONO"] + _matrix_rows(matrix, "SCELPHONO")

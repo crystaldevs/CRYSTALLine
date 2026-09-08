@@ -13,13 +13,17 @@ menu before the toolbar's ``_update_view_actions`` call.
 
 from __future__ import annotations
 
-from PySide6.QtGui import QAction, QColor, QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import QLabel, QToolBar, QToolButton, QWidget
 
-# How far one click of the toolbar's rotate buttons orbits the view, and the
-# chip colour that sets them apart from the coloured a/b/c alignment buttons.
+from crystalline.core.cells import CellView
+from crystalline.ui.widgets import ToggleSwitch
+
+# How far one click of the toolbar's rotate buttons orbits the view. The chips'
+# appearance lives in the theme (they carry a "chip" property it styles), so a
+# theme change restyles them without anything here being told about it.
 _ROTATE_STEP_DEG = 15.0
-_ROTATE_CHIP_COLOR = "#6c757d"
 
 
 def build_menus(window) -> None:
@@ -77,6 +81,28 @@ def _build_cell_menu(window) -> None:
     """A 'Cell' menu: supercell and boundary-completion of the crystallographic cell."""
     cell_menu = window.menuBar().addMenu("&Cell")
 
+    # Which cell the viewport draws. The crystallographic (conventional) cell is
+    # what a crystallographer expects to see; the primitive one is the cell
+    # CRYSTAL works in, and the one a Molden file's orbital coefficients are
+    # expressed on. Exclusive, so it reads as one choice rather than two toggles.
+    window._cell_view_group = QActionGroup(window)
+    window._cell_view_group.setExclusive(True)
+    window._cell_view_actions = {}
+    for label, view, tip in (
+        ("Crystallographic cell", CellView.CRYSTALLOGRAPHIC,
+         "The conventional cell — what a crystallographer expects to see"),
+        ("Primitive cell", CellView.PRIMITIVE,
+         "The cell as loaded, which is the one CRYSTAL works in"),
+    ):
+        action = QAction(label, window, checkable=True)
+        action.setToolTip(tip)
+        action.setChecked(view is window._cell_view)
+        action.triggered.connect(lambda _checked=False, v=view: window._set_cell_view(v))
+        window._cell_view_group.addAction(action)
+        cell_menu.addAction(action)
+        window._cell_view_actions[view] = action
+    cell_menu.addSeparator()
+
     window._lattice_action = QAction("Lattice parameters…", window)
     window._lattice_action.triggered.connect(window._open_lattice_dialog)
     cell_menu.addAction(window._lattice_action)
@@ -110,7 +136,7 @@ def _build_edit_menu(window) -> None:
     """An 'Edit' menu: turn editing on, select atoms, and run edit tools."""
     edit_menu = window.menuBar().addMenu("&Edit")
 
-    window._undo_action = QAction(_history_icon(window, "edit-undo", "SP_ArrowBack"), "Undo", window)
+    window._undo_action = QAction(_history_icon(window, "undo.svg"), "Undo", window)
     window._undo_action.setShortcut("Ctrl+Z")
     window._undo_action.setToolTip("Undo (Ctrl+Z)")
     window._undo_action.triggered.connect(window._undo)
@@ -118,7 +144,7 @@ def _build_edit_menu(window) -> None:
     edit_menu.addAction(window._undo_action)
 
     window._redo_action = QAction(
-        _history_icon(window, "edit-redo", "SP_ArrowForward"), "Redo", window
+        _history_icon(window, "redo.svg"), "Redo", window
     )
     window._redo_action.setShortcuts(["Ctrl+Shift+Z", "Ctrl+Y"])
     window._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
@@ -168,20 +194,78 @@ def _build_edit_menu(window) -> None:
     window._update_edit_actions()
 
 
-def _history_icon(window, theme_name: str, standard_pixmap: str) -> QIcon:
-    """An undo/redo icon: the desktop theme's if present, else a Qt fallback."""
-    from PySide6.QtWidgets import QStyle
+def _history_icon(window, name: str) -> QIcon:
+    """The undo or redo glyph, drawn in the current theme's text colour.
 
-    icon = QIcon.fromTheme(theme_name)
-    if icon.isNull():
-        icon = window.style().standardIcon(getattr(QStyle.StandardPixmap, standard_pixmap))
-    return icon
+    Ours rather than the desktop's: ``QIcon.fromTheme`` is null on macOS and
+    Windows, and the ``QStyle`` fallback is drawn by whichever style is active —
+    so it vanished the moment the app moved to Fusion for the stylesheet, and the
+    toolbar fell back to showing the words.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    palette = theme.active_palette(QApplication.instance())
+    return theme.monochrome_icon(name, palette.text)
+
+
+def refresh_history_icons(window) -> None:
+    """Redraw the undo/redo glyphs for the current theme (see :func:`_history_icon`)."""
+    for attribute, name in (("_undo_action", "undo.svg"), ("_redo_action", "redo.svg")):
+        action = getattr(window, attribute, None)
+        if action is not None:
+            action.setIcon(_history_icon(window, name))
+
+
+def refresh_appearance_button(window) -> None:
+    """Redraw the lamp for the current theme, and put its switch where it belongs.
+
+    The switch is set with its signal blocked: it displays the theme in force,
+    and echoing the change back would ask for the theme already on.
+    """
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    palette = theme.active_palette(QApplication.instance())
+
+    lamp = getattr(window, "_appearance_lamp", None)
+    if lamp is not None:
+        lamp.setPixmap(theme.monochrome_icon("lamp.svg", palette.text).pixmap(18, 18))
+        lamp.setToolTip("Appearance — dark or light")
+
+    switch = getattr(window, "_appearance_switch", None)
+    if switch is not None:
+        blocked = switch.blockSignals(True)
+        switch.setChecked(palette is theme.LIGHT)
+        switch.blockSignals(blocked)
+        switch.setToolTip("On: the light theme.  Off: the dark one.")
 
 
 # ── View ──────────────────────────────────────────────────────────────────
 def _build_view_menu(window) -> None:
     """A 'View' menu: show the display panel and align the view to an axis."""
     view_menu = window.menuBar().addMenu("&View")
+
+    # Appearance. "System" follows the desktop; the other two override it, which
+    # a 3D viewer wants — a dark desktop and a light figure is a normal pairing.
+    from crystalline.ui import theme
+
+    appearance = view_menu.addMenu("Appearance")
+    window._appearance_group = QActionGroup(window)
+    window._appearance_group.setExclusive(True)
+    window._appearance_actions = {}
+    current = theme.current_mode()
+    for mode, label in (("system", "Match system"), ("light", "Light"), ("dark", "Dark")):
+        action = QAction(label, window, checkable=True)
+        action.setChecked(mode == current)
+        action.triggered.connect(lambda _c=False, m=mode: window._set_appearance(m))
+        window._appearance_group.addAction(action)
+        appearance.addAction(action)
+        window._appearance_actions[mode] = action
+    view_menu.addSeparator()
+
     display_action = QAction("Display settings", window)
     display_action.triggered.connect(window._show_display_panel)
     view_menu.addAction(display_action)
@@ -269,6 +353,22 @@ def _build_plot_menu(window) -> None:
         window._pes_action = QAction("Anharmonic PES…", window)
         window._pes_action.triggered.connect(window._open_pes)
         plot_menu.addAction(window._pes_action)
+    # Crystalline orbitals are not a matplotlib figure at all — they are drawn in
+    # the 3D view over the structure — but this is where someone looks for "plot
+    # something the run computed", so the entry belongs here.
+    plot_menu.addSeparator()
+    window._orbitals_action = QAction("Crystalline orbitals…", window)
+    window._orbitals_action.setToolTip(
+        "Draw a crystalline orbital from a PROPERTIES run with ORBITALS, "
+        "as an isosurface over the structure"
+    )
+    window._orbitals_action.triggered.connect(window._open_orbitals)
+    plot_menu.addAction(window._orbitals_action)
+
+    window._clear_orbital_action = QAction("Clear orbital", window)
+    window._clear_orbital_action.triggered.connect(window._clear_orbital)
+    plot_menu.addAction(window._clear_orbital_action)
+
     # Typography applies to every figure, not to one kind, so it sits on its own
     # at the foot of the menu rather than inside any of the plot entries.
     plot_menu.addSeparator()
@@ -280,6 +380,7 @@ def _build_plot_menu(window) -> None:
         plot_menu.setEnabled(False)
         plot_menu.setTitle("&Plot (CRYSTALClear not installed)")
     window._update_plot_actions()
+    window._update_orbital_actions()
 
 
 # ── Help ──────────────────────────────────────────────────────────────────
@@ -328,25 +429,38 @@ def show_about(parent) -> None:
 
 # ── toolbars ──────────────────────────────────────────────────────────────
 def _build_toolbars(window) -> None:
-    """Toolbars for the most-used actions: Undo, and a/b/c view alignment."""
-    edit_toolbar = QToolBar("Edit", window)
-    edit_toolbar.addAction(window._undo_action)
-    edit_toolbar.addAction(window._redo_action)
-    window.addToolBar(edit_toolbar)
+    """One toolbar: history at the left, the view controls centred, theme at the right.
 
-    view_toolbar = QToolBar("View", window)
-    caption = QLabel("View along")
-    caption.setContentsMargins(8, 0, 6, 0)
+    One rather than two, and fixed in place. Two toolbars could be dragged apart
+    or stacked, and neither arrangement is better than the one they are given —
+    the row is a designed thing, not a set of loose pieces. Fixing it is also
+    what lets the middle group be *centred*: a stretch either side only balances
+    if nothing can be moved between them.
+    """
+    view_toolbar = QToolBar("Tools", window)
+    view_toolbar.setMovable(False)
+    view_toolbar.setFloatable(False)
+    view_toolbar.setContextMenuPolicy(Qt.PreventContextMenu)  # no hiding it either
+
+    view_toolbar.addAction(window._undo_action)
+    view_toolbar.addAction(window._redo_action)
+
+    # Everything between the two stretches sits in the middle of the window.
+    view_toolbar.addWidget(_toolbar_stretch())
+
+    caption = QLabel("VIEW")
+    caption.setContentsMargins(6, 0, 6, 0)
     view_toolbar.addWidget(caption)
     # Colour the a/b/c chips to match the lattice gizmo (a=red, b=green,
     # c=blue), so the button and the on-screen axis arrow read as the same.
     window._axis_buttons: list = []
     window._rotate_buttons: list = []
-    for label, axis, color in (("a", 0, "#d62728"), ("b", 1, "#2ca02c"), ("c", 2, "#1f77b4")):
+    for label, axis in (("a", 0), ("b", 1), ("c", 2)):
         button = QToolButton(window)
         button.setText(label)
         button.setToolTip(f"Look down the {label} axis")
-        button.setStyleSheet(_axis_chip_style(color))
+        button.setProperty("chip", "axis")
+        button.setProperty("axis", label)
         button.clicked.connect(lambda _checked=False, a=axis: window.viewport.align_view_along(a))
         view_toolbar.addWidget(button)
         window._axis_buttons.append(button)
@@ -354,7 +468,7 @@ def _build_toolbars(window) -> None:
     # Orbit the view by a fixed step. Unlike a/b/c alignment these need no cell,
     # so they stay enabled for molecules too.
     view_toolbar.addWidget(_toolbar_spacer(10))
-    rotate_caption = QLabel("Rotate")
+    rotate_caption = QLabel("ROTATE")
     rotate_caption.setContentsMargins(2, 0, 6, 0)
     view_toolbar.addWidget(rotate_caption)
     # The last two spin the structure in the screen plane (about the axis
@@ -371,7 +485,7 @@ def _build_toolbars(window) -> None:
         button.setText(label)
         button.setToolTip(f"{tooltip} ({_ROTATE_STEP_DEG:g}°)")
         button.setAutoRepeat(True)  # hold to keep turning
-        button.setStyleSheet(_axis_chip_style(_ROTATE_CHIP_COLOR))
+        button.setProperty("chip", "ghost")
         button.clicked.connect(
             lambda _checked=False, a=azimuth, e=elevation, r=roll: window.viewport.rotate_view(
                 a, e, r
@@ -379,6 +493,48 @@ def _build_toolbars(window) -> None:
         )
         view_toolbar.addWidget(button)
         window._rotate_buttons.append(button)
+
+    # The cell being drawn, beside the view controls: it is a property of what is
+    # on screen, and worth flipping without going to a menu.
+    #
+    # A switch, not a conv/prim pair. There are exactly two cells and each is the
+    # negation of the other, so a pair spends two controls saying what one can —
+    # and a checkable *button* has to carry a label spelling out what "on" means,
+    # which is how it grows into a slab. A switch says on and off by its shape,
+    # so the caption can be a noun.
+    view_toolbar.addWidget(_toolbar_spacer(10))
+    cell_caption = QLabel("CONV. CELL")
+    cell_caption.setContentsMargins(2, 0, 7, 0)
+    view_toolbar.addWidget(cell_caption)
+    window._conventional_switch = ToggleSwitch(window)
+    window._conventional_switch.setChecked(window._cell_view is CellView.CRYSTALLOGRAPHIC)
+    window._conventional_switch.setToolTip(
+        "On: the crystallographic (conventional) cell.\n"
+        "Off: the primitive cell, as loaded — the one CRYSTAL works in."
+    )
+    window._conventional_switch.toggled.connect(
+        lambda on: window._set_cell_view(
+            CellView.CRYSTALLOGRAPHIC if on else CellView.PRIMITIVE
+        )
+    )
+    view_toolbar.addWidget(window._conventional_switch)
+
+    # The second stretch: what follows is pinned to the right, away from the
+    # controls that act on the structure. This one acts on the app. The same
+    # switch as the cell one, so the toolbar has a single idea of what a
+    # two-state control looks like; the lamp is what saves it from needing a word.
+    view_toolbar.addWidget(_toolbar_stretch())
+    window._appearance_lamp = QLabel()
+    window._appearance_lamp.setContentsMargins(0, 0, 6, 0)
+    view_toolbar.addWidget(window._appearance_lamp)
+    window._appearance_switch = ToggleSwitch(window)
+    # On means the lights are on — the light theme. A lamp that lit up for the
+    # dark theme would be backwards however it is explained.
+    window._appearance_switch.toggled.connect(
+        lambda on: window._set_appearance("light" if on else "dark")
+    )
+    view_toolbar.addWidget(window._appearance_switch)
+    refresh_appearance_button(window)
 
     view_toolbar.addWidget(_toolbar_spacer(6))
     window.addToolBar(view_toolbar)
@@ -391,24 +547,18 @@ def _toolbar_spacer(width: int) -> QWidget:
     return spacer
 
 
-def _axis_chip_style(color: str) -> str:
-    """Qt stylesheet for a rounded, coloured a/b/c axis button (with states)."""
-    hover = QColor(color).lighter(115).name()
-    pressed = QColor(color).darker(110).name()
-    return f"""
-        QToolButton {{
-            background-color: {color};
-            color: white;
-            font-weight: bold;
-            border: none;
-            border-radius: 4px;
-            padding: 4px 11px;
-            margin: 2px 1px;
-        }}
-        QToolButton:hover {{ background-color: {hover}; }}
-        QToolButton:pressed {{ background-color: {pressed}; }}
-        QToolButton:disabled {{ background-color: #cccccc; color: #f0f0f0; }}
-    """
+def _toolbar_stretch() -> QWidget:
+    """A spacer that eats the remaining width, pushing what follows to the right."""
+    from PySide6.QtWidgets import QSizePolicy
+
+    spacer = QWidget()
+    spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+    return spacer
 
 
-__all__ = ["build_menus", "show_about"]
+__all__ = [
+    "build_menus",
+    "refresh_appearance_button",
+    "refresh_history_icons",
+    "show_about",
+]

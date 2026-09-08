@@ -23,13 +23,10 @@ import numpy as np
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QComboBox,
-    QDoubleSpinBox,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QSizePolicy,
-    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -42,6 +39,7 @@ from crystalline.core.phonons import (
     commensurate_repeats,
     qpoint_label,
 )
+from crystalline.ui.panels.controls import Section, slider_row
 from crystalline.viz.phonon_animator import PhononAnimator
 
 # Activity filters: (label, predicate over a PhononMode). ``None`` keeps every
@@ -85,7 +83,13 @@ _FRAME_DUTY = 0.5
 
 
 def _mode_label(index: int, mode: PhononMode) -> str:
-    """One list row: index, frequency and the tags that apply to the mode.
+    """One list row: mode number, frequency and the tags that apply to it.
+
+    ``index`` is the 0-based position in the mode set; the row shows it as
+    ``index + 1``. CRYSTAL numbers modes from 1 in its own output, and so does
+    every spectroscopy convention — a list starting at 0 puts the app one off
+    from the file it is showing, which is the sort of mismatch someone only
+    notices after quoting the wrong mode.
 
     Composition deliberately stays out of the row — it belongs in the tooltip
     and the summary line, where it has room to be read rather than squeezed
@@ -99,7 +103,7 @@ def _mode_label(index: int, mode: PhononMode) -> str:
     if mode.raman_active:
         tags.append("R")
     suffix = f"  [{', '.join(tags)}]" if tags else ""
-    return f"{index}: {mode.frequency:9.2f} cm⁻¹{suffix}"
+    return f"{index + 1}: {mode.frequency:9.2f} cm⁻¹{suffix}"
 
 
 class PhononPanel(QWidget):
@@ -132,6 +136,8 @@ class PhononPanel(QWidget):
         # Earliest time the next frame may be drawn, as a perf_counter reading.
         # Set from how long the last frame actually took — see _on_timer.
         self._next_frame_at = 0.0
+        # Set while the animation is suspended for something else — see hold().
+        self._held = False
         self._timer = QTimer(self)
         self._timer.setInterval(_FRAME_INTERVAL_MS)
         self._timer.timeout.connect(self._on_timer)
@@ -143,9 +149,9 @@ class PhononPanel(QWidget):
         # Transport controls sit at the top, where they're always in view even
         # if the dock is short enough to clip the bottom of the panel.
         head_row = QHBoxLayout()
-        self.play_btn = self._transport_button(QStyle.SP_MediaPlay, "Play", "▶")
+        self.play_btn = self._transport_button("play.svg", "Play")
         self.play_btn.clicked.connect(self._play)
-        self.stop_btn = self._transport_button(QStyle.SP_MediaStop, "Stop", "■")
+        self.stop_btn = self._transport_button("stop.svg", "Stop")
         self.stop_btn.clicked.connect(self._stop)
         head_row.addWidget(self.play_btn)
         head_row.addWidget(self.stop_btn)
@@ -204,52 +210,66 @@ class PhononPanel(QWidget):
         )
         layout.addWidget(self.character_label)
 
-        # Amplitude and speed share a form so their labels and fields line up.
-        controls = QFormLayout()
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(4)
-
-        self.amp_box = QDoubleSpinBox()
-        self.amp_box.setRange(0.01, 5.0)
-        self.amp_box.setSingleStep(0.05)
-        self.amp_box.setDecimals(2)
-        self.amp_box.setValue(self._animator.amplitude)
+        # The same section and row machinery the Display panel uses, so a slider
+        # here sits exactly where a slider there does. These were a QFormLayout
+        # with right-aligned labels and bare spin boxes, which lined up with
+        # nothing else in the app and gave no way to sweep a value.
+        playback = Section(layout, "Playback")
+        # Bounds chosen so the default sits at the middle of a log scale:
+        # sqrt(0.03 * 3.0) is 0.3 Å, which is where the animation starts. The old
+        # 0.01-5.0 put it six percent along a linear slider, hard against the
+        # stop, with the whole useful range in the first few pixels.
+        self.amp_box = slider_row(
+            playback, "Amplitude (Å)", self._animator.amplitude,
+            0.03, 3.0, 0.05, decimals=2, logarithmic=True,
+            on_change=self._on_amplitude,
+        )
         self.amp_box.setToolTip(
             "Peak displacement of the most-displaced atom, in Angstrom.\n"
             "Independent of how many atoms the cell has."
         )
-        self.amp_box.valueChanged.connect(self._on_amplitude)
-        controls.addRow("Amplitude (Å)", self.amp_box)
-
-        self.speed_box = QDoubleSpinBox()
-        self.speed_box.setRange(0.1, 10.0)
-        self.speed_box.setSingleStep(0.1)
-        self.speed_box.setDecimals(1)
-        self.speed_box.setSuffix(" ×")
-        self.speed_box.setValue(self._speed)
+        # 0.1x to 10x, and 1x is the geometric middle — a speed is a ratio, so
+        # half as fast and twice as fast are the same distance from normal.
+        self.speed_box = slider_row(
+            playback, "Speed", self._speed,
+            0.1, 10.0, 0.1, decimals=1, suffix=" ×", logarithmic=True,
+            on_change=self._on_speed,
+        )
         self.speed_box.setToolTip(
             "How fast the vibration is played back.\n"
             "1.0× is one full cycle every two seconds; it changes nothing physical."
         )
-        self.speed_box.valueChanged.connect(self._on_speed)
-        controls.addRow("Speed", self.speed_box)
-        layout.addLayout(controls)
 
         self.setEnabled(False)
 
-    def _transport_button(self, pixmap, tooltip: str, fallback: str) -> QToolButton:
-        """A flat icon button for Play/Stop, captioned if the style has no icon."""
+    def _transport_button(self, glyph: str, tooltip: str) -> QToolButton:
+        """A flat icon button for Play/Stop, drawn in the theme's text colour.
+
+        Ours rather than ``QStyle.standardIcon``: a style icon is drawn by the
+        *style*, and Fusion's media glyphs are near-black — invisible against the
+        dark chrome, which is why these two buttons could barely be made out.
+        """
         button = QToolButton(self)
-        icon = self.style().standardIcon(pixmap)
-        if icon.isNull():  # some minimal styles ship no media icons
-            button.setText(fallback)
-        else:
-            button.setIcon(icon)
-            button.setIconSize(QSize(18, 18))
+        button.setIcon(self._glyph(glyph))
+        button.setIconSize(QSize(18, 18))
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         button.setAutoRaise(True)
         return button
+
+    @staticmethod
+    def _glyph(name: str):
+        """A bundled glyph in the current theme's text colour."""
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        return theme.monochrome_icon(name, theme.active_palette(QApplication.instance()).text)
+
+    def refresh_theme_icons(self) -> None:
+        """Redraw the transport glyphs after a theme change."""
+        for button, name in ((self.play_btn, "play.svg"), (self.stop_btn, "stop.svg")):
+            button.setIcon(self._glyph(name))
 
     # ── data ────────────────────────────────────────────────────────────
     def set_modes(
@@ -582,11 +602,39 @@ class PhononPanel(QWidget):
             self._animator.set_mode(self._equilibrium, self._modes[index])
 
     def _play(self) -> None:
+        self._held = False  # an explicit Play outranks any hold in force
         if self._modes is not None and self.has_mode():
             self._next_frame_at = 0.0  # draw the first frame straight away
             self._timer.start()
 
+    def hold(self, held: bool) -> None:
+        """Suspend animation frames while something else needs the event loop.
+
+        Not a stop: the phase, the mode and the Play state all survive, so
+        releasing the hold picks the vibration up where it left off rather than
+        snapping back to rest.
+
+        Used while the camera is being moved. An animation frame and a camera
+        render are each a synchronous, display-locked render, so running both
+        costs two of them per mouse event — rotating a structure with a mode
+        playing ran at half the rate of rotating anything else, and the view
+        trailed the pointer by the difference. Which is why reorienting felt
+        slow on a frequency output and nowhere else: those are the files with
+        something to animate. The duty-cycle pacing in :meth:`_on_timer` bounds
+        the animation's share of the loop, but half of a loop is still half a
+        loop; during a drag the right share is none of it.
+        """
+        if held:
+            if not self._held:
+                self._held = self._timer.isActive()
+            self._timer.stop()
+        elif self._held:
+            self._held = False
+            self._next_frame_at = 0.0
+            self._timer.start()
+
     def _stop(self) -> None:
+        self._held = False  # nothing to resume: Stop is the user's own decision
         self._timer.stop()
         # Back to phase 0 as well as to the equilibrium geometry, so the next
         # Play starts from rest instead of jumping into mid-cycle.

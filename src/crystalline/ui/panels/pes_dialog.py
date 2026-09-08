@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QLabel,
@@ -31,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crystalline.ui.panels.controls import Section, VALUE_WIDTH, left, slider_row
 from crystalline.crystalio.pes import (
     DEFAULT_NSTATES,
     DEFAULT_RANGE,
@@ -54,7 +54,7 @@ class PESDialog(QDialog):
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        form = QFormLayout()
+        cut = Section(layout, "Cut")
         self.dimension = QComboBox(self)
         for label, key in DIMENSIONS:
             self.dimension.addItem(label, key)
@@ -62,20 +62,16 @@ class PESDialog(QDialog):
         if not run.pairs:
             self.dimension.model().item(1).setEnabled(False)
         self.dimension.currentIndexChanged.connect(self._sync)
-        form.addRow("Cut", self.dimension)
+        cut.add("Dimension", self.dimension)
 
-        self.span = QDoubleSpinBox(self)
-        self.span.setRange(0.5, 10.0)
-        self.span.setDecimals(1)
-        self.span.setSingleStep(0.5)
-        self.span.setValue(DEFAULT_RANGE)
+        self.span = slider_row(
+            cut, "Range ±ξ", DEFAULT_RANGE, 0.5, 10.0, 0.5, decimals=1,
+        )
         self.span.setToolTip(
             "Half-width of the window, in classical ground state amplitudes.\n"
             "CRYSTAL fits the constants over less than one of them, so a wide "
             "window extrapolates a quartic."
         )
-        form.addRow("Range ±ξ", self.span)
-        layout.addLayout(form)
 
         # ── one mode ──
         self._mode_box = QGroupBox("Mode", self)
@@ -89,11 +85,11 @@ class PESDialog(QDialog):
             self.modes.setCurrentRow(0)
         mode_layout.addWidget(self.modes)
 
-        mode_form = QFormLayout()
+        mode_options = Section(mode_layout, "Overlays")
         self.harmonic = QCheckBox("Harmonic potential", self)
         self.harmonic.setChecked(True)
         self.harmonic.setToolTip("The parabola of the mode, for comparison.")
-        mode_form.addRow(self.harmonic)
+        mode_options.add_wide(self.harmonic)
         self.levels = QCheckBox("Vibrational states", self)
         self.levels.setToolTip(
             "Solve this one-mode potential and draw its levels and "
@@ -101,11 +97,12 @@ class PESDialog(QDialog):
             "VCI step couples the modes and lands elsewhere."
         )
         self.levels.toggled.connect(self._sync)
+        mode_options.add_wide(self.levels)
         self.nstates = QSpinBox(self)
         self.nstates.setRange(1, 30)
         self.nstates.setValue(DEFAULT_NSTATES)
-        mode_form.addRow(self.levels, self.nstates)
-        mode_layout.addLayout(mode_form)
+        self.nstates.setFixedWidth(VALUE_WIDTH)
+        mode_options.add("States", left(self.nstates))
         layout.addWidget(self._mode_box)
 
         # ── two modes ──

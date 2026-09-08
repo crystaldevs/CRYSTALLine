@@ -137,7 +137,7 @@ def analyze(structure: Structure, symprec: float = 1e-2) -> CrystalInfo:
         sga = SpacegroupAnalyzer(pmg, symprec=symprec)
         conventional = sga.get_conventional_standard_structure()
         lattice = conventional.lattice
-        reduced, factor = conventional.composition.get_reduced_composition_and_factor()
+        _reduced, factor = conventional.composition.get_reduced_composition_and_factor()
         return CrystalInfo(
             formula=formula,
             n_atoms=n_atoms,

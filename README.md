@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/python-3.9%2B-blue" alt="Python 3.9+">
+  <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/GUI-PySide6-41cd52" alt="PySide6">
   <img src="https://img.shields.io/badge/3D-PyVista%2FVTK-orange" alt="PyVista">
   <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey" alt="Cross-platform">
@@ -77,8 +77,10 @@
   lattice parameters.
 
 **Import / export**
-- Open CRYSTAL `.out` / `.gui` / `.f34` files and `.cif` structures.
+- Open CRYSTAL `.out` / `.gui` / `.34` files and `.cif` structures.
 - Import atoms from `.xyz` / `.pdb` / `.cif` into the current structure.
+- Or drop any of them on the window: a structure file opens, an `.xyz`/`.pdb`
+  is imported into the structure already loaded.
 - Save the structure as `.gui` or `.cif` (symmetry-reduced).
 - Export the 3D view as an image (PNG/JPEG/TIFF/SVG/PDF/EPS) with resolution and
   transparency options.
@@ -111,30 +113,58 @@ Public releases of the code are distributed through Pypi.
 
 ### Requirements
 
+**Python 3.11 or newer.** The floor is set by the dependencies rather than by
+CRYSTALLine's own code: pymatgen requires 3.11+, and PySide6, pyvista and ase all
+require 3.10+.
+
+Expect around **1.3 GB** installed. Most of it is Qt and VTK (~800 MB between
+them, both irreducible for a 3D desktop app); the rest is the scientific stack
+pymatgen brings with it.
+
 The following will be installed if not already present:
 
-- PySide6 < 6.10 >=6.5
+- PySide6-Essentials >= 6.5 — the Qt modules the app uses, without the 847 MB of
+  PySide6-Addons (WebEngine, Multimedia, 3D, Charts…) that it doesn't
 - pyvista >= 0.43
-- pyvistaqt >= 0.11
+- pyvistaqt >= 0.11.4
 - numpy >= 1.23
 - ase >= 3.23
 - pymatgen >= 2023.11.10
 - CRYSTALClear >= 0.2.16
+- scipy >= 1.9, vtk >= 9.1, matplotlib >= 3.6, spglib >= 2.5, Pillow >= 9.0
 
 ### Steps
 
-1. Create a conda environment (suggested)
-   ```sh
-   conda create --name crystal python=3.12
-   ```
-2. Activate the environment (suggested)
-   ```sh
-   conda activate crystal
-   ```
-3. Install
-   ```sh
-   pip install CRYSTALLine
-   ```
+Install into an environment of its own rather than your system Python — around
+1.3 GB of Qt, VTK and the scientific stack arrives with it. Either kind of
+environment works; the only real difference is that conda can *supply* the
+Python version, where a venv uses whichever `python` you already have.
+
+**conda**
+
+```sh
+conda create --name crystal python=3.12
+conda activate crystal
+```
+
+**venv** — needs no extra tooling, but `python` must already be 3.11 or newer
+(check with `python -V`)
+
+```sh
+python -m venv ~/.venvs/crystal
+source ~/.venvs/crystal/bin/activate
+```
+
+On Windows the last line is `~\.venvs\crystal\Scripts\activate`.
+
+Any Python from 3.11 up will do, 3.14 included; 3.12 is what the project is
+released on.
+
+Then, either way:
+
+```sh
+pip install CRYSTALLine
+```
 
 ## Usage
 
@@ -142,8 +172,9 @@ The following will be installed if not already present:
 crystalline
 ```
 
-Use **File → Open** to load a CRYSTAL `.out`/`.gui`/`.34` file or a `.cif`. If a
-CRYSTAL output contains a vibrational calculation, the phonon modes are loaded
+Use **File → Open** to load a CRYSTAL `.out`/`.gui`/`.34` file or a `.cif` —
+or just drop one on the window, which says what it is about to do before you
+let go. If a CRYSTAL output contains a vibrational calculation, the phonon modes are loaded
 too — pick one in the **Phonons** panel and press **Play**. If the run sampled
 more than Γ (`DISPERSI`), choose the q-point above the mode list and press
 **Tile** to repeat the cell over one period of that wave — the same button turns

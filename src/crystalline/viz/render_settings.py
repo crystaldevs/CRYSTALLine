@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from typing import Tuple
 
 
+
 @dataclass(frozen=True)
 class RenderSettings:
     """How the structure is drawn. All fields have sensible ball-and-stick defaults."""

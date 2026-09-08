@@ -6,17 +6,11 @@ probability of finding the atom, it is the ellipsoid every published crystal
 structure carries — and the one quantity a calculation and a diffraction
 refinement can be compared on directly.
 
-Two coordinate conventions matter and are easy to confuse:
-
-* **cartesian** ``U`` — what CRYSTAL prints and what a renderer needs, since
-  the ellipsoid is drawn in real space;
-* **crystallographic** ``U_ij`` — what a CIF stores, defined through the
-  structure factor as ``T(h) = exp(-2 pi^2 sum_ij U_ij h_i h_j a*_i a*_j)``.
-
-They agree only for a cell whose axes are orthogonal and aligned with the
-cartesian frame, so for anything else the conversion in
-:func:`to_crystallographic` is not optional. ``U_eq``, being a trace, is the
-same in both.
+Tensors here are always **cartesian** — what CRYSTAL prints, and what a renderer
+needs since the ellipsoid is drawn in real space. A CIF's ``U_ij`` is a different
+convention (defined through the structure factor, and equal to the cartesian form
+only for an orthogonal cell aligned with the cartesian axes); nothing here writes
+CIFs, so no conversion between the two is provided.
 
 Qt- and PyVista-free, like the rest of ``core``.
 """
@@ -24,6 +18,7 @@ Qt- and PyVista-free, like the rest of ``core``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Tuple
 
 import numpy as np
@@ -71,12 +66,6 @@ class ADPSet:
             return np.empty((0, 3, 3))
         return self.tensors[int(np.clip(index, 0, len(self) - 1))]
 
-    def nearest(self, temperature: float) -> int:
-        """Index of the reported temperature closest to ``temperature`` (K)."""
-        if len(self) == 0:
-            return 0
-        return int(np.argmin(np.abs(self.temperatures - float(temperature))))
-
     def label(self, index: int) -> str:
         """``"300 K"`` for the temperature at ``index`` — for a picker."""
         if len(self) == 0:
@@ -85,62 +74,7 @@ class ADPSet:
         return f"{value:g} K"
 
 
-def to_crystallographic(u_cart: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """Cartesian ADP tensor(s) -> the ``U_ij`` a CIF stores.
-
-    ``cell`` holds the lattice vectors as **rows** (the ase/CRYSTALLine
-    convention). Accepts a single ``(3, 3)`` tensor or a stack of them, and
-    returns the same shape.
-
-    The derivation, once, so the transposes can be checked rather than trusted.
-    With ``A`` the matrix whose *columns* are the lattice vectors (so ``A =
-    cell.T``), a cartesian displacement is ``u = A f`` for fractional ``f``,
-    hence ``U_frac = A^-1 U A^-T``. Matching the CIF's exponent against
-    ``-1/2 Q^T U Q`` with ``Q = 2 pi A^-T h`` gives ``N U_ij N = U_frac`` where
-    ``N = diag(a*, b*, c*)``, so ``U_ij = N^-1 U_frac N^-1``. For an orthogonal
-    cell aligned with the cartesian axes every factor cancels and ``U_ij ==
-    U_cart``, which is the cheapest way to check an implementation.
-
-    A degenerate (non-invertible) cell has no fractional basis to convert into,
-    and raises.
-    """
-    cell = np.asarray(cell, dtype=float)
-    if cell.shape != (3, 3) or abs(np.linalg.det(cell)) < 1e-12:
-        raise ValueError("a non-degenerate 3x3 cell is required to convert ADPs")
-
-    inverse = np.linalg.inv(cell)          # columns are the reciprocal vectors
-    reciprocal_lengths = np.linalg.norm(inverse, axis=0)
-    # U_frac = A^-1 U A^-T with A = cell.T, i.e. inverse.T @ U @ inverse.
-    scale = np.outer(reciprocal_lengths, reciprocal_lengths)
-    return _apply(u_cart, lambda u: (inverse.T @ u @ inverse) / scale)
-
-
-def to_cartesian(u_ij: np.ndarray, cell: np.ndarray) -> np.ndarray:
-    """The inverse of :func:`to_crystallographic` — CIF ``U_ij`` -> cartesian.
-
-    Needed to draw the ellipsoids of a structure *read* from a CIF alongside
-    computed ones.
-    """
-    cell = np.asarray(cell, dtype=float)
-    if cell.shape != (3, 3) or abs(np.linalg.det(cell)) < 1e-12:
-        raise ValueError("a non-degenerate 3x3 cell is required to convert ADPs")
-
-    inverse = np.linalg.inv(cell)
-    reciprocal_lengths = np.linalg.norm(inverse, axis=0)
-    scale = np.outer(reciprocal_lengths, reciprocal_lengths)
-    return _apply(u_ij, lambda u: cell.T @ (u * scale) @ cell)
-
-
-def equivalent_isotropic(u_cart: np.ndarray) -> np.ndarray:
-    """``U_eq = trace(U)/3`` — the isotropic ADP equivalent to the tensor.
-
-    A trace, so it is the same whichever orthonormal frame ``U`` is written in,
-    and it is what a structure report quotes as a single number per atom.
-    """
-    u_cart = np.asarray(u_cart, dtype=float)
-    return np.trace(u_cart, axis1=-2, axis2=-1) / 3.0
-
-
+@lru_cache(maxsize=None)
 def probability_scale(probability: float = DEFAULT_PROBABILITY) -> float:
     """How far out to draw the ellipsoid to enclose ``probability``.
 
@@ -148,6 +82,17 @@ def probability_scale(probability: float = DEFAULT_PROBABILITY) -> float:
     ``u^T U^-1 u`` follows chi-squared with three degrees of freedom and the
     surface enclosing probability ``p`` sits at ``sqrt(chi2.ppf(p, 3))``. The
     crystallographic 50% gives 1.5382 — the number ORTEP and VESTA use.
+
+    Cached because the answer depends on nothing but ``probability``, while the
+    callers ask for it per *atom*: :func:`ellipsoid_axes` is called in a loop
+    over every atom that gets an ellipsoid, and each call was importing
+    ``scipy.stats`` and re-solving the quantile. That was 61 ms of the 87 ms a
+    1728-atom ellipsoid field cost to build — 70% of it, for one number. The
+    probability only ever comes from a settings field with a handful of
+    values, so the cache stays tiny.
+
+    An invalid probability raises rather than returning, and ``lru_cache`` does
+    not memoise exceptions, so a bad value is rejected every time it is passed.
     """
     from scipy.stats import chi2
 
@@ -220,24 +165,10 @@ def ellipsoid_radii(
     return probability_scale(probability) * np.sqrt(np.clip(eigenvalues, 0.0, None))
 
 
-def _apply(tensors: np.ndarray, transform) -> np.ndarray:
-    """Run ``transform`` over a single ``(3, 3)`` tensor or a stack of them."""
-    tensors = np.asarray(tensors, dtype=float)
-    if tensors.shape == (3, 3):
-        return transform(tensors)
-    if tensors.ndim < 2 or tensors.shape[-2:] != (3, 3):
-        raise ValueError(f"expected (..., 3, 3) tensors, got {tensors.shape}")
-    flat = tensors.reshape(-1, 3, 3)
-    return np.stack([transform(u) for u in flat]).reshape(tensors.shape)
-
-
 __all__ = [
     "ADPSet",
     "DEFAULT_PROBABILITY",
     "ellipsoid_axes",
     "ellipsoid_radii",
-    "equivalent_isotropic",
     "probability_scale",
-    "to_cartesian",
-    "to_crystallographic",
 ]

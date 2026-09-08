@@ -20,9 +20,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -32,6 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crystalline.ui.panels.controls import Section, range_row, slider_row
 from crystalline.crystalio.spectra import (
     BROADENING_PARAMETERS,
     DEFAULT_ETA,
@@ -70,64 +68,48 @@ class SpectraDialog(QDialog):
         buttons_row.addStretch(1)
         layout.addLayout(buttons_row)
 
-        shape_box = QGroupBox("Broadening", self)
-        form = QFormLayout(shape_box)
+        broadening = Section(layout, "Broadening")
         self.lineshape = QComboBox(self)
         for label, name in LINESHAPES:
             self.lineshape.addItem(label, name)
         self.lineshape.currentIndexChanged.connect(self._sync_broadening)
-        form.addRow("Lineshape", self.lineshape)
+        broadening.add("Lineshape", self.lineshape)
 
         # One control per parameter rather than a single relabelled "width":
         # a pseudo-Voigt is eta*Lorentzian(HWHM) + (1-eta)*Gaussian(sigma), so
         # its two widths are independent and both have to be reachable.
-        self.hwhm = QDoubleSpinBox(self)
-        self.hwhm.setRange(0.1, 200.0)
-        self.hwhm.setSingleStep(1.0)
-        self.hwhm.setDecimals(1)
-        self.hwhm.setValue(DEFAULT_HWHM)
-        self.hwhm.setToolTip("Half-width at half-maximum of the Lorentzian profile.")
-
-        self.stdev = QDoubleSpinBox(self)
-        self.stdev.setRange(0.1, 200.0)
-        self.stdev.setSingleStep(1.0)
-        self.stdev.setDecimals(1)
-        self.stdev.setValue(DEFAULT_STDEV)
-        self.stdev.setToolTip("Standard deviation of the Gaussian profile.")
-
-        self.eta = QDoubleSpinBox(self)
-        self.eta.setRange(0.0, 1.0)
-        self.eta.setSingleStep(0.05)
-        self.eta.setDecimals(2)
-        self.eta.setValue(DEFAULT_ETA)
-        self.eta.setToolTip(
-            "Lorentzian fraction of the pseudo-Voigt mixture:\n"
-            "1.00 is pure Lorentzian, 0.00 is pure Gaussian."
-        )
-
+        # One control per parameter rather than a single relabelled "width":
+        # a pseudo-Voigt is eta*Lorentzian(HWHM) + (1-eta)*Gaussian(sigma), so
+        # its two widths are independent and both have to be reachable.
+        #
+        # Widths are logarithmic: a broadening is judged by ratio, and on a
+        # linear 0.1-200 scale every value anyone uses is squeezed into the first
+        # few pixels. The mixing fraction is a plain fraction, so it stays linear.
         self._rows = {}
-        for name, widget, caption in (
-            ("hwhm", self.hwhm, "Lorentzian HWHM (cm⁻¹)"),
-            ("stdev", self.stdev, "Gaussian std. dev. (cm⁻¹)"),
-            ("eta", self.eta, "Mixing η (Lorentzian fraction)"),
+        for name, caption, value, low, high, step, decimals, log, tip in (
+            ("hwhm", "Lorentzian HWHM (cm⁻¹)", DEFAULT_HWHM, 0.1, 200.0, 1.0, 1, True,
+             "Half-width at half-maximum of the Lorentzian profile."),
+            ("stdev", "Gaussian std. dev. (cm⁻¹)", DEFAULT_STDEV, 0.1, 200.0, 1.0, 1, True,
+             "Standard deviation of the Gaussian profile."),
+            ("eta", "Mixing η (Lorentzian fraction)", DEFAULT_ETA, 0.0, 1.0, 0.05, 2, False,
+             "Lorentzian fraction of the pseudo-Voigt mixture:\n"
+             "1.00 is pure Lorentzian, 0.00 is pure Gaussian."),
         ):
-            label = QLabel(caption, self)
-            form.addRow(label, widget)
-            self._rows[name] = (label, widget)
-        layout.addWidget(shape_box)
+            box = slider_row(
+                broadening, caption, value, low, high, step,
+                decimals=decimals, logarithmic=log,
+            )
+            box.setToolTip(tip)
+            setattr(self, name, box)
+            self._rows[name] = broadening.row_widgets(caption)
 
-        range_box = QGroupBox("Frequency range", self)
-        range_form = QFormLayout(range_box)
-        self.fmin = QDoubleSpinBox(self)
-        self.fmax = QDoubleSpinBox(self)
-        for spin, value in ((self.fmin, 0.0), (self.fmax, 4000.0)):
-            spin.setRange(-1000.0, 100000.0)
-            spin.setDecimals(0)
-            spin.setSingleStep(100.0)
-            spin.setValue(value)
-        range_form.addRow("From (cm⁻¹)", self.fmin)
-        range_form.addRow("To (cm⁻¹)", self.fmax)
-        layout.addWidget(range_box)
+        # One track with two handles, rather than a "from" and a "to" that know
+        # nothing about each other: the span is the thing being chosen, and this
+        # shows how much of the spectrum it covers.
+        span = Section(layout, "Frequency range")
+        _slider, self.fmin, self.fmax = range_row(
+            span, "Range (cm⁻¹)", 0.0, 4000.0, 0.0, 5000.0, decimals=0, step=100.0,
+        )
 
         self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self._buttons.accepted.connect(self.accept)

@@ -5,8 +5,9 @@ Docked beside Info and Display. Two halves:
 * **Measure** — turn the current 3D selection into a distance (2 atoms), angle
   (3), dihedral (4) or least-squares plane (3+), keep a list of them, and draw
   the ones that are ticked over the structure as points/lines/planes.
-* **Atoms** — add, delete, duplicate, re-element and translate the selection
-  without going to the Edit menu. These mirror the Edit-menu actions and are
+* **Atoms** — add, delete, duplicate, re-element, translate the selection and
+  place a single atom at typed cartesian coordinates, without going to the Edit
+  menu. These mirror the Edit-menu actions and are
   gated the same way: they need **Editing mode**, which is exposed here as a
   checkbox so it is obvious (and one click away) why a button is greyed out.
 
@@ -20,18 +21,21 @@ from __future__ import annotations
 import dataclasses
 from typing import List, Optional, Sequence
 
+import numpy as np
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +45,20 @@ from crystalline.core.structure import Structure
 
 # Same starter palette the (hidden) structure panel used; free text is allowed.
 _ELEMENTS = ["H", "C", "N", "O", "F", "Si", "P", "S", "Cl", "Na", "Mg", "Al", "Ca", "Ti", "Fe"]
+# Range of the position boxes. Fractional coordinates sit in [0, 1) for a plain
+# cell and a little outside it for the images boundary completion adds, but the
+# aperiodic axis of a slab is shown in Å against CRYSTAL's formal 500 Å vector,
+# so the range has to cover that too.
+_COORD_RANGE = 1000.0
+# Spinner step: a hundredth of a cell edge, or a tenth of an Ångström.
+_FRACTIONAL_STEP = 0.01
+_ANGSTROM_STEP = 0.1
+# Below this (Å) a typed coordinate counts as unchanged, so tabbing out of a box
+# without editing it does not record an undo step for a move of nothing.
+_COORD_EPS = 1e-9
+# How far a coordinate box may be squeezed (px). Their *preferred* width is
+# ignored entirely — see the size policy in _build_atoms_group.
+_COORD_BOX_MIN_WIDTH = 56
 
 
 class GeometryPanel(QWidget):
@@ -53,6 +71,7 @@ class GeometryPanel(QWidget):
     duplicate_requested = Signal()
     translate_requested = Signal()
     set_element_requested = Signal(str)   # element symbol
+    set_position_requested = Signal(object)  # cartesian (x, y, z) in Å for the one selected atom
     # the measurements that should be drawn in 3D (possibly empty)
     annotations_changed = Signal(list)
 
@@ -138,9 +157,12 @@ class GeometryPanel(QWidget):
         self._element.setCurrentText("C")
         self._element.setEditable(True)  # any symbol, e.g. "Zr"
         row.addWidget(self._element, 1)
-        self._table_btn = QPushButton("⊞")
+        # A drawn glyph rather than the "⊞" box-drawing character, whose shape and
+        # weight are whatever font the platform happens to resolve it in.
+        self._table_btn = QPushButton()
+        self._table_btn.setIcon(_table_icon())
         self._table_btn.setToolTip("Pick an element from the periodic table")
-        self._table_btn.setFixedWidth(32)
+        self._table_btn.setFixedWidth(34)
         self._table_btn.clicked.connect(self._pick_from_periodic_table)
         row.addWidget(self._table_btn)
         self._add_btn = QPushButton("Add")
@@ -169,7 +191,147 @@ class GeometryPanel(QWidget):
         self._translate_btn.clicked.connect(self.translate_requested)
         row.addWidget(self._translate_btn)
         box.addLayout(row)
+
+        # ── exact position of a single atom ─────────────────────────────
+        # Dragging is quick but never exact; a structure is usually specified by
+        # coordinates, so one atom at a time can be placed by typing them.
+        # ── exact position of a single atom ─────────────────────────────
+        # Dragging is quick but never exact; a structure is usually specified by
+        # coordinates, so one atom at a time can be placed by typing them.
+        self._coord_label = QLabel()
+        box.addWidget(self._coord_label)
+        row = QHBoxLayout()
+        self._coord_boxes = []
+        for axis in ("x", "y", "z"):
+            spin = QDoubleSpinBox()
+            spin.setRange(-_COORD_RANGE, _COORD_RANGE)
+            spin.setDecimals(4)
+            spin.setPrefix(f"{axis} ")
+            # A box wide enough for "-1000.0000" would add ~110px each to the
+            # panel's preferred width, and a dock takes its width from that — three
+            # of them pushed this dock wider than the 3D view beside it. Ignoring
+            # the preferred width lets them simply share the row and shrink with
+            # the dock, down to _COORD_BOX_MIN_WIDTH.
+            spin.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+            spin.setMinimumWidth(_COORD_BOX_MIN_WIDTH)
+            # Applied as soon as the value is committed — Enter, tabbing out, or a
+            # click on the spinner. Keyboard tracking stays off so that *typing*
+            # "0.25" commits once, rather than moving the atom to 0, then 0.2,
+            # then 0.25: three edits, three undo steps, three redraws.
+            spin.setKeyboardTracking(False)
+            spin.valueChanged.connect(self._emit_position)
+            row.addWidget(spin, 1)
+            self._coord_boxes.append(spin)
+        box.addLayout(row)
         return group
+
+    # ── coordinate frame ────────────────────────────────────────────────
+    def _lattice(self):
+        """``(cell, periodic)`` for the shown structure, or ``None`` without a cell.
+
+        ``None`` means a molecule: there is no lattice for a fraction to be of,
+        so the boxes fall back to plain Ångström.
+        """
+        cell = np.asarray(self._structure.cell, dtype=float)
+        if cell.shape != (3, 3) or abs(np.linalg.det(cell)) < 1e-8:
+            return None
+        return cell, np.asarray(self._structure.pbc, dtype=bool)
+
+    def _to_display(self, position):
+        """Cartesian position → the three numbers the boxes show.
+
+        Fractional along each *periodic* lattice vector, Ångström along an
+        aperiodic one — the convention CRYSTAL itself uses for slabs and polymers
+        (and that this app's deck writer already follows), because a fraction of
+        the formal 500 Å vacuum vector is not a coordinate anyone can read.
+        """
+        frame = self._lattice()
+        if frame is None:
+            return [float(v) for v in position]
+        cell, periodic = frame
+        fractional = np.asarray(position, dtype=float) @ np.linalg.inv(cell)
+        return [
+            float(fractional[k]) if periodic[k]
+            else float(fractional[k] * np.linalg.norm(cell[k]))
+            for k in range(3)
+        ]
+
+    def _from_display(self, values):
+        """The inverse of :meth:`_to_display` — box values → a cartesian position."""
+        frame = self._lattice()
+        if frame is None:
+            return np.asarray(values, dtype=float)
+        cell, periodic = frame
+        fractional = np.asarray(
+            [
+                values[k] if periodic[k]
+                else values[k] / float(np.linalg.norm(cell[k]))
+                for k in range(3)
+            ],
+            dtype=float,
+        )
+        return fractional @ cell
+
+    def _current_position(self):
+        """The selected atom's position, or ``None`` unless exactly one is selected."""
+        if len(self._selection) != 1:
+            return None
+        index = self._selection[0]
+        if not 0 <= index < len(self._structure):
+            return None
+        return self._structure.positions[index]
+
+    def sync_position(self) -> None:
+        """Show the selected atom's coordinates, in the frame that suits the cell.
+
+        Called on every selection change *and* on every structure change, so the
+        boxes still read true after the atom is dragged, nudged or undone —
+        otherwise they would keep offering a stale position to move back to.
+
+        Signals are blocked while filling: these boxes apply on ``valueChanged``,
+        and writing the atom's own position back into them must not be mistaken
+        for the user asking to move it there again.
+        """
+        frame = self._lattice()
+        if frame is None:
+            self._coord_label.setText("Position of the selected atom (Å)")
+        elif bool(np.all(frame[1])):
+            self._coord_label.setText("Position of the selected atom (fractional)")
+        else:
+            # A slab or polymer: fractional along the periodic axes, Å along the
+            # vacuum one. Naming both keeps the mixed row honest.
+            self._coord_label.setText("Position of the selected atom (fractional / Å)")
+
+        position = self._current_position()
+        shown = [0.0, 0.0, 0.0] if position is None else self._to_display(position)
+        periodic = (True, True, True) if frame is None else frame[1]
+        for k, spin in enumerate(self._coord_boxes):
+            blocked = spin.blockSignals(True)  # programmatic fill is not an edit
+            step = _FRACTIONAL_STEP if (frame is not None and periodic[k]) else _ANGSTROM_STEP
+            spin.setSingleStep(step)
+            spin.setValue(shown[k])
+            spin.blockSignals(blocked)
+        self._sync_buttons()
+
+    def _emit_position(self, _value: float = 0.0) -> None:
+        """Ask for the selected atom to be placed at the coordinates now shown.
+
+        Silent when nothing would change: a box also commits on focus loss, so
+        merely clicking away from an untouched one must not record an undo step
+        for a move of nothing.
+        """
+        position = self._current_position()
+        if position is None or not self._editing:
+            return
+        typed = [spin.value() for spin in self._coord_boxes]
+        if all(
+            abs(typed[k] - shown) < _COORD_EPS
+            for k, shown in enumerate(self._to_display(position))
+        ):
+            return
+        self.set_position_requested.emit(
+            [float(v) for v in self._from_display(typed)]
+        )
 
     def _pick_from_periodic_table(self) -> None:
         """Open the visual periodic table and load the chosen element into the box."""
@@ -180,18 +342,22 @@ class GeometryPanel(QWidget):
             self._element.setCurrentText(symbol)
 
     # ── external hooks ──────────────────────────────────────────────────
+    def refresh_theme_icons(self) -> None:
+        """Redraw the periodic-table glyph after a theme change."""
+        self._table_btn.setIcon(_table_icon())
+
     def set_structure(self, structure: Structure) -> None:
         """Rebind after a load or a view change; measurements no longer apply."""
         self._structure = structure
         self._selection = []
         self.clear_measurements()
-        self._sync_buttons()
+        self.sync_position()  # also calls _sync_buttons
 
     def set_selection(self, indices: Sequence[int]) -> None:
         """Track the shared selection (driven by 3D picking)."""
         self._selection = [int(i) for i in indices]
         self._hint.setText(measure_mod.selection_hint(len(self._selection)))
-        self._sync_buttons()
+        self.sync_position()  # also calls _sync_buttons
 
     def set_editing_enabled(self, enabled: bool) -> None:
         """Reflect the Edit menu's editing mode without re-emitting it."""
@@ -294,6 +460,22 @@ class GeometryPanel(QWidget):
         for button in (self._delete_btn, self._duplicate_btn,
                        self._translate_btn, self._set_element_btn):
             button.setEnabled(on_selection)
+
+        # A typed position names one atom, so it needs exactly one selected —
+        # with several, there is no single thing the coordinates could mean.
+        one_atom = self._editing and count == 1
+        for spin in self._coord_boxes:
+            spin.setEnabled(one_atom)
+
+
+def _table_icon() -> QIcon:
+    """The periodic-table glyph, in the current theme's text colour."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    palette = theme.active_palette(QApplication.instance())
+    return theme.monochrome_icon("table.svg", palette.text)
 
 
 def _colour_swatch(color: str, size: int = 12) -> QIcon:

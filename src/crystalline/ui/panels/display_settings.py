@@ -22,8 +22,6 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
-    QFormLayout,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -34,6 +32,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crystalline.ui.panels.controls import (
+    VALUE_WIDTH as _VALUE_WIDTH,
+    Section as _Section,
+    left as _left,
+)
 from crystalline.viz.render_settings import RenderSettings
 
 
@@ -52,6 +55,10 @@ _ADP_PROBABILITIES = (0.50, 0.75, 0.90, 0.99)
 # once per click, so waiting would add latency for nothing; they emit
 # immediately, flushing any pending tick first so changes never arrive reordered.
 _SLIDER_SETTLE_MS = 60
+
+
+# A colour disc: large enough to judge the colour, small enough to sit in a row.
+_SWATCH_SIZE = 20
 
 
 def _closest_index(values, target: float) -> int:
@@ -98,6 +105,8 @@ class DisplayPanel(QWidget):
         # Per-element colour overrides {Z: "#rrggbb"} and their swatch buttons.
         self._atom_colors: dict = {int(z): c for z, c in settings.atom_colors}
         self._elem_buttons: dict = {}
+        self._elem_rows: list = []  # grid rows the swatches occupy, cleared per structure
+        self._color_buttons: dict = {}  # attribute name -> its swatch, for external sets
 
         # A scroll area keeps the (deliberately generous) set of controls usable
         # even in a short dock.
@@ -106,13 +115,16 @@ class DisplayPanel(QWidget):
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        # A settings panel scrolls one way. Sideways it would hide the controls
+        # it is meant to present; the rows compress instead.
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         outer.addWidget(scroll)
 
         body = QWidget()
         scroll.setWidget(body)
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 4, 14, 18)
+        layout.setSpacing(0)  # sections space themselves, so the rhythm is theirs
 
         # ── Atoms ──
         atoms = self._group(layout, "Atoms")
@@ -122,18 +134,16 @@ class DisplayPanel(QWidget):
         self._label_size = self._int_row(atoms, "Label size", settings.atom_label_size, 6, 40)
 
         # ── Element colours (per-element swatches; populated per structure) ──
-        elem_group = QGroupBox("Element colours")
-        elem_outer = QVBoxLayout(elem_group)
-        self._elem_form = QFormLayout()
-        self._elem_form.setLabelAlignment(Qt.AlignRight)
-        elem_outer.addLayout(self._elem_form)
+        elements = self._group(layout, "Element colours", collapsed=True)
+        self._elem_grid = elements.grid
+        self._elem_section = elements
+        self._elem_first_row = elements._row
         self._elem_hint = QLabel("Load a structure to recolour its elements.")
         self._elem_hint.setEnabled(False)
-        elem_outer.addWidget(self._elem_hint)
+        elements.append(self._elem_hint)
         reset_btn = QPushButton("Reset to default colours")
         reset_btn.clicked.connect(self._reset_element_colors)
-        elem_outer.addWidget(reset_btn)
-        layout.addWidget(elem_group)
+        elements.append(_left(reset_btn))
 
         # ── Bonds ──
         bonds = self._group(layout, "Bonds")
@@ -151,13 +161,13 @@ class DisplayPanel(QWidget):
         self._show_orient = self._check(cell, "Orientation marker", settings.show_orientation_axes)
 
         # ── Polyhedra ──
-        poly = self._group(layout, "Coordination polyhedra")
+        poly = self._group(layout, "Coordination polyhedra", collapsed=True)
         self._show_poly = self._check(poly, "Show polyhedra", settings.show_polyhedra)
         self._poly_opacity = self._float_row(poly, "Opacity", settings.polyhedra_opacity, 0.05, 1.0, 0.05)
         self._poly_min = self._int_row(poly, "Min. coordination", settings.polyhedra_min_vertices, 3, 12)
 
         # ── Thermal ellipsoids ── (ADP; only meaningful for a run that has them)
-        adp = self._group(layout, "Thermal ellipsoids (ADP)")
+        adp = self._group(layout, "Thermal ellipsoids (ADP)", collapsed=True)
         self._show_adp = self._check(adp, "Show ellipsoids", settings.show_adp_ellipsoids)
         self._adp_temp = self._combo(adp, "Temperature", [], 0)
         self._adp_probability = self._combo(
@@ -174,7 +184,7 @@ class DisplayPanel(QWidget):
         self.set_adp_temperatures([])  # nothing loaded yet
 
         # ── Phonon arrows ── (the selected mode's eigenvector, drawn on the atoms)
-        arrows = self._group(layout, "Phonon displacement arrows")
+        arrows = self._group(layout, "Phonon displacement arrows", collapsed=True)
         self._show_arrows = self._check(arrows, "Show arrows", settings.show_mode_arrows)
         self._arrow_scale = self._float_row(
             arrows, "Arrow length (Å)", settings.mode_arrow_scale, 0.2, 5.0, 0.1
@@ -197,29 +207,23 @@ class DisplayPanel(QWidget):
             "a travelling wave, whose amplitude is the same in every one.\n"
             "Replaces the colour below; nothing to show at Γ."
         )
-        self._arrow_color_btn = self._color_row(arrows, "Colour", "_mode_arrow_color")
+        self._color_row(arrows, "Colour", "_mode_arrow_color")
 
         # ── Measurements ── (Geometry panel overlays: dots, paths, plane patches)
-        measure = self._group(layout, "Measurements")
-        self._measure_point_btn = self._color_row(measure, "Dots", "_measure_point_color")
-        self._measure_line_btn = self._color_row(measure, "Lines", "_measure_line_color")
-        self._measure_plane_btn = self._color_row(measure, "Planes", "_measure_plane_color")
+        measure = self._group(layout, "Measurements", collapsed=True)
+        self._color_row(measure, "Dots", "_measure_point_color")
+        self._color_row(measure, "Lines", "_measure_line_color")
+        self._color_row(measure, "Planes", "_measure_plane_color")
 
         # ── Point symmetry ── (Point symmetry panel overlays: axes, planes, centre)
-        symmetry = self._group(layout, "Point symmetry")
-        self._symmetry_axis_btn = self._color_row(
-            symmetry, "Rotation axes", "_symmetry_axis_color"
-        )
-        self._symmetry_plane_btn = self._color_row(
-            symmetry, "Mirror planes", "_symmetry_plane_color"
-        )
-        self._symmetry_point_btn = self._color_row(
-            symmetry, "Inversion centre", "_symmetry_point_color"
-        )
+        symmetry = self._group(layout, "Point symmetry", collapsed=True)
+        self._color_row(symmetry, "Rotation axes", "_symmetry_axis_color")
+        self._color_row(symmetry, "Mirror planes", "_symmetry_plane_color")
+        self._color_row(symmetry, "Inversion centre", "_symmetry_point_color")
 
         # ── Scene ──
-        scene = self._group(layout, "Scene")
-        self._bg_color_btn = self._color_row(scene, "Background", "_bg_color")
+        scene = self._group(layout, "Scene", collapsed=True)
+        self._color_row(scene, "Background", "_bg_color")
         self._projection = self._combo(
             scene, "Projection", ["Perspective", "Parallel (orthographic)"],
             1 if settings.parallel_projection else 0,
@@ -229,12 +233,8 @@ class DisplayPanel(QWidget):
         self._loading = False
 
     # ── section + widget builders (each wired to emit on change) ────────
-    def _group(self, layout: QVBoxLayout, title: str) -> QFormLayout:
-        box = QGroupBox(title)
-        form = QFormLayout(box)
-        form.setLabelAlignment(Qt.AlignRight)
-        layout.addWidget(box)
-        return form
+    def _group(self, layout: QVBoxLayout, title: str, collapsed: bool = False) -> _Section:
+        return _Section(layout, title, collapsed=collapsed)
 
     def _float_row(self, form, label, value, lo, hi, step) -> QDoubleSpinBox:
         """A slider + spin box bound together over ``[lo, hi]``."""
@@ -275,12 +275,14 @@ class DisplayPanel(QWidget):
         box.valueChanged.connect(on_box)
         slider.valueChanged.connect(on_slider)
 
+        box.setFixedWidth(_VALUE_WIDTH)
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
         h.addWidget(slider, 1)
-        h.addWidget(box)
-        form.addRow(label, row)
+        h.addWidget(box, 0)
+        form.add(label, row)
         return box
 
     def _int_row(self, form, label, value, lo, hi) -> QSpinBox:
@@ -289,15 +291,23 @@ class DisplayPanel(QWidget):
         box = QSpinBox()
         box.setRange(lo, hi)
         box.setValue(value)
+        box.setFixedWidth(_VALUE_WIDTH)
         box.valueChanged.connect(self._emit_soon)
-        form.addRow(label, box)
+        form.add(label, _left(box))
         return box
 
     def _check(self, form, label, value) -> QCheckBox:
-        box = QCheckBox()
+        """A checkbox carrying its own text, spanning the row.
+
+        The label used to sit in the form's label column with a bare box after
+        it, which put every tick at a different x. A checkbox reads as one thing;
+        splitting it across two columns was what made a column of them look
+        scattered.
+        """
+        box = QCheckBox(label)
         box.setChecked(value)
         box.toggled.connect(self._emit)
-        form.addRow(label, box)
+        form.add_wide(box)
         return box
 
     def _combo(self, form, label, items, index) -> QComboBox:
@@ -305,16 +315,16 @@ class DisplayPanel(QWidget):
         box.addItems(items)
         box.setCurrentIndex(index)
         box.currentIndexChanged.connect(self._emit)
-        form.addRow(label, box)
+        form.add(label, box)
         return box
 
     def _color_row(self, form, label, attr: str) -> QPushButton:
         """A swatch button that opens the colour picker; writes to ``self.<attr>``."""
         button = QPushButton()
-        button.setFixedWidth(64)
         self._paint_swatch(button, getattr(self, attr))
         button.clicked.connect(lambda: self._pick_color(button, attr))
-        form.addRow(label, button)
+        self._color_buttons[attr] = button
+        form.add(label, _left(button))
         return button
 
     def _pick_color(self, button: QPushButton, attr: str) -> None:
@@ -327,11 +337,43 @@ class DisplayPanel(QWidget):
 
     @staticmethod
     def _paint_swatch(button: QPushButton, color: str) -> None:
-        button.setText(color)
-        # A readable text colour on top of the swatch (dark text on light fills).
-        c = QColor(color)
-        text = "#000000" if c.lightnessF() > 0.5 else "#ffffff"
-        button.setStyleSheet(f"background-color: {color}; color: {text}; padding: 3px;")
+        """Paint a colour chip: the colour itself, and nothing written on it.
+
+        It used to be a filled rectangle with the hex code printed across it in
+        whichever of black or white contrasted better. That put a string nobody
+        reads on top of the one thing the control is for — and at swatch size the
+        text crowded the colour out entirely. The row's own label already says
+        what the colour is *for*, so the chip only has to show the colour; the
+        hex moves to the tooltip, where it is available without being in the way.
+
+        The border is a translucent black so it reads as an edge on a pale fill
+        and disappears into a dark one, rather than being a fixed grey that
+        stands out against half the colours it has to frame.
+        """
+        button.setText("")
+        button.setToolTip(f"{color} — click to change")
+        button.setFixedSize(_SWATCH_SIZE, _SWATCH_SIZE)
+        button.setCursor(Qt.PointingHandCursor)
+        highlight = QColor(color).lighter(112).name()
+        # A disc, not a rectangle. A colour rectangle in a form column reads as
+        # another field — a filled input someone might type into — and a row of
+        # them looks like a table of swatches rather than a set of choices. A
+        # disc reads as a colour, and for the per-element rows it reads as the
+        # atom it paints. The ring is translucent black so it holds an edge on a
+        # pale fill and disappears into a dark one.
+        button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {color};
+                border: 1px solid rgba(0, 0, 0, 0.30);
+                border-radius: {_SWATCH_SIZE // 2}px;
+                padding: 0;
+                margin: 0;
+            }}
+            QPushButton:hover {{
+                background-color: {highlight};
+                border: 2px solid rgba(0, 0, 0, 0.55);
+            }}
+        """)
 
     # ── thermal ellipsoids (rebuilt for each file's temperatures) ───────
     def set_adp_temperatures(self, labels, autoshow: bool = False) -> None:
@@ -362,11 +404,7 @@ class DisplayPanel(QWidget):
         self._loading = was_loading
 
         available = bool(labels)
-        for row in range(self._adp_group.rowCount()):
-            for role in (QFormLayout.LabelRole, QFormLayout.FieldRole):
-                item = self._adp_group.itemAt(row, role)
-                if item is not None and item.widget() is not None:
-                    item.widget().setEnabled(available)
+        self._adp_group.set_enabled(available)
         self._show_adp.setToolTip(
             "" if available else "This output has no ADP data (needs the ADP keyword)"
         )
@@ -377,21 +415,49 @@ class DisplayPanel(QWidget):
         elif available and autoshow and not self._show_adp.isChecked():
             self._show_adp.setChecked(True)
 
+    def set_background(self, color: str) -> None:
+        """Set the 3D ground from outside the panel, and show it in the swatch.
+
+        Used when the app theme changes: a dark chrome around a white viewport
+        looks like a bug rather than a choice. Emits, so the change reaches the
+        renderer by the same route as a click on the swatch would.
+        """
+        if color == self._bg_color:
+            return
+        self._bg_color = color
+        button = self._color_buttons.get("_bg_color")
+        if button is not None:
+            self._paint_swatch(button, color)
+        self._emit()
+
+    def background(self) -> str:
+        """The 3D ground currently set."""
+        return self._bg_color
+
     # ── per-element colours (rebuilt for each structure's elements) ─────
     def set_elements(self, numbers) -> None:
         """Show a colour swatch per distinct element in the current structure."""
         zs = sorted({int(z) for z in numbers})
-        while self._elem_form.rowCount():
-            self._elem_form.removeRow(0)
+        for row in self._elem_rows:
+            for column in range(2):
+                item = self._elem_grid.itemAtPosition(row, column)
+                if item is not None and item.widget() is not None:
+                    item.widget().setParent(None)
+        self._elem_rows = []
         self._elem_buttons = {}
         self._elem_hint.setVisible(not zs)
+        # Appended below the hint and the reset button, which keep their rows.
+        row = self._elem_first_row
         for z in zs:
             button = QPushButton()
-            button.setFixedWidth(64)
             self._paint_swatch(button, self._atom_colors.get(z, _jmol_hex(z)))
             button.clicked.connect(lambda _c=False, zz=z, b=button: self._pick_element_color(zz, b))
             self._elem_buttons[z] = button
-            self._elem_form.addRow(chemical_symbols[z], button)
+            caption = QLabel(chemical_symbols[z])
+            self._elem_grid.addWidget(caption, row, 0, Qt.AlignLeft | Qt.AlignVCenter)
+            self._elem_grid.addWidget(_left(button), row, 1)
+            self._elem_rows.append(row)
+            row += 1
 
     def _pick_element_color(self, z: int, button: QPushButton) -> None:
         current = QColor(self._atom_colors.get(z, _jmol_hex(z)))

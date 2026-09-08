@@ -149,6 +149,21 @@ _MIN_ARROW_FRACTION = 0.05
 # discrete phases apart at a glance, and hsv does that.
 _PHASE_COLORMAP = "hsv"
 
+# Crystalline-orbital isosurface. The two lobes are the two signs of the
+# amplitude — the phase is the whole point of showing an orbital rather than a
+# density — in the red/blue every textbook and VESTA use. A modulus field has
+# only one sign, and gets the positive colour alone.
+_ORBITAL_POSITIVE_COLOR = "#d6453c"
+_ORBITAL_NEGATIVE_COLOR = "#3f6fd8"
+_ORBITAL_OPACITY = 0.85
+# Where the surface is cut, relative to the orbital's strongest point rather than
+# as an absolute amplitude: a crystalline orbital is spread over a whole cell, so
+# the ~0.02 a.u. that suits a compact molecular orbital encloses nearly the
+# entire box here. The dialog exposes it because the right value depends on how
+# delocalised the orbital is.
+DEFAULT_ORBITAL_ISOVALUE = 0.2
+
+
 # An ADP ellipsoid whose longest semi-axis is below this (Angstrom) is too
 # small to read on screen; that atom keeps its ordinary sphere instead of
 # turning into an invisible speck.
@@ -172,7 +187,10 @@ _APPEARANCE_ONLY_SETTINGS = frozenset({
     "mode_arrow_color",
     "background_color",
     "parallel_projection",
+    # Both markers live in the corner widget, which _apply_scene_settings
+    # updates — no actor and no geometry depends on either.
     "show_orientation_axes",
+    "show_lattice_vectors",
 })
 
 
@@ -271,6 +289,10 @@ class StructureRenderer:
         # Screen-space a/b/c gizmo. Outlives plotter.clear(), unlike an actor,
         # so it is created once and its marker swapped on each rebuild.
         self._orientation_widget = None
+        # Crystalline-orbital isosurface: one actor per sign, kept so they can be
+        # cleared without disturbing the rest of the scene.
+        self._orbital_actors: list = []
+        self._orbital_field = None
 
     # ── public API ──────────────────────────────────────────────────────
     @property
@@ -555,13 +577,31 @@ class StructureRenderer:
                 self.plotter.disable_parallel_projection()
         except Exception:  # noqa: BLE001
             pass
-        try:
-            if settings.show_orientation_axes:
-                self.plotter.add_axes()
-            else:
-                self.plotter.hide_axes()
-        except Exception:  # noqa: BLE001
-            pass
+        self._update_orientation_marker()
+
+    def _update_orientation_marker(self) -> None:
+        """Put the right marker in the one corner widget — or empty it.
+
+        A VTK renderer has a *single* orientation-marker widget, so the a/b/c
+        gizmo and the stock xyz marker are two candidates for one slot. Both are
+        decided here and shown through our own widget, and nothing else may
+        touch it. In particular ``plotter.add_axes()`` must not be called: it
+        builds a *second* widget and, on the way, shrinks the one it replaces to
+        a 0.0001-wide viewport before forgetting it. Turning the gizmo off and
+        on again therefore re-enabled that discarded widget — the gizmo came
+        back in a corner too small to see, with the xyz marker still drawn
+        underneath it.
+
+        The lattice gizmo wins when it is on: it says everything the xyz marker
+        does, and says it about the actual cell. When it has nothing to draw —
+        a molecule, or a structure with no lattice — the xyz marker takes the
+        corner instead, so asking for an orientation marker always gets one.
+        """
+        settings = self._settings
+        marker = self._lattice_marker() if settings.show_lattice_vectors else None
+        if marker is None and settings.show_orientation_axes:
+            marker = pv.create_axes_marker()
+        self._set_orientation_widget(marker)
 
     def _rebuild(self) -> None:
         # Preserve the current view across the rebuild. clear() drops pyvista's
@@ -597,6 +637,7 @@ class StructureRenderer:
         self._adp_mesh_obj = None
         self._adp_follow = None
         self._ellipsoid_mask = None  # settings/geometry may have changed under it
+        self._orbital_actors = []     # likewise: _draw_orbital re-adds them below
         self._annotation_actors = []  # plotter.clear() dropped them; _draw_annotations re-adds
         self._symmetry_actors = []    # likewise: _draw_symmetry_elements re-adds them
         self._highlight_actors = {}
@@ -626,11 +667,10 @@ class StructureRenderer:
             self._draw_polyhedra()
         if settings.show_cell:
             self._draw_cell()
-        if settings.show_lattice_vectors:
-            self._draw_lattice_vectors()
         if settings.show_atom_labels:
             self._draw_atom_labels()
         self._draw_mode_arrows()  # the selected mode's eigenvector, if one is set
+        self._draw_orbital()      # and so does a shown orbital
         self._draw_annotations()  # measurements survive a rebuild (plotter.clear())
         self._draw_symmetry_elements()  # and so do the shown symmetry elements
         self._restore_camera(saved_camera)
@@ -1120,6 +1160,114 @@ class StructureRenderer:
             _draw_over_scene(actor)
         self._symmetry_actors.append(actor)
 
+    # ── crystalline orbital (isosurface) ────────────────────────────────
+    def set_orbital(self, field, isovalue: float = DEFAULT_ORBITAL_ISOVALUE) -> None:
+        """Draw a crystalline orbital as a two-lobed isosurface (``None`` clears).
+
+        ``field`` is a :class:`~crystalline.core.orbitals.OrbitalField`.
+        ``isovalue`` is a *fraction of the field's peak*, not an absolute
+        amplitude: orbitals differ in how peaked they are by orders of magnitude,
+        so a fixed absolute value would show a blob for one and nothing at all
+        for the next.
+
+        Both signs are drawn, in different colours — the sign structure is what
+        distinguishes an orbital from a density, and dropping it would throw away
+        the reason for plotting the orbital rather than the charge.
+
+        A field carrying ``phases`` is drawn instead as a single ``|psi|``
+        surface coloured by ``arg(psi)`` — see :meth:`_draw_orbital`.
+        """
+        self._orbital_field = None if field is None else (field, float(isovalue))
+        self._clear_orbital()
+        self._draw_orbital()
+        self.plotter.render()
+
+    def _clear_orbital(self) -> None:
+        for actor in self._orbital_actors:
+            self.plotter.remove_actor(actor, render=False)
+        self._orbital_actors = []
+
+    def _draw_orbital(self) -> None:
+        """(Re)draw the stored orbital. Never raises into a redraw."""
+        if self._orbital_field is None:
+            return
+        field, fraction = self._orbital_field
+        peak = field.peak
+        if peak <= 0.0:
+            return
+        level = abs(fraction) * peak
+
+        grid = pv.ImageData()
+        grid.dimensions = field.shape
+        grid.origin = tuple(float(v) for v in field.origin)
+        grid.spacing = tuple(float(v) for v in field.spacing)
+        # Fortran order: VTK varies x fastest, numpy's reshape varies it slowest.
+        grid.point_data["psi"] = np.asarray(field.values, dtype=float).ravel(order="F")
+
+        if field.phases is not None:
+            self._draw_phase_coloured_orbital(grid, field, level)
+            return
+
+        # A modulus is non-negative, so only the positive surface exists.
+        levels = [level] if field.modulus else [-level, level]
+        colors = (
+            [_ORBITAL_POSITIVE_COLOR] if field.modulus
+            else [_ORBITAL_NEGATIVE_COLOR, _ORBITAL_POSITIVE_COLOR]
+        )
+        for value, color in zip(levels, colors):
+            try:
+                surface = grid.contour([value], scalars="psi")
+            except Exception:  # noqa: BLE001 - a level with no surface is not an error
+                continue
+            if surface is None or surface.n_points == 0:
+                continue  # this level is not crossed anywhere in the box
+            surface = _clip_to_cell(surface, field.cell)
+            if surface is None or surface.n_points == 0:
+                continue
+            actor = self.plotter.add_mesh(
+                surface, color=color, opacity=_ORBITAL_OPACITY,
+                smooth_shading=True, show_scalar_bar=False, render=False,
+            )
+            actor.SetPickable(False)  # only atoms are pick targets
+            self._orbital_actors.append(actor)
+
+    def _draw_phase_coloured_orbital(self, grid, field, level: float) -> None:
+        """One ``|psi|`` surface, coloured by the orbital's phase.
+
+        This is what makes the relation between cells legible. ``|psi|`` is
+        lattice-periodic, so the *surface* is identical in every cell — and the
+        colour, that cell's Bloch phase, is then the only thing that differs,
+        changing from cell to cell by exactly ``k.T``. The same reasoning as the
+        phonon panel's per-atom phase colours: a relation reads only when the
+        thing being related looks the same in each cell.
+
+        The phase is looked up at the nearest grid point of each surface vertex
+        rather than being carried through the contour filter as point data. It
+        is a step function — one value per cell — and VTK would interpolate it,
+        turning every cell boundary that a lobe straddles into a band sweeping
+        through the whole colour wheel. Nearest-point lookup keeps the step a
+        step, and sidesteps the ±pi seam at the same time.
+        """
+        try:
+            surface = grid.contour([level], scalars="psi")
+        except Exception:  # noqa: BLE001 - a level with no surface is not an error
+            return
+        if surface is None or surface.n_points == 0:
+            return
+        surface = _clip_to_cell(surface, field.cell)
+        if surface is None or surface.n_points == 0:
+            return
+        surface.point_data["phase"] = _sample_nearest(
+            np.asarray(field.phases, dtype=float), field, surface.points
+        )
+        actor = self.plotter.add_mesh(
+            surface, scalars="phase", cmap=_PHASE_COLORMAP,
+            clim=(-np.pi, np.pi), opacity=_ORBITAL_OPACITY,
+            smooth_shading=True, show_scalar_bar=False, render=False,
+        )
+        actor.SetPickable(False)
+        self._orbital_actors.append(actor)
+
     def _scene_bounds(self, margin: float = 0.0) -> Optional[tuple]:
         """The drawn extent as ``(xmin, xmax, …)``, padded by ``margin`` Angstrom.
 
@@ -1474,8 +1622,15 @@ class StructureRenderer:
             return None  # one phase everywhere: a single colour says it better
         return phases
 
-    def _draw_lattice_vectors(self) -> None:
-        """Pin the a/b/c gizmo to a fixed corner of the viewport.
+    def _lattice_marker(self):
+        """The a/b/c gizmo, pinned to a fixed corner of the viewport.
+
+        Returns a prop assembly of labelled arrows — one per *periodic*
+        direction only, so a slab shows a and b and a polymer just a, never a
+        spurious c along CRYSTAL's formal 500 Angstrom vacuum vector — or
+        ``None`` when there is no lattice to draw. The arrows share one length,
+        so the gizmo shows orientation alone and never rescales with the lattice
+        parameters (editing a, b or c must not grow or shrink it).
 
         It used to be an ordinary set of arrows anchored below the structure's
         lower corner. That put it at a *world* position, so every camera change
@@ -1490,20 +1645,6 @@ class StructureRenderer:
 
         The widget survives ``plotter.clear()``, unlike an actor, so it is
         created once and only its marker is swapped when the cell changes.
-        """
-        marker = self._lattice_marker()
-        if marker is None:
-            self._set_orientation_widget(None)
-            return
-        self._set_orientation_widget(marker)
-
-    def _lattice_marker(self):
-        """A prop assembly of labelled a/b/c arrows, or ``None`` if there's no cell.
-
-        One arrow per *periodic* direction only: a slab shows a and b, a polymer
-        just a — never a spurious c along CRYSTAL's formal 500 Å vacuum vector.
-        The arrows share one length, so the gizmo shows orientation alone and
-        never rescales with the lattice parameters.
         """
         if self._structure is None or not self._structure.is_periodic:
             return None
@@ -1544,7 +1685,7 @@ class StructureRenderer:
         return assembly
 
     def _set_orientation_widget(self, marker) -> None:
-        """Show ``marker`` in the viewport corner (``None`` hides the gizmo)."""
+        """Show ``marker`` in the viewport corner (``None`` empties the corner)."""
         if marker is None:
             if self._orientation_widget is not None:
                 self._orientation_widget.SetEnabled(0)
@@ -1555,13 +1696,34 @@ class StructureRenderer:
                     marker, viewport=_GIZMO_VIEWPORT
                 )
             except Exception:  # noqa: BLE001 - no interactor (bare off-screen plotter)
-                    self._orientation_widget = None
+                self._orientation_widget = None
             return
-        self._orientation_widget.SetOrientationMarker(marker)
-        self._orientation_widget.SetEnabled(1)
+        widget = self._orientation_widget
+        widget.SetOrientationMarker(marker)
+        # The viewport is re-asserted on every swap rather than set once at
+        # creation: it is the only thing that says how big the corner is, and a
+        # widget that has been through anything that resizes it (see
+        # _update_orientation_marker) would otherwise come back invisible.
+        widget.SetViewport(*_GIZMO_VIEWPORT)
+        widget.SetEnabled(1)
 
 
 # ── free helpers ─────────────────────────────────────────────────────────
+def _sample_nearest(values: np.ndarray, field, points: np.ndarray) -> np.ndarray:
+    """``values`` (on ``field``'s grid) at the grid point nearest each of ``points``.
+
+    For a quantity that is constant over a region and jumps between regions —
+    a per-cell phase — this is the only correct sampling: interpolating it would
+    invent the values in between.
+    """
+    index = np.rint(
+        (np.asarray(points, dtype=float) - field.origin) / field.spacing
+    ).astype(int)
+    for axis in range(3):
+        np.clip(index[:, axis], 0, field.shape[axis] - 1, out=index[:, axis])
+    return values[index[:, 0], index[:, 1], index[:, 2]]
+
+
 def _unlit_actor(mesh, color: str):
     """A flat-shaded actor for ``mesh`` — a gizmo reads best without lighting."""
     mapper = vtk.vtkPolyDataMapper()
@@ -1622,13 +1784,49 @@ def _axis_label_actor(text: str, position: np.ndarray, color: str):
     return caption
 
 
+def _clip_to_cell(surface, cell):
+    """Cut an isosurface back to the cell it belongs to.
+
+    The orbital is sampled over the cell's *bounding* box, which for anything but
+    an orthogonal cell is appreciably bigger — a rhombohedral cell fills about
+    half of it. What is drawn out in the corners is a real part of the Bloch sum,
+    but it belongs to neighbouring cells whose atoms are not on screen, so it
+    reads as lobes floating in empty space. Clipping keeps the picture to the
+    cell that is actually drawn; a supercell is how to see more of the orbital.
+
+    Six half-space clips, one per face. Best-effort: a cell that cannot define
+    them leaves the surface whole rather than losing it.
+    """
+    if cell is None:
+        return surface
+    cell = np.asarray(cell, dtype=float)
+    if cell.shape != (3, 3) or abs(np.linalg.det(cell)) < 1e-8:
+        return surface
+    try:
+        for axis in range(3):
+            # The face's outward normal is perpendicular to the other two edges,
+            # which is not the edge direction itself unless the cell is orthogonal.
+            normal = np.cross(cell[(axis + 1) % 3], cell[(axis + 2) % 3])
+            length = np.linalg.norm(normal)
+            if length < 1e-12:
+                return surface
+            normal = normal / length
+            if np.dot(normal, cell[axis]) < 0:
+                normal = -normal  # point it out of the cell, not into it
+            # pyvista's invert=True keeps what lies *below* the plane. The cell
+            # is above the face at the origin and below the one at cell[axis].
+            for origin, invert in ((np.zeros(3), False), (cell[axis], True)):
+                surface = surface.clip(normal=normal, origin=origin, invert=invert)
+                if surface.n_points == 0:
+                    return surface
+    except Exception:  # noqa: BLE001 - purely cosmetic; never lose the orbital
+        return surface
+    return surface
+
+
 def _sphere_radius(z, scale: float = _ATOM_SCALE):
     """Drawn sphere radius for atomic number(s) ``z`` (scalar or array in → same out)."""
     return covalent_radii[z] * scale
-
-
-def _element_color(z: int) -> list:
-    return list(jmol_colors[z])
 
 
 def _hex_to_rgb(color: str) -> np.ndarray:
@@ -1935,7 +2133,7 @@ def _center_rgb(center_z: int, overrides: Optional[dict]) -> np.ndarray:
     """RGB (0–255 floats) for a polyhedron centred on ``center_z`` — override or Jmol."""
     if overrides and int(center_z) in overrides:
         return _hex_to_rgb(overrides[int(center_z)]).astype(float)
-    return np.asarray(_element_color(int(center_z))) * 255
+    return np.asarray(jmol_colors[int(center_z)], dtype=float) * 255
 
 
 def _hull_mesh(polyhedra, overrides: Optional[dict] = None) -> Optional[pv.PolyData]:
