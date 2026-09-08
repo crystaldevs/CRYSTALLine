@@ -1494,10 +1494,11 @@ def _row_widget(layout) -> QWidget:
 def _fill_functionals(combo: QComboBox) -> None:
     """Populate a combo with the grouped functionals.
 
-    Each row carries the CRYSTAL keyword as its data and shows the keyword plus
-    what it is, so the list can be searched by the name people know. Group
-    headers are inserted as disabled rows — a QComboBox has no real section
-    header, and a bare separator would not say what the section is.
+    Just the keyword on each row — spelling out what each functional is made the
+    list long and hard to scan. The grouping stays: it is what turns fifty
+    keywords into five short lists. Group headers are inserted as disabled rows,
+    since a QComboBox has no real section header and a bare separator would not
+    say what the section is.
     """
     from PySide6.QtGui import QStandardItem
 
@@ -1506,8 +1507,8 @@ def _fill_functionals(combo: QComboBox) -> None:
         header = QStandardItem(f"— {group} —")
         header.setFlags(Qt.NoItemFlags)  # a label, not a choice
         model.appendRow(header)
-        for keyword, description in entries:
-            combo.addItem(f"{keyword} — {description}", keyword)
+        for keyword, _description in entries:
+            combo.addItem(keyword, keyword)
 
 
 def functional_keyword(combo: QComboBox) -> str:

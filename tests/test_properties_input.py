@@ -11,9 +11,13 @@ from ase.build import bulk
 from crystalline.core.properties_input import (
     BandOptions,
     DossOptions,
+    CoopOptions,
+    EmdOptions,
+    Grid3DOptions,
     OrbitalsOptions,
     PropertiesInputError,
     PropertiesSpec,
+    XrdOptions,
     band_path,
     band_shrink,
     build_properties_input,
@@ -40,12 +44,19 @@ def test_band_comes_before_newk_and_doss_after_it():
     assert lines.index("BAND") < lines.index("NEWK") < lines.index("DOSS")
 
 
-def test_newk_is_written_only_when_something_reads_it():
-    """BAND and PPAN do not need it; DOSS and ORBITALS do."""
-    assert "NEWK" not in _lines(PropertiesSpec(band=BandOptions(enabled=True)))
-    assert "NEWK" not in _lines(PropertiesSpec(ppan=True))
-    assert "NEWK" in _lines(PropertiesSpec(doss=DossOptions(enabled=True)))
-    assert "NEWK" in _lines(PropertiesSpec(orbitals=OrbitalsOptions(enabled=True)))
+def test_newk_is_always_written():
+    """It computes the eigenvectors the rest of the run reads and is the first
+    step of essentially every properties deck. Writing it only when something
+    was known to need it left it out of the common case — a band structure —
+    where its absence is silent: the run just uses whatever the SCF left."""
+    for spec in (PropertiesSpec(band=BandOptions(enabled=True)),
+                 PropertiesSpec(ppan=True),
+                 PropertiesSpec(doss=DossOptions(enabled=True)),
+                 PropertiesSpec(orbitals=OrbitalsOptions(enabled=True)),
+                 PropertiesSpec(xrd=XrdOptions(enabled=True))):
+        lines = _lines(spec)
+        assert "NEWK" in lines
+        assert lines[lines.index("NEWK") + 2] == "1 0"   # IFE, IPRINT
 
 
 def test_a_deck_that_asks_for_nothing_is_refused():
@@ -243,9 +254,7 @@ def test_the_functional_groups_cover_the_flat_list_and_name_pbe():
     flat = [k for _group, entries in FUNCTIONAL_GROUPS for k, _why in entries]
     assert flat == list(COMMON_FUNCTIONALS)
     assert len(set(flat)) == len(flat), "a functional is listed twice"
-    described = {k: why for _g, entries in FUNCTIONAL_GROUPS for k, why in entries}
-    assert "PBE" in described["PBEXC"]
-    assert FUNCTIONAL_ALIASES["PBE"] == "PBEXC"
+    assert "PBE" in flat
     for alias, keyword in FUNCTIONAL_ALIASES.items():
         assert keyword in flat, f"{alias} points at {keyword}, which is not offered"
 
@@ -267,3 +276,124 @@ def test_the_supercell_dialog_is_not_capped_at_twelve():
     assert "setRange(1, 12)" not in source
     # ...and it asks rather than refuses when the result is large
     assert "_SLOW_SUPERCELL_ATOMS" in source and "question" in source
+
+
+# ── the properties added after the first cut ─────────────────────────────
+def test_ech3_and_pot3_match_the_manual():
+    """ECH3 takes the point count alone; POT3 adds the penetration tolerance
+    (manual §14.8 and §14.14). Checked against mgo_density.d3, which is
+    NEWK then 'ECH3 / 5'."""
+    lines = _lines(PropertiesSpec(
+        charge_density=Grid3DOptions(enabled=True, points=100),
+        potential=Grid3DOptions(enabled=True, points=80, tolerance=5)))
+    ech3 = lines.index("ECH3")
+    assert lines[ech3 + 1] == "100"
+    assert lines[ech3 + 2] == "POT3", "ECH3 takes no tolerance record"
+    pot3 = lines.index("POT3")
+    assert lines[pot3 + 1:pot3 + 3] == ["80", "5"]
+def test_pato_is_written_with_its_record():
+    lines = _lines(PropertiesSpec(pato=True))
+    start = lines.index("PATO")
+    assert lines[start + 1] == "0 0"
+
+
+def test_the_functional_menu_shows_keywords_alone():
+    """The grouping stays — it is what turns fifty keywords into five short
+    lists — but spelling out what each functional is made the menu long and
+    hard to scan."""
+    import inspect
+
+    from crystalline.ui.panels import input_builder
+
+    source = inspect.getsource(input_builder._fill_functionals)
+    assert "combo.addItem(keyword, keyword)" in source
+    assert "{description}" not in source, "the row must be the keyword alone"
+
+
+# ── COOP/COHP, EMDL, XRDSPEC, LOCALI ─────────────────────────────────────
+def test_coop_writes_two_records_per_interaction():
+    """An interaction is between two groups of atoms, so it takes two records —
+    the same negative-count convention DOSS uses for its projections."""
+    lines = _lines(PropertiesSpec(coop=CoopOptions(
+        enabled=True, interactions=(((1,), (2, 3)),))))
+    start = lines.index("COOP")
+    assert lines[start + 1].startswith("1 300 ")
+    assert lines[start + 2:start + 4] == ["-1 1", "-2 2 3"]
+
+
+def test_cohp_is_the_same_record_under_another_keyword():
+    lines = _lines(PropertiesSpec(coop=CoopOptions(
+        enabled=True, hamiltonian=True, interactions=(((1,), (2,)),))))
+    assert "COHP" in lines and "COOP" not in lines
+
+
+def test_coop_needs_an_interaction_and_two_sides():
+    with pytest.raises(PropertiesInputError, match="at least one interaction"):
+        build_properties_input(_mgo(), PropertiesSpec(coop=CoopOptions(enabled=True)))
+    with pytest.raises(PropertiesInputError, match="Both sides"):
+        build_properties_input(_mgo(), PropertiesSpec(coop=CoopOptions(
+            enabled=True, interactions=(((1,), ()),))))
+
+
+def test_emdl_lists_its_directions_and_closes_with_no_projections():
+    lines = _lines(PropertiesSpec(emd=EmdOptions(
+        enabled=True, directions=((1, 0, 0), (1, 1, 0)), pmax=3.0, step=0.1)))
+    start = lines.index("EMDL")
+    assert lines[start + 1] == "2 3 0.1 2 0"
+    assert lines[start + 2:start + 4] == ["1 0 0", "1 1 0"]
+    assert lines[start + 4] == "0 0"   # no orbital and no band projections
+
+
+def test_emdl_takes_at_most_ten_directions():
+    with pytest.raises(PropertiesInputError, match="at most 10"):
+        build_properties_input(_mgo(), PropertiesSpec(emd=EmdOptions(
+            enabled=True, directions=tuple((i, 0, 0) for i in range(11)))))
+
+
+def test_xrdspec_writes_its_single_record():
+    lines = _lines(PropertiesSpec(xrd=XrdOptions(
+        enabled=True, max_index=6, wavelength=1.5406, debye_waller=1.0)))
+    assert lines[lines.index("XRDSPEC") + 1] == "6 1.5406 1"
+
+
+def test_wannier_orbitals_get_localised_first():
+    """ILOC=1 needs LOCALI to have run, and the manual's own example puts it
+    between NEWK and ORBITALS. Asking for Wannier orbitals without it is a deck
+    that runs and gives canonical orbitals instead."""
+    lines = _lines(PropertiesSpec(orbitals=OrbitalsOptions(
+        enabled=True, name="w", wannier=True)))
+    assert lines.index("LOCALI") < lines.index("ORBITALS")
+    assert lines[lines.index("ORBITALS") + 3] == "1"    # ILOC
+
+
+def test_localise_is_not_written_twice():
+    lines = _lines(PropertiesSpec(
+        localise=True,
+        orbitals=OrbitalsOptions(enabled=True, name="w", wannier=True)))
+    assert lines.count("LOCALI") == 1
+
+
+def test_pbe_is_the_keyword_offered():
+    """The manual lists PBEXC as the stand-alone keyword, but PBE is what the
+    code takes and what everyone writes. PBEXC still resolves, for anyone
+    copying from an older deck."""
+    from crystalline.core.crystal_input import COMMON_FUNCTIONALS, FUNCTIONAL_ALIASES
+
+    assert "PBE" in COMMON_FUNCTIONALS
+    assert "PBEXC" not in COMMON_FUNCTIONALS
+    assert FUNCTIONAL_ALIASES["PBEXC"] == "PBE"
+
+
+def test_a_checkable_group_box_has_a_visible_indicator():
+    """The .d3 builder is built from checkable group boxes, and the theme styled
+    QCheckBox::indicator without QGroupBox::indicator — so every one of them had
+    no box at all when unchecked and a bare floating tick when checked."""
+    from crystalline.ui import theme
+
+    for palette in (theme.LIGHT, theme.DARK):
+        sheet = theme.stylesheet(palette)
+        assert "QGroupBox::indicator" in sheet
+        assert "QGroupBox::indicator:checked" in sheet
+        # and a disabled-but-checked box keeps a filled ground, or the white
+        # tick is drawn on the light theme's pale one and disappears
+        assert "QGroupBox::indicator:checked:disabled" in sheet

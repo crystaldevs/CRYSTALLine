@@ -72,7 +72,7 @@ FUNCTIONAL_GROUPS: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
     ("LDA and GGA", (
         ("SVWN", "LDA — Slater exchange + VWN correlation"),
         ("BLYP", "GGA — Becke 88 + LYP"),
-        ("PBEXC", "GGA — PBE (Perdew–Burke–Ernzerhof)"),
+        ("PBE", "GGA — Perdew–Burke–Ernzerhof"),
         ("PBESOLXC", "GGA — PBEsol, PBE revised for solids"),
         ("SOGGAXC", "GGA — SOGGA"),
         ("SOGGA11", "GGA — SOGGA11"),
@@ -137,11 +137,12 @@ COMMON_FUNCTIONALS: Tuple[str, ...] = tuple(
     keyword for _group, entries in FUNCTIONAL_GROUPS for keyword, _why in entries
 )
 
-# What someone types when they mean a keyword spelled otherwise. PBE is the
-# whole reason this exists: its stand-alone keyword is PBEXC, and "PBE" on its
-# own is only valid as an EXCHANGE or CORRELAT potential.
+# What someone types when they mean a keyword spelled otherwise. The manual
+# lists PBEXC as the stand-alone exchange+correlation keyword, but PBE is what
+# the code takes and what everybody writes, so PBE is what is offered; PBEXC
+# still resolves, for anyone copying from an older deck.
 FUNCTIONAL_ALIASES = {
-    "PBE": "PBEXC",
+    "PBEXC": "PBE",
     "PBESOL": "PBESOLXC",
     "SOGGA": "SOGGAXC",
     "LDA": "SVWN",

@@ -107,6 +107,59 @@ class OrbitalsOptions:
 
 
 @dataclass
+class Grid3DOptions:
+    """ECH3 / POT3: a property on a 3D grid over the cell (manual §14.8, §14.14).
+
+    Both take the number of points along the first lattice vector and space the
+    others to match; ``tolerance`` is POT3's penetration tolerance (ITOL) and is
+    ignored by ECH3.
+    """
+
+    enabled: bool = False
+    points: int = 100         # NP
+    tolerance: int = 5        # ITOL, POT3 only — the manual's suggested value
+
+
+@dataclass
+class CoopOptions:
+    """COOP / COHP: overlap- or Hamiltonian-weighted populations (manual §14.7).
+
+    Each interaction is a pair of atom groups, written as two records with a
+    negative count meaning "all the AOs of these atoms" — the same convention
+    DOSS uses for its projections.
+    """
+
+    enabled: bool = False
+    hamiltonian: bool = False   # COHP rather than COOP
+    points: int = 300
+    first_band: int = 1
+    last_band: Optional[int] = None
+    npol: int = DEFAULT_NPOL
+    window: Optional[Tuple[float, float]] = None
+    interactions: Tuple[Tuple[Tuple[int, ...], Tuple[int, ...]], ...] = ()
+
+
+@dataclass
+class EmdOptions:
+    """EMDL: electron momentum density along directions (manual §14.10)."""
+
+    enabled: bool = False
+    directions: Tuple[Tuple[int, int, int], ...] = ((1, 0, 0),)
+    pmax: float = 3.0        # maximum momentum, a.u.
+    step: float = 0.1        # interpolation step
+
+
+@dataclass
+class XrdOptions:
+    """XRDSPEC: X-ray diffraction spectrum (manual §14.17)."""
+
+    enabled: bool = False
+    max_index: int = 6       # NRIF: reflections with |h|,|k|,|l| below this
+    wavelength: float = 1.5406   # Cu K-alpha, in Angstrom
+    debye_waller: float = 1.0    # B = 8 pi^2 <u^2>, typically 0.5 - 1.5
+
+
+@dataclass
 class PropertiesSpec:
     """Everything a ``.d3`` deck needs."""
 
@@ -114,7 +167,14 @@ class PropertiesSpec:
     band: BandOptions = field(default_factory=BandOptions)
     doss: DossOptions = field(default_factory=DossOptions)
     orbitals: OrbitalsOptions = field(default_factory=OrbitalsOptions)
+    charge_density: Grid3DOptions = field(default_factory=Grid3DOptions)   # ECH3
+    potential: Grid3DOptions = field(default_factory=Grid3DOptions)        # POT3
+    coop: CoopOptions = field(default_factory=CoopOptions)
+    emd: EmdOptions = field(default_factory=EmdOptions)
+    xrd: XrdOptions = field(default_factory=XrdOptions)
+    localise: bool = False    # LOCALI: Wannier functions, needed before ORBITALS/ILOC=1
     ppan: bool = False        # Mulliken population analysis
+    pato: bool = False        # density matrix as a superposition of atomic densities
     extra_keywords: str = ""
 
 
@@ -208,22 +268,43 @@ def build_properties_input(
 ) -> str:
     """Render a ``.d3`` deck. Raises :class:`PropertiesInputError` if it can't."""
     spec = spec or PropertiesSpec()
-    asked = [spec.band.enabled, spec.doss.enabled, spec.orbitals.enabled, spec.ppan]
+    asked = [spec.band.enabled, spec.doss.enabled, spec.orbitals.enabled,
+             spec.charge_density.enabled, spec.potential.enabled,
+             spec.coop.enabled, spec.emd.enabled, spec.xrd.enabled,
+             spec.localise, spec.ppan, spec.pato]
     if not any(asked) and not spec.extra_keywords.strip():
         raise PropertiesInputError("Choose at least one property to compute.")
 
     lines: List[str] = []
-    # BAND first: the manual is explicit that NEWK before DOSS is required and
-    # that BAND has to precede NEWK, or the run stops with
-    # "NEWK MUST BE CALLED BEFORE DOSS".
+    # BAND first, then NEWK, then everything that reads its eigenvectors. The
+    # manual is explicit that NEWK must precede DOSS and that BAND has to come
+    # before NEWK, or the run stops with "NEWK MUST BE CALLED BEFORE DOSS".
     if spec.band.enabled:
         lines += _band_lines(structure, spec.band)
-    if _needs_newk(spec):
-        lines += _newk_lines(structure, spec.newk)
+    # NEWK is written whatever else was asked for. It is the first step of
+    # essentially every properties run — it computes the eigenvectors the rest
+    # read — and a deck without it silently gives whatever the SCF left behind.
+    lines += _newk_lines(structure, spec.newk)
     if spec.doss.enabled:
         lines += _doss_lines(spec.doss)
+    if spec.coop.enabled:
+        lines += _coop_lines(spec.coop)
+    # LOCALI has to run before ORBITALS can ask for Wannier functions, and the
+    # manual's own example puts it exactly here, between NEWK and ORBITALS.
+    if spec.localise or (spec.orbitals.enabled and spec.orbitals.wannier):
+        lines += ["LOCALI", "END"]
     if spec.orbitals.enabled:
         lines += _orbitals_lines(structure, spec.orbitals)
+    if spec.charge_density.enabled:
+        lines += _grid_lines("ECH3", spec.charge_density, tolerance=False)
+    if spec.potential.enabled:
+        lines += _grid_lines("POT3", spec.potential, tolerance=True)
+    if spec.emd.enabled:
+        lines += _emd_lines(spec.emd)
+    if spec.xrd.enabled:
+        lines += _xrd_lines(spec.xrd)
+    if spec.pato:
+        lines += ["PATO", "0 0"]
     if spec.ppan:
         lines.append("PPAN")
     lines += [line.strip() for line in spec.extra_keywords.splitlines() if line.strip()]
@@ -231,9 +312,69 @@ def build_properties_input(
     return "\n".join(lines) + "\n"
 
 
-def _needs_newk(spec: PropertiesSpec) -> bool:
-    """DOSS and ORBITALS both read NEWK's eigenvectors; BAND and PPAN do not."""
-    return spec.doss.enabled or spec.orbitals.enabled
+def _grid_lines(keyword: str, opts: Grid3DOptions, tolerance: bool) -> List[str]:
+    """ECH3/POT3: the keyword, the point count, and POT3's tolerance."""
+    if opts.points < 2:
+        raise PropertiesInputError(
+            f"{keyword} needs at least 2 points along the first lattice vector."
+        )
+    lines = [keyword, str(int(opts.points))]
+    if tolerance:
+        lines.append(str(int(opts.tolerance)))
+    return lines
+
+
+def _coop_lines(opts: CoopOptions) -> List[str]:
+    if not opts.interactions:
+        raise PropertiesInputError(
+            "COOP/COHP needs at least one interaction — two groups of atoms to "
+            "look at the bonding between."
+        )
+    if opts.npol > 25:
+        raise PropertiesInputError("COOP/COHP uses at most 25 Legendre polynomials.")
+    if opts.window is not None:
+        first, last = -1, -1
+        if opts.window[0] >= opts.window[1]:
+            raise PropertiesInputError("The COOP/COHP energy window is empty.")
+    else:
+        first = int(opts.first_band)
+        last = int(opts.last_band if opts.last_band is not None else 0)
+    lines = ["COHP" if opts.hamiltonian else "COOP",
+             f"{len(opts.interactions)} {int(opts.points)} {first} {last} "
+             f"2 {int(opts.npol)} 0"]
+    if opts.window is not None:
+        lines.append(f"{opts.window[0]:.6g} {opts.window[1]:.6g}")
+    for group_a, group_b in opts.interactions:
+        for group in (group_a, group_b):
+            if not group:
+                raise PropertiesInputError(
+                    "Both sides of a COOP/COHP interaction need at least one atom."
+                )
+            lines.append(" ".join([str(-len(group))] + [str(int(a)) for a in group]))
+    return lines
+
+
+def _emd_lines(opts: EmdOptions) -> List[str]:
+    if not opts.directions:
+        raise PropertiesInputError("EMDL needs at least one direction.")
+    if len(opts.directions) > 10:
+        raise PropertiesInputError("EMDL takes at most 10 directions.")
+    if opts.step <= 0 or opts.pmax <= 0:
+        raise PropertiesInputError("EMDL needs a positive momentum range and step.")
+    lines = ["EMDL",
+             f"{len(opts.directions)} {opts.pmax:.6g} {opts.step:.6g} 2 0"]
+    lines += [" ".join(str(int(v)) for v in direction) for direction in opts.directions]
+    lines += ["0 0"]  # no orbital and no band projections
+    return lines
+
+
+def _xrd_lines(opts: XrdOptions) -> List[str]:
+    if opts.max_index < 1:
+        raise PropertiesInputError("XRDSPEC needs a positive maximum Miller index.")
+    if opts.wavelength <= 0:
+        raise PropertiesInputError("XRDSPEC needs a positive wavelength.")
+    return ["XRDSPEC",
+            f"{int(opts.max_index)} {opts.wavelength:.6g} {opts.debye_waller:.6g}"]
 
 
 def _newk_lines(structure: Structure, opts: NewkOptions) -> List[str]:
@@ -363,6 +504,10 @@ def write_properties_input(
 
 __all__ = [
     "BandOptions",
+    "Grid3DOptions",
+    "CoopOptions",
+    "EmdOptions",
+    "XrdOptions",
     "DossOptions",
     "NewkOptions",
     "OrbitalsOptions",

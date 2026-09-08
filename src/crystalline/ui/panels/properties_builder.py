@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,11 +39,15 @@ from PySide6.QtWidgets import (
 from crystalline.core.crystal_input import suggest_shrink
 from crystalline.core.properties_input import (
     BandOptions,
+    CoopOptions,
     DossOptions,
+    EmdOptions,
+    Grid3DOptions,
     NewkOptions,
     OrbitalsOptions,
     PropertiesInputError,
     PropertiesSpec,
+    XrdOptions,
     build_properties_input,
 )
 from crystalline.core.structure import Structure
@@ -84,10 +89,25 @@ class PropertiesBuilderDialog(QDialog):
 
     # ── the form ────────────────────────────────────────────────────────
     def _controls(self) -> QWidget:
-        holder = QWidget()
-        layout = QVBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        shrink = suggest_shrink(self._structure) if self._structure.is_periodic else 1
+        """One tab per family of properties.
+
+        A .d3 can ask for a couple of dozen different things, and a single
+        column of group boxes made the dialog a scroll with no shape to it.
+        Tabs give each family its own page and keep the preview beside all of
+        them, so what the deck will contain is visible whichever page is open.
+        """
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        tabs.addTab(self._tab_bands(), "Bands && DOS")
+        tabs.addTab(self._tab_density(), "Density && potential")
+        tabs.addTab(self._tab_orbitals(), "Orbitals")
+        tabs.addTab(self._tab_analysis(), "Analysis")
+        tabs.setMinimumWidth(360)
+        self._connect_refresh()
+        return tabs
+
+    def _tab_bands(self) -> QWidget:
+        layout, shrink = _column(), self._shrink_guess()
 
         newk = QGroupBox("NEWK — eigenvectors on a finer mesh")
         newk_form = QFormLayout(newk)
@@ -96,40 +116,33 @@ class PropertiesBuilderDialog(QDialog):
         newk_form.addRow("Shrinking factor", self._newk_shrink)
         newk_form.addRow("Gilat factor", self._newk_shrink2)
         newk.setToolTip(
-            "Written automatically whenever something needs it — DOSS and "
-            "ORBITALS both read its eigenvectors."
+            "Always written. It computes the eigenvectors the rest of the run "
+            "reads, and is the first step of essentially every properties deck; "
+            "without it a run silently uses whatever the SCF left behind."
         )
         layout.addWidget(newk)
 
-        band = QGroupBox("BAND — band structure")
-        band.setCheckable(True)
-        band.setChecked(True)
-        band_form = QFormLayout(band)
+        band = _checkable("BAND — band structure", checked=True)
+        form = QFormLayout(band)
         self._band_title = QLineEdit("Band structure")
         self._band_points = _spin(200, 10, 5000)
         self._band_first = _spin(1, 1, 9999)
         self._band_last = _spin(0, 0, 9999)
         self._band_last.setSpecialValueText("auto")
-        self._band_last.setToolTip("0 lets the builder pick a range covering the gap.")
-        band_form.addRow("Title", self._band_title)
-        band_form.addRow("Points along the path", self._band_points)
-        band_form.addRow("First band", self._band_first)
-        band_form.addRow("Last band", self._band_last)
-        self._band_path_label = QLabel()
-        self._band_path_label.setWordWrap(True)
-        self._band_path_label.setStyleSheet("color: palette(mid);")
-        band_form.addRow("Path", self._band_path_label)
+        form.addRow("Title", self._band_title)
+        form.addRow("Points along the path", self._band_points)
+        form.addRow("First band", self._band_first)
+        form.addRow("Last band", self._band_last)
+        self._band_path_label = _muted()
+        form.addRow("Path", self._band_path_label)
         layout.addWidget(band)
         self._band = band
 
-        doss = QGroupBox("DOSS — density of states")
-        doss.setCheckable(True)
-        doss.setChecked(False)
-        doss_form = QFormLayout(doss)
+        doss = _checkable("DOSS — density of states")
+        form = QFormLayout(doss)
         self._doss_points = _spin(300, 10, 5000)
         self._doss_window = QCheckBox("Give an energy window instead of a band range")
-        self._doss_low = _float_spin(-0.7)
-        self._doss_high = _float_spin(0.8)
+        self._doss_low, self._doss_high = _float_spin(-0.7), _float_spin(0.8)
         self._doss_projections = QLineEdit()
         self._doss_projections.setPlaceholderText("e.g.  1, 2   — one projection per atom")
         self._doss_projections.setToolTip(
@@ -137,59 +150,152 @@ class PropertiesBuilderDialog(QDialog):
             "projections with commas; put several atoms in one projection with "
             "spaces, e.g. '1 2, 3'."
         )
-        doss_form.addRow("Energy points", self._doss_points)
-        doss_form.addRow(self._doss_window)
-        window_row = QHBoxLayout()
-        window_row.addWidget(self._doss_low)
-        window_row.addWidget(QLabel("to"))
-        window_row.addWidget(self._doss_high)
-        window_row.addWidget(QLabel("hartree"))
-        window_row.addStretch(1)
-        holder_row = QWidget()
-        holder_row.setLayout(window_row)
-        window_row.setContentsMargins(0, 0, 0, 0)
-        doss_form.addRow("", holder_row)
-        doss_form.addRow("Project onto atoms", self._doss_projections)
+        form.addRow("Energy points", self._doss_points)
+        form.addRow(self._doss_window)
+        form.addRow("", _range_row(self._doss_low, self._doss_high))
+        form.addRow("Project onto atoms", self._doss_projections)
         layout.addWidget(doss)
         self._doss = doss
 
-        orbitals = QGroupBox("ORBITALS — crystalline orbitals (Molden)")
-        orbitals.setCheckable(True)
-        orbitals.setChecked(False)
+        coop = _checkable("COOP / COHP — bonding analysis")
+        form = QFormLayout(coop)
+        self._coop_hamiltonian = QCheckBox("Hamiltonian-weighted (COHP)")
+        self._coop_points = _spin(300, 10, 5000)
+        self._coop_pairs = QLineEdit()
+        self._coop_pairs.setPlaceholderText("e.g.  1 : 2,  1 : 3 4")
+        self._coop_pairs.setToolTip(
+            "Interactions to look at, as two groups of atoms either side of a "
+            "colon. Separate interactions with commas: '1 : 2, 1 : 3 4'."
+        )
+        form.addRow(self._coop_hamiltonian)
+        form.addRow("Energy points", self._coop_points)
+        form.addRow("Interactions", self._coop_pairs)
+        layout.addWidget(coop)
+        self._coop = coop
+
+        layout.addStretch(1)
+        return _page_of(layout)
+
+    def _tab_density(self) -> QWidget:
+        layout = _column()
+
+        density = _checkable("ECH3 — charge density on a 3D grid")
+        form = QFormLayout(density)
+        self._ech3_points = _spin(100, 2, 2000)
+        form.addRow("Points along a", self._ech3_points)
+        layout.addWidget(density)
+        self._density = density
+
+        potential = _checkable("POT3 — electrostatic potential on a 3D grid")
+        form = QFormLayout(potential)
+        self._pot3_points = _spin(100, 2, 2000)
+        self._pot3_tol = _spin(5, 1, 20)
+        self._pot3_tol.setToolTip("ITOL, the penetration tolerance. 5 is the manual's suggestion.")
+        form.addRow("Points along a", self._pot3_points)
+        form.addRow("Tolerance (ITOL)", self._pot3_tol)
+        layout.addWidget(potential)
+        self._potential = potential
+
+        emd = _checkable("EMDL — electron momentum density")
+        form = QFormLayout(emd)
+        self._emd_directions = QLineEdit("1 0 0")
+        self._emd_directions.setPlaceholderText("e.g.  1 0 0, 1 1 0")
+        self._emd_directions.setToolTip(
+            "Directions in oblique coordinates, at most ten, separated by commas."
+        )
+        self._emd_pmax = _float_spin(3.0)
+        self._emd_step = _float_spin(0.1)
+        form.addRow("Directions", self._emd_directions)
+        form.addRow("Max momentum (a.u.)", self._emd_pmax)
+        form.addRow("Step", self._emd_step)
+        layout.addWidget(emd)
+        self._emd = emd
+
+        layout.addStretch(1)
+        return _page_of(layout)
+
+    def _tab_orbitals(self) -> QWidget:
+        layout = _column()
+
+        orbitals = _checkable("ORBITALS — crystalline orbitals (Molden)")
         orbitals.setToolTip(
             "Writes one Molden file per sampled k-point. These are the files "
             "CRYSTALLine's own orbital viewer reads."
         )
-        orb_form = QFormLayout(orbitals)
+        form = QFormLayout(orbitals)
         self._orb_name = QLineEdit("orbitals")
-        self._orb_wannier = QCheckBox("Wannier functions (needs LOCALI first)")
-        orb_form.addRow("File name", self._orb_name)
-        orb_form.addRow(self._orb_wannier)
+        self._orb_wannier = QCheckBox("Wannier functions (adds LOCALI before it)")
+        form.addRow("File name", self._orb_name)
+        form.addRow(self._orb_wannier)
         layout.addWidget(orbitals)
         self._orbitals = orbitals
+
+        self._localise = QCheckBox("LOCALI — localise the orbitals (Wannier functions)")
+        self._localise.setToolTip(
+            "Written on its own, or automatically before ORBITALS when Wannier "
+            "functions are asked for — ILOC=1 needs it to have run first."
+        )
+        layout.addWidget(self._localise)
+
+        layout.addStretch(1)
+        return _page_of(layout)
+
+    def _tab_analysis(self) -> QWidget:
+        layout = _column()
+
+        xrd = _checkable("XRDSPEC — X-ray diffraction spectrum")
+        form = QFormLayout(xrd)
+        self._xrd_index = _spin(6, 1, 40)
+        # four decimals: Cu Kalpha is 1.5406 A, and three rounded it to 1.541
+        self._xrd_lambda = _float_spin(1.5406, decimals=4)
+        self._xrd_lambda.setToolTip("Wavelength in Angstrom. 1.5406 is Cu Kα.")
+        self._xrd_b = _float_spin(1.0)
+        self._xrd_b.setToolTip("Isotropic Debye-Waller B, typically 0.5 to 1.5.")
+        form.addRow("Max Miller index", self._xrd_index)
+        form.addRow("Wavelength (Å)", self._xrd_lambda)
+        form.addRow("Debye–Waller B", self._xrd_b)
+        layout.addWidget(xrd)
+        self._xrd = xrd
 
         self._ppan = QCheckBox("PPAN — Mulliken population analysis")
         layout.addWidget(self._ppan)
 
+        self._pato = QCheckBox("PATO — density of non-interacting atoms")
+        self._pato.setToolTip(
+            "Replaces the density matrix with a superposition of atomic "
+            "densities, so a following property is the promolecule reference."
+        )
+        layout.addWidget(self._pato)
+
         self._extra = QPlainTextEdit()
         self._extra.setPlaceholderText("Extra PROPERTIES keywords, one per line (optional)")
-        self._extra.setFixedHeight(56)
+        self._extra.setFixedHeight(70)
         layout.addWidget(self._extra)
         layout.addStretch(1)
+        return _page_of(layout)
 
-        for widget in (band, doss, orbitals):
+    def _shrink_guess(self) -> int:
+        return suggest_shrink(self._structure) if self._structure.is_periodic else 1
+
+    def _connect_refresh(self) -> None:
+        """Every control re-renders the preview; the checkable ones also re-run
+        the enable rules."""
+        for widget in (self._band, self._doss, self._coop, self._density,
+                       self._potential, self._emd, self._orbitals, self._xrd,
+                       self._ppan, self._pato, self._localise,
+                       self._doss_window, self._orb_wannier, self._coop_hamiltonian):
             widget.toggled.connect(self._refresh)
-        for widget in (self._ppan, self._doss_window, self._orb_wannier):
-            widget.toggled.connect(self._refresh)
-        for widget in (self._band_title, self._orb_name, self._doss_projections):
+        for widget in (self._band_title, self._orb_name, self._doss_projections,
+                       self._coop_pairs, self._emd_directions):
             widget.textChanged.connect(self._refresh)
         for widget in (self._newk_shrink, self._newk_shrink2, self._band_points,
-                       self._band_first, self._band_last, self._doss_points):
-            widget.valueChanged.connect(self._refresh)
-        for widget in (self._doss_low, self._doss_high):
+                       self._band_first, self._band_last, self._doss_points,
+                       self._coop_points, self._ech3_points, self._pot3_points,
+                       self._pot3_tol, self._xrd_index,
+                       self._doss_low, self._doss_high, self._emd_pmax,
+                       self._emd_step, self._xrd_lambda, self._xrd_b):
             widget.valueChanged.connect(self._refresh)
         self._extra.textChanged.connect(self._refresh)
-        return holder
 
     def _preview_panel(self) -> QWidget:
         holder = QWidget()
@@ -229,13 +335,36 @@ class PropertiesBuilderDialog(QDialog):
                 fractional=self._structure.is_periodic,
                 wannier=self._orb_wannier.isChecked(),
             ),
+            charge_density=Grid3DOptions(
+                enabled=self._density.isChecked(), points=self._ech3_points.value()),
+            potential=Grid3DOptions(
+                enabled=self._potential.isChecked(), points=self._pot3_points.value(),
+                tolerance=self._pot3_tol.value()),
+            coop=CoopOptions(
+                enabled=self._coop.isChecked(),
+                hamiltonian=self._coop_hamiltonian.isChecked(),
+                points=self._coop_points.value(),
+                interactions=_parse_interactions(self._coop_pairs.text())),
+            emd=EmdOptions(
+                enabled=self._emd.isChecked(),
+                directions=_parse_directions(self._emd_directions.text()),
+                pmax=self._emd_pmax.value(), step=self._emd_step.value()),
+            xrd=XrdOptions(
+                enabled=self._xrd.isChecked(), max_index=self._xrd_index.value(),
+                wavelength=self._xrd_lambda.value(), debye_waller=self._xrd_b.value()),
+            localise=self._localise.isChecked(),
             ppan=self._ppan.isChecked(),
+            pato=self._pato.isChecked(),
             extra_keywords=self._extra.toPlainText(),
         )
 
     def _refresh(self) -> None:
         for widget in (self._doss_low, self._doss_high):
             widget.setEnabled(self._doss_window.isChecked())
+        # LOCALI is implied by Wannier orbitals, so the standalone box would be
+        # a second way to ask for the same line.
+        implied = self._orbitals.isChecked() and self._orb_wannier.isChecked()
+        self._localise.setEnabled(not implied)
         try:
             text = build_properties_input(self._structure, self.spec())
         except (PropertiesInputError, ValueError) as exc:
@@ -272,6 +401,79 @@ class PropertiesBuilderDialog(QDialog):
 
 
 # ── helpers ───────────────────────────────────────────────────────────────
+def _column() -> QVBoxLayout:
+    layout = QVBoxLayout()
+    layout.setContentsMargins(4, 4, 4, 4)
+    return layout
+
+
+def _page_of(layout: QVBoxLayout) -> QWidget:
+    holder = QWidget()
+    holder.setLayout(layout)
+    return holder
+
+
+def _checkable(title: str, checked: bool = False) -> QGroupBox:
+    box = QGroupBox(title)
+    box.setCheckable(True)
+    box.setChecked(checked)
+    return box
+
+
+def _muted() -> QLabel:
+    label = QLabel()
+    label.setWordWrap(True)
+    label.setStyleSheet("color: palette(mid);")
+    return label
+
+
+def _range_row(low: QDoubleSpinBox, high: QDoubleSpinBox) -> QWidget:
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(low)
+    row.addWidget(QLabel("to"))
+    row.addWidget(high)
+    row.addWidget(QLabel("hartree"))
+    row.addStretch(1)
+    holder = QWidget()
+    holder.setLayout(row)
+    return holder
+
+
+def _parse_interactions(text: str) -> tuple:
+    """``"1 : 2, 1 : 3 4"`` -> ``(((1,), (2,)), ((1,), (3, 4)))``.
+
+    A COOP interaction is between two *groups*, so the colon separates the
+    sides and spaces group atoms within a side. An entry missing its colon is
+    skipped rather than guessed at — silently pairing an atom with itself would
+    be a plot of nothing.
+    """
+    interactions = []
+    for chunk in text.split(","):
+        if ":" not in chunk:
+            continue
+        left, right = chunk.split(":", 1)
+        a = tuple(int(t) for t in left.split() if t.strip())
+        b = tuple(int(t) for t in right.split() if t.strip())
+        if a and b:
+            interactions.append((a, b))
+    return tuple(interactions)
+
+
+def _parse_directions(text: str) -> tuple:
+    """``"1 0 0, 1 1 0"`` -> ``((1, 0, 0), (1, 1, 0))``; anything not a triple
+    is dropped rather than padded into a direction nobody asked for."""
+    directions = []
+    for chunk in text.split(","):
+        values = [t for t in chunk.split() if t.strip()]
+        if len(values) == 3:
+            try:
+                directions.append(tuple(int(v) for v in values))
+            except ValueError:
+                continue
+    return tuple(directions)
+
+
 def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
     box = QSpinBox()
     box.setRange(minimum, maximum)
@@ -279,10 +481,10 @@ def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
     return box
 
 
-def _float_spin(value: float) -> QDoubleSpinBox:
+def _float_spin(value: float, decimals: int = 3) -> QDoubleSpinBox:
     box = QDoubleSpinBox()
     box.setRange(-100.0, 100.0)
-    box.setDecimals(3)
+    box.setDecimals(decimals)
     box.setSingleStep(0.1)
     box.setValue(value)
     return box
