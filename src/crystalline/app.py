@@ -17,7 +17,7 @@ def run(structure: Optional[Structure] = None) -> int:
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
     from crystalline.resources import logo_path
-    from crystalline.ui import theme
+    from crystalline.ui import safety, theme
     from crystalline.ui.main_window import MainWindow
 
     # Both must run *before* QApplication is created: Qt reads the macOS bundle
@@ -30,6 +30,10 @@ def run(structure: Optional[Structure] = None) -> int:
     app.setApplicationDisplayName(_APP_NAME)  # window-title suffix on some platforms
     app.setDesktopFileName(_APP_NAME)  # X11/Wayland app id
     app.setWindowIcon(QIcon(logo_path()))  # dock / taskbar icon
+    # Before anything that can fail: an error in a Qt virtual override takes the
+    # process down with it (shiboken segfaults reporting it), so the net has to
+    # be up before the first window exists.
+    safety.install(app)
     theme.apply(app)  # the app's own look, light or dark to match the desktop
     window = MainWindow(structure)
     window.show()

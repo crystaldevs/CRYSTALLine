@@ -29,6 +29,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from crystalline.core.structure import Structure
 from crystalline.ui.drag_controller import install_atom_drag
+from crystalline.ui.safety import guard
 from crystalline.viz.renderer import StructureRenderer
 
 # How far past the auto-framed view the user may zoom out before it's capped.
@@ -125,6 +126,7 @@ class Viewport(QWidget):
         self._camera_busy = busy
         self.camera_busy.emit(busy)
 
+    @guard(False)
     def eventFilter(self, obj, event) -> bool:
         if obj is self.interactor:
             etype = event.type()

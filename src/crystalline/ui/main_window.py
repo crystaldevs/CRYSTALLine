@@ -50,6 +50,7 @@ _HARTREE_TO_EV = 27.211386245988
 from crystalline.viz.phonon_animator import PhononAnimator
 from crystalline.ui import menus
 from crystalline.ui.viewport import Viewport
+from crystalline.ui.safety import guard
 from crystalline.ui.widgets import BusyOverlay, DropHint, Worker
 from crystalline.ui.panels.structure_panel import StructurePanel
 from crystalline.ui.panels.phonon_panel import PhononPanel
@@ -1637,6 +1638,7 @@ class MainWindow(QMainWindow):
         self._apply_cell_view()
 
     # ── drag and drop ───────────────────────────────────────────────────
+    @guard()
     def dragEnterEvent(self, event) -> None:
         """Accept a dragged file the app can do something with, and say what.
 
@@ -1656,6 +1658,7 @@ class MainWindow(QMainWindow):
             else "appends to the current structure — undoable",
         )
 
+    @guard()
     def dragMoveEvent(self, event) -> None:
         # Qt asks again on every move; without this the drop is refused whatever
         # dragEnterEvent said.
@@ -1664,10 +1667,12 @@ class MainWindow(QMainWindow):
         else:
             event.acceptProposedAction()
 
+    @guard()
     def dragLeaveEvent(self, event) -> None:
         self._drop_hint.hide_hint()
         super().dragLeaveEvent(event)
 
+    @guard()
     def dropEvent(self, event) -> None:
         """Take the file, and open it on the *next* turn of the event loop.
 
