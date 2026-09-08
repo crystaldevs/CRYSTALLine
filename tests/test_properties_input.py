@@ -367,10 +367,42 @@ def test_wannier_orbitals_get_localised_first():
 
 
 def test_localise_is_not_written_twice():
+    """The core still takes ``localise`` on its own — LOCALI without plotting is
+    a legitimate run — but asking for it alongside Wannier orbitals must not
+    emit the keyword twice."""
     lines = _lines(PropertiesSpec(
         localise=True,
         orbitals=OrbitalsOptions(enabled=True, name="w", wannier=True)))
     assert lines.count("LOCALI") == 1
+
+
+def test_the_dialog_has_one_control_for_localise(qapp=None):
+    """Two ticks that write the same keyword is two ways to be inconsistent.
+    The Wannier one does strictly more — it also sets ILOC=1 — so it is the one
+    that stays."""
+    from PySide6.QtWidgets import QApplication, QCheckBox
+
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    QApplication.instance() or QApplication([])
+    dialog = PropertiesBuilderDialog(_mgo())
+    localise = [c for c in dialog.findChildren(QCheckBox)
+                if "LOCALI" in c.text() or "Wannier" in c.text()]
+    assert len(localise) == 1, [c.text() for c in localise]
+
+
+def test_the_two_builders_open_at_the_same_size():
+    """They are the same kind of dialog doing the same kind of job; opening at
+    different shapes made them look unrelated."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui.panels.input_builder import InputBuilderDialog
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    QApplication.instance() or QApplication([])
+    structure = _mgo()
+    assert (PropertiesBuilderDialog(structure).size()
+            == InputBuilderDialog(structure).size())
 
 
 def test_pbe_is_the_keyword_offered():

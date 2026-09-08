@@ -59,7 +59,7 @@ class PropertiesBuilderDialog(QDialog):
     def __init__(self, structure: Structure, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Build CRYSTAL properties input (.d3)")
-        self.resize(720, 640)
+        self.resize(880, 560)  # the same shape as the .d12 builder
         self._structure = structure
 
         outer = QVBoxLayout(self)
@@ -224,18 +224,17 @@ class PropertiesBuilderDialog(QDialog):
         )
         form = QFormLayout(orbitals)
         self._orb_name = QLineEdit("orbitals")
-        self._orb_wannier = QCheckBox("Wannier functions (adds LOCALI before it)")
+        self._orb_wannier = QCheckBox("Wannier functions (LOCALI, then ILOC=1)")
+        self._orb_wannier.setToolTip(
+            "Localised orbitals rather than the canonical Bloch ones. LOCALI is "
+            "written before ORBITALS automatically: ILOC=1 needs it to have run, "
+            "and a deck without it does not fail — it quietly returns canonical "
+            "orbitals instead."
+        )
         form.addRow("File name", self._orb_name)
         form.addRow(self._orb_wannier)
         layout.addWidget(orbitals)
         self._orbitals = orbitals
-
-        self._localise = QCheckBox("LOCALI — localise the orbitals (Wannier functions)")
-        self._localise.setToolTip(
-            "Written on its own, or automatically before ORBITALS when Wannier "
-            "functions are asked for — ILOC=1 needs it to have run first."
-        )
-        layout.addWidget(self._localise)
 
         layout.addStretch(1)
         return _page_of(layout)
@@ -282,7 +281,7 @@ class PropertiesBuilderDialog(QDialog):
         the enable rules."""
         for widget in (self._band, self._doss, self._coop, self._density,
                        self._potential, self._emd, self._orbitals, self._xrd,
-                       self._ppan, self._pato, self._localise,
+                       self._ppan, self._pato,
                        self._doss_window, self._orb_wannier, self._coop_hamiltonian):
             widget.toggled.connect(self._refresh)
         for widget in (self._band_title, self._orb_name, self._doss_projections,
@@ -352,7 +351,6 @@ class PropertiesBuilderDialog(QDialog):
             xrd=XrdOptions(
                 enabled=self._xrd.isChecked(), max_index=self._xrd_index.value(),
                 wavelength=self._xrd_lambda.value(), debye_waller=self._xrd_b.value()),
-            localise=self._localise.isChecked(),
             ppan=self._ppan.isChecked(),
             pato=self._pato.isChecked(),
             extra_keywords=self._extra.toPlainText(),
@@ -361,10 +359,6 @@ class PropertiesBuilderDialog(QDialog):
     def _refresh(self) -> None:
         for widget in (self._doss_low, self._doss_high):
             widget.setEnabled(self._doss_window.isChecked())
-        # LOCALI is implied by Wannier orbitals, so the standalone box would be
-        # a second way to ask for the same line.
-        implied = self._orbitals.isChecked() and self._orb_wannier.isChecked()
-        self._localise.setEnabled(not implied)
         try:
             text = build_properties_input(self._structure, self.spec())
         except (PropertiesInputError, ValueError) as exc:
