@@ -369,19 +369,46 @@ def test_a_costly_frame_yields_the_event_loop_to_the_ui(qapp):
     assert frames == [1, 1]  # ...and it resumes once the loop has had its share
 
 
-def test_cheap_frames_are_not_paced_at_all(qapp):
+def test_cheap_frames_are_not_paced_at_all(qapp, monkeypatch):
     """Small structures cost a fraction of the interval, so they keep the full
-    ~30 fps: the pacing must not slow down the common case."""
+    ~30 fps: the pacing must not slow down the common case.
+
+    On a controlled clock rather than the wall one. The hold-off _on_timer sets
+    is proportional to what the frame actually cost, so a stubbed frame — a few
+    microseconds — earns a hold-off of a few microseconds, and five back-to-back
+    calls in a tight loop can outrun it on a loaded machine. This failed exactly
+    that way, for a reason that was never about pacing.
+    """
+    import time
+
+    from crystalline.ui.panels import phonon_panel as pp
+
     structure = _structure()
     panel = _panel(structure)
     panel.set_modes(structure.positions, _labelled_modes())
 
-    frames = []
-    panel._tick = lambda: frames.append(1)
+    now = [0.0]
+    monkeypatch.setattr(time, "perf_counter", lambda: now[0])
 
+    frames = []
+    cheap_frame = 0.002  # 2 ms against the 33 ms interval
+
+    def tick():
+        frames.append(1)
+        now[0] += cheap_frame
+
+    panel._tick = tick
+
+    holds = []
     for _ in range(5):
+        beat = now[0]
         panel._on_timer()
+        holds.append(panel._next_frame_at - beat)
+        now[0] += pp._FRAME_INTERVAL_MS / 1000.0  # the next beat of the timer
+
     assert frames == [1] * 5  # every beat drew
+    # ...because what a cheap frame earns is nowhere near a beat
+    assert max(holds) < pp._FRAME_INTERVAL_MS / 1000.0
 
 
 def test_play_draws_the_first_frame_without_waiting(qapp):
