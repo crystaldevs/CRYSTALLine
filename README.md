@@ -190,6 +190,35 @@ the visual periodic table.
 CRYSTALLine runs on **Linux, macOS and Windows** — anywhere PySide6 and a working
 OpenGL/VTK stack are available.
 
+### If it doesn't start
+
+```sh
+crystalline --check
+```
+
+That reports the Python version, every dependency and the version that arrived,
+whether Qt can open a window, and whether a VTK render window really works —
+naming what is missing and what to do about it. It exits non-zero if anything
+essential failed, so it also works in a script.
+
+It exists because the failures arrive as somebody else's error message. Qt's
+advice on a machine with no display is to *reinstall the application*, which
+cannot help; and the installed `crystalline` command is a GUI entry point, so on
+Windows it runs without a console and a startup failure prints to nothing at
+all. Two things worth knowing when that happens:
+
+- `python -m crystalline` runs the same app from a terminal, where errors are
+  visible.
+- Errors are written to a log either way —
+  `~/Library/Logs/CRYSTALLine/errors.log` on macOS,
+  `%LOCALAPPDATA%\CRYSTALLine\Logs\errors.log` on Windows,
+  `~/.local/state/CRYSTALLine/errors.log` on Linux. `crystalline --check`
+  prints the path.
+
+On Linux a fresh install sometimes lacks the system libraries Qt and VTK need
+(`libGL`, `libxkbcommon`); `--check` says which stage failed rather than leaving
+you with a bare plugin error.
+
 ### Linux: Wayland sessions
 
 VTK draws into an X11 window, so on a Wayland session CRYSTALLine asks Qt for
