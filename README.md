@@ -135,20 +135,36 @@ The following will be installed if not already present:
 
 ### Steps
 
-1. Create a conda environment (suggested)
-   ```sh
-   conda create --name crystal python=3.12
-   ```
-   Any Python from 3.11 up will do, 3.14 included; 3.12 is what the project is
-   released on.
-2. Activate the environment (suggested)
-   ```sh
-   conda activate crystal
-   ```
-3. Install
-   ```sh
-   pip install CRYSTALLine
-   ```
+Install into an environment of its own rather than your system Python — around
+1.3 GB of Qt, VTK and the scientific stack arrives with it. Either kind of
+environment works; the only real difference is that conda can *supply* the
+Python version, where a venv uses whichever `python` you already have.
+
+**conda**
+
+```sh
+conda create --name crystal python=3.12
+conda activate crystal
+```
+
+**venv** — needs no extra tooling, but `python` must already be 3.11 or newer
+(check with `python -V`)
+
+```sh
+python -m venv ~/.venvs/crystal
+source ~/.venvs/crystal/bin/activate
+```
+
+On Windows the last line is `~\.venvs\crystal\Scripts\activate`.
+
+Any Python from 3.11 up will do, 3.14 included; 3.12 is what the project is
+released on.
+
+Then, either way:
+
+```sh
+pip install CRYSTALLine
+```
 
 ## Usage
 
