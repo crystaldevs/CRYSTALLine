@@ -66,6 +66,10 @@ def _build_file_menu(window) -> None:
     build_input.triggered.connect(window._build_crystal_input)
     file_menu.addAction(build_input)
 
+    build_properties = QAction("Build properties input (.d3)…", window)
+    build_properties.triggered.connect(window._build_properties_input)
+    file_menu.addAction(build_properties)
+
     file_menu.addSeparator()
     export_image = QAction("Export image…", window)
     export_image.triggered.connect(window._export_image)

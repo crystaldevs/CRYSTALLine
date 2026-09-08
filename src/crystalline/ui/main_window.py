@@ -72,6 +72,17 @@ _PLOT_FLOAT_MARGIN = 24
 _PEAK_PICK_TOLERANCE = 20.0
 
 
+# Per-axis ceiling in the Supercell dialog. Generous rather than tuned: what
+# actually costs is the total atom count, which is checked separately, and a
+# slab or a polymer legitimately wants a big number down one axis.
+_MAX_SUPERCELL_REPEAT = 99
+# Above this many atoms the view is slow enough to be worth confirming first.
+# Rotation is not the problem — it is display-locked and independent of size —
+# but composing the view and the neighbour analyses behind bonds and polyhedra
+# both grow with it.
+_SLOW_SUPERCELL_ATOMS = 20_000
+
+
 class MainWindow(QMainWindow):
     def __init__(self, structure: Optional[Structure] = None) -> None:
         super().__init__()
@@ -1534,10 +1545,33 @@ class MainWindow(QMainWindow):
         boxes = []
         for axis, value in zip(("a", "b", "c"), self._supercell):
             box = QSpinBox()
-            box.setRange(1, 12)
+            # The old cap of 12 per axis was arbitrary and got in the way: what
+            # costs anything is the total atom count, not the repetition along
+            # any one direction, and a slab or a chain wants a large number down
+            # one axis and one along the others. So the number is free and the
+            # size is shown instead, with a confirmation past the point where it
+            # is genuinely slow.
+            box.setRange(1, _MAX_SUPERCELL_REPEAT)
             box.setValue(value)
             form.addRow(f"Repeat along {axis}", box)
             boxes.append(box)
+
+        size = QLabel()
+        size.setStyleSheet("color: palette(mid);")
+        form.addRow("", size)
+
+        def show_size() -> None:
+            cells = boxes[0].value() * boxes[1].value() * boxes[2].value()
+            atoms = cells * len(self._source)
+            note = f"{cells} cell{'' if cells == 1 else 's'}, {atoms:,} atoms"
+            if atoms > _SLOW_SUPERCELL_ATOMS:
+                note += " — large; building the view will take a moment"
+            size.setText(note)
+
+        for box in boxes:
+            box.valueChanged.connect(show_size)
+        show_size()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1545,6 +1579,22 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() != QDialog.Accepted:
             return
+        reps = tuple(box.value() for box in boxes)
+        atoms = reps[0] * reps[1] * reps[2] * len(self._source)
+        if atoms > _SLOW_SUPERCELL_ATOMS:
+            # Asked rather than refused: the number is sometimes what someone
+            # actually wants, and a cap they cannot pass is worse than a wait
+            # they agreed to.
+            confirm = QMessageBox.question(
+                self, "Large supercell",
+                f"{reps[0]}×{reps[1]}×{reps[2]} is {atoms:,} atoms.\n\n"
+                f"Building and drawing that will take a while, and analyses that "
+                f"run over neighbours — bonds, polyhedra — will be slower still.\n\n"
+                f"Go ahead?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
         # A supercell chosen here is the user's own: the phonon panel's Untile
         # must not offer to throw it away for a cell they never asked for.
         self._tile_restore = None
@@ -1908,6 +1958,24 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.input_builder import InputBuilderDialog
 
         InputBuilderDialog(structure, self).exec()
+
+    def _build_properties_input(self) -> None:
+        """Open the PROPERTIES (``.d3``) builder for the structure as edited.
+
+        The same clean single cell the ``.d12`` builder uses: a ``.d3`` carries
+        no geometry, but the band path is derived from the lattice, and deriving
+        it from a supercell or a boundary-completed view would give the path of
+        a different Brillouin zone.
+        """
+        structure = self._analysis_cell()
+        if len(structure) == 0:
+            QMessageBox.information(
+                self, "Build properties input", "Open or build a structure first."
+            )
+            return
+        from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+        PropertiesBuilderDialog(structure, self).exec()
 
     # ── remembered plot-dialog settings ─────────────────────────────────
     def _restore_dialog(self, dialog, key: str) -> None:

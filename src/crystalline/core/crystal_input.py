@@ -64,21 +64,88 @@ INTERNAL_BASIS_SETS: Tuple[str, ...] = (
 )
 
 # Stand-alone exchange-correlation keywords, grouped as the manual groups them
-# (§4.1). Offered as presets; the combo box is editable so any other keyword works.
-COMMON_FUNCTIONALS: Tuple[str, ...] = (
-    # LDA/GGA exchange + correlation in one keyword
-    "SVWN", "BLYP", "PBEXC", "PBESOLXC", "SOGGAXC", "SOGGA11",
-    # global hybrids
-    "B3PW", "B3LYP", "PBE0", "PBESOL0", "B1WC", "WC1LYP", "B97H",
-    "PBE0-13", "SOGGA11X", "mPW1PW91", "mPW1K",
-    # range-separated hybrids
-    "HSE06", "HSEsol", "SC-BLYP", "HISS", "RSHXLDA", "LC-wPBE", "LC-wPBEsol",
-    "LC-wBLYP", "wB97", "wB97X", "LC-BLYP", "CAM-B3LYP", "LC-PBE",
-    # meta-GGA, pure then hybrid
-    "M06L", "revM06L", "MN15L", "SCAN", "r2SCAN",
-    "B1B95", "mPW1B95", "mPW1B1K", "PW6B95", "PWB6K", "M05", "M052X", "M06",
-    "M062X", "M06HF", "MN15", "revM06", "SCAN0", "r2SCANh", "r2SCAN0", "r2SCAN50",
+# (§4.1) and paired with the name people actually search for. The keyword is
+# what CRYSTAL reads; the description is what makes it findable — PBE's
+# stand-alone keyword is ``PBEXC``, so a flat list of keywords hides the most
+# common functional in the set behind a spelling nobody looks for.
+FUNCTIONAL_GROUPS: Tuple[Tuple[str, Tuple[Tuple[str, str], ...]], ...] = (
+    ("LDA and GGA", (
+        ("SVWN", "LDA — Slater exchange + VWN correlation"),
+        ("BLYP", "GGA — Becke 88 + LYP"),
+        ("PBEXC", "GGA — PBE (Perdew–Burke–Ernzerhof)"),
+        ("PBESOLXC", "GGA — PBEsol, PBE revised for solids"),
+        ("SOGGAXC", "GGA — SOGGA"),
+        ("SOGGA11", "GGA — SOGGA11"),
+    )),
+    ("Global hybrids", (
+        ("B3LYP", "20% exact exchange — the common molecular default"),
+        ("PBE0", "25% exact exchange on PBE — the common solid-state default"),
+        ("PBESOL0", "25% exact exchange on PBEsol"),
+        ("B3PW", "Becke 3-parameter with PW91 correlation"),
+        ("B1WC", "one-parameter hybrid, WC exchange"),
+        ("WC1LYP", "WC exchange + LYP correlation"),
+        ("B97H", "B97 hybrid"),
+        ("PBE0-13", "PBE0 with 1/3 exact exchange"),
+        ("SOGGA11X", "SOGGA11 hybrid"),
+        ("mPW1PW91", "modified PW91 hybrid"),
+        ("mPW1K", "mPW1PW91 reparametrised for kinetics"),
+    )),
+    ("Range-separated hybrids", (
+        ("HSE06", "screened hybrid — solids with a small gap"),
+        ("HSEsol", "HSE06 on PBEsol"),
+        ("SC-BLYP", "short-range corrected BLYP"),
+        ("HISS", "middle-range corrected"),
+        ("RSHXLDA", "range-separated LDA exchange"),
+        ("LC-wPBE", "long-range corrected PBE"),
+        ("LC-wPBEsol", "long-range corrected PBEsol"),
+        ("LC-wBLYP", "long-range corrected BLYP"),
+        ("wB97", "Head-Gordon wB97"),
+        ("wB97X", "wB97 with short-range exact exchange"),
+        ("LC-BLYP", "long-range corrected BLYP"),
+        ("CAM-B3LYP", "Coulomb-attenuated B3LYP"),
+        ("LC-PBE", "long-range corrected PBE"),
+    )),
+    ("meta-GGA", (
+        ("M06L", "Minnesota local meta-GGA"),
+        ("revM06L", "revised M06-L"),
+        ("MN15L", "Minnesota MN15-L"),
+        ("SCAN", "strongly constrained and appropriately normed"),
+        ("r2SCAN", "regularised, restored SCAN"),
+    )),
+    ("meta-GGA hybrids", (
+        ("B1B95", "one-parameter B95 hybrid"),
+        ("mPW1B95", "modified PW + B95"),
+        ("mPW1B1K", "mPW1B95 for kinetics"),
+        ("PW6B95", "PW6B95"),
+        ("PWB6K", "PW6B95 for kinetics"),
+        ("M05", "Minnesota M05"),
+        ("M052X", "M05 with doubled exact exchange"),
+        ("M06", "Minnesota M06"),
+        ("M062X", "M06 with doubled exact exchange"),
+        ("M06HF", "full exact exchange"),
+        ("MN15", "Minnesota MN15"),
+        ("revM06", "revised M06"),
+        ("SCAN0", "SCAN hybrid"),
+        ("r2SCANh", "r2SCAN hybrid, 10%"),
+        ("r2SCAN0", "r2SCAN hybrid, 25%"),
+        ("r2SCAN50", "r2SCAN hybrid, 50%"),
+    )),
 )
+
+# The flat list of keywords, for anything that just needs to know what is valid.
+COMMON_FUNCTIONALS: Tuple[str, ...] = tuple(
+    keyword for _group, entries in FUNCTIONAL_GROUPS for keyword, _why in entries
+)
+
+# What someone types when they mean a keyword spelled otherwise. PBE is the
+# whole reason this exists: its stand-alone keyword is PBEXC, and "PBE" on its
+# own is only valid as an EXCHANGE or CORRELAT potential.
+FUNCTIONAL_ALIASES = {
+    "PBE": "PBEXC",
+    "PBESOL": "PBESOLXC",
+    "SOGGA": "SOGGAXC",
+    "LDA": "SVWN",
+}
 
 # Separate potentials for the EXCHANGE / CORRELAT keywords (manual §4.1). Leaving
 # exchange unset falls back to Hartree-Fock exchange; leaving correlation unset
@@ -277,7 +344,18 @@ class ScfOptions:
     tolinteg: Tuple[int, int, int, int, int] = (7, 7, 7, 7, 14)
     toldee: Optional[int] = None  # None -> task default (SP 6, OPTGEOM 7)
     maxcycle: int = 100
-    spin_polarized: bool = False  # UHF (HF) / SPIN (DFT)
+    # SPIN inside the DFT block, or UHF for Hartree-Fock. Everything below is
+    # only written when this is on: SPINLOCK and ATOMSPIN are meaningless in a
+    # closed-shell run and CRYSTAL rejects them there.
+    spin_polarized: bool = False
+    # SPINLOCK: (NSPIN, NCYC) — hold n(alpha) - n(beta) at NSPIN for NCYC
+    # cycles, then let the SCF relax. The usual way to reach a particular
+    # magnetic state instead of whichever one the guess falls into.
+    spinlock: Optional[Tuple[int, int]] = None
+    # ATOMSPIN: (atom label, +1 or -1) per atom, setting the starting spin of
+    # each. The labels are CRYSTAL's own numbering, as printed in the output —
+    # which is the numbering the app shows in the structure panel.
+    atomspin: Tuple[Tuple[int, int], ...] = ()
 
 
 @dataclass
@@ -508,6 +586,7 @@ def build_input(structure: Structure, spec: Optional[CrystalInputSpec] = None) -
     if not spec.basis.name.strip():
         raise CrystalInputError("A basis set must be chosen.")
     _check_two_component(spec)
+    _check_spin(structure, spec.scf)
     if spec.geometry.supercell is not None and spec.task.supercell is not None:
         raise CrystalInputError(
             "SUPERCEL and SCELPHONO both build a supercell and cannot be combined — "
@@ -793,6 +872,38 @@ def _task_lines(task: TaskOptions) -> List[str]:
     # SCELPHONO belongs to the geometry block, so it precedes the task keyword.
     lines = _scelphono_lines(task.supercell)
     return lines + _task_block_lines(task)
+
+
+def _check_spin(structure: Structure, scf: "ScfOptions") -> None:
+    """Reject spin settings CRYSTAL would reject, while the user can still fix them.
+
+    SPINLOCK and ATOMSPIN are only read in a spin-polarised run, and an
+    ATOMSPIN label outside the structure is a silent mis-assignment rather than
+    an error — CRYSTAL numbers atoms from 1, so an off-by-one puts the moment on
+    the wrong atom and the run converges to the wrong magnetic state.
+    """
+    if not scf.spin_polarized:
+        if scf.spinlock is not None or scf.atomspin:
+            raise CrystalInputError(
+                "SPINLOCK and ATOMSPIN only apply to a spin-polarised run. "
+                "Turn on spin polarisation, or clear them."
+            )
+        return
+    if scf.spinlock is not None and scf.spinlock[1] < 1:
+        raise CrystalInputError("SPINLOCK needs a positive number of cycles.")
+    for label, spin in scf.atomspin:
+        if not 1 <= int(label) <= len(structure):
+            raise CrystalInputError(
+                f"ATOMSPIN refers to atom {label}, but this structure has "
+                f"{len(structure)} atoms (numbered from 1)."
+            )
+        if int(spin) not in (1, -1):
+            raise CrystalInputError(
+                f"ATOMSPIN takes +1 or -1 for each atom; atom {label} was given {spin}."
+            )
+    seen = [label for label, _ in scf.atomspin]
+    if len(set(seen)) != len(seen):
+        raise CrystalInputError("ATOMSPIN lists the same atom more than once.")
 
 
 def _check_two_component(spec: "CrystalInputSpec") -> None:
@@ -1162,6 +1273,17 @@ def _hamiltonian_lines(structure: Structure, spec: CrystalInputSpec) -> List[str
     if structure.is_periodic:
         shrink = scf.shrink if scf.shrink is not None else suggest_shrink(structure)
         lines += ["SHRINK", f"{shrink} {shrink}"]
+
+    # After SHRINK and outside the DFT block, which is where CRYSTAL wants them
+    # (and where a working input puts them). Both are spin-only.
+    if scf.spin_polarized:
+        if scf.spinlock is not None:
+            nspin, ncyc = scf.spinlock
+            lines += ["SPINLOCK", f"{int(nspin)} {int(ncyc)}"]
+        if scf.atomspin:
+            lines.append("ATOMSPIN")
+            lines.append(str(len(scf.atomspin)))
+            lines += [f"{int(label)} {int(spin)}" for label, spin in scf.atomspin]
 
     lines += ["TOLINTEG", " ".join(str(int(t)) for t in scf.tolinteg)]
     toldee = scf.toldee if scf.toldee is not None else _TOLDEE_DEFAULTS[spec.task.kind]

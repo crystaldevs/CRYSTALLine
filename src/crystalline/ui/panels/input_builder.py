@@ -48,7 +48,8 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.core.crystal_input import (
-    COMMON_FUNCTIONALS,
+    FUNCTIONAL_ALIASES,
+    FUNCTIONAL_GROUPS,
     GRIDS,
     INTERNAL_BASIS_SETS,
     CORRELATION_FUNCTIONALS,
@@ -344,10 +345,18 @@ class InputBuilderDialog(QDialog):
         )
         form.addRow("Functional given as", self._functional_mode)
 
+        # Grouped, and each entry names the functional as well as the keyword:
+        # PBE's stand-alone keyword is PBEXC, so a flat list of keywords hid the
+        # most-wanted functional in the set behind a spelling nobody looks for.
         self._functional = QComboBox()
-        self._functional.setEditable(True)  # any CRYSTAL functional keyword is allowed
-        self._functional.addItems(COMMON_FUNCTIONALS)
-        self._functional.setCurrentText("PBE0")
+        self._functional.setEditable(True)  # any CRYSTAL keyword is still allowed
+        _fill_functionals(self._functional)
+        self._functional.setCurrentIndex(self._functional.findData("PBE0"))
+        self._functional.setToolTip(
+            "The keyword written into the DFT block. Typing is allowed for anything "
+            "not listed — and common spellings are accepted: PBE, PBEsol, SOGGA and "
+            "LDA are translated to the stand-alone keywords CRYSTAL wants."
+        )
         form.addRow("Functional", self._functional)
 
         self._exchange = QComboBox()
@@ -517,7 +526,43 @@ class InputBuilderDialog(QDialog):
         form.addRow("Max SCF cycles", self._maxcycle)
 
         self._spin = QCheckBox("Spin-polarised (open shell)")
+        self._spin.setToolTip(
+            "SPIN inside the DFT block, or UHF for Hartree–Fock. The two settings "
+            "below are only read in a spin-polarised run."
+        )
         form.addRow(self._spin)
+
+        self._spinlock = QCheckBox("Lock the total spin (SPINLOCK)")
+        self._spinlock.setToolTip(
+            "Hold n(α) − n(β) at a chosen value for the first cycles, then let the "
+            "SCF relax. The usual way to reach a particular magnetic state rather "
+            "than whichever one the starting guess happens to fall into."
+        )
+        form.addRow(self._spinlock)
+
+        spinlock_row = QHBoxLayout()
+        self._spinlock_nspin = _plain_spin(0, -200, 200)
+        self._spinlock_nspin.setToolTip("NSPIN: n(α) − n(β), i.e. 2S. 0 is antiferromagnetic.")
+        self._spinlock_ncyc = _plain_spin(50, 1, 9999)
+        self._spinlock_ncyc.setToolTip("NCYC: how many cycles to hold it for.")
+        spinlock_row.addWidget(QLabel("n(α) − n(β)"))
+        spinlock_row.addWidget(self._spinlock_nspin)
+        spinlock_row.addSpacing(10)
+        spinlock_row.addWidget(QLabel("for"))
+        spinlock_row.addWidget(self._spinlock_ncyc)
+        spinlock_row.addWidget(QLabel("cycles"))
+        spinlock_row.addStretch(1)
+        form.addRow("", _row_widget(spinlock_row))
+
+        self._atomspin = QLineEdit()
+        self._atomspin.setPlaceholderText("e.g.  5 +1, 6 -1     (atom number, then +1 or -1)")
+        self._atomspin.setToolTip(
+            "ATOMSPIN: the starting spin of individual atoms, which is what sets up "
+            "an antiferromagnetic arrangement. Atom numbers are CRYSTAL's own, "
+            "counting from 1 — the same numbers the Structure panel shows.\n\n"
+            "Anything separable works: '5 1, 6 -1' or '5 +1 6 -1' or one pair a line."
+        )
+        form.addRow("ATOMSPIN", self._atomspin)
 
         self._extra = QPlainTextEdit()
         self._extra.setPlaceholderText("Extra block-3 keywords, one per line (optional)")
@@ -905,8 +950,17 @@ class InputBuilderDialog(QDialog):
             combo.editTextChanged.connect(self._refresh_preview)
             combo.currentIndexChanged.connect(self._refresh_preview)
 
+        # the spin sub-controls gate each other, so they go through
+        # _on_form_changed (which re-runs the enable rules) rather than a plain
+        # preview refresh
+        for widget in (self._spin, self._spinlock):
+            widget.toggled.connect(self._on_form_changed)
+        self._atomspin.textChanged.connect(self._refresh_preview)
+        for box in (self._spinlock_nspin, self._spinlock_ncyc):
+            box.valueChanged.connect(self._refresh_preview)
+
         checks = [
-            self._d3, self._symmetry, self._spin, self._preopt,
+            self._d3, self._symmetry, self._preopt,
             self._freq_irspec, self._freq_ramspec, self._freq_analysis,
             self._freq_print, self._freq_restart, self._el_clampion,
             self._disp_noksym, self._disp_interp_print, self._disp_pdos_proj,
@@ -982,6 +1036,12 @@ class InputBuilderDialog(QDialog):
             widget.setEnabled(is_dft and self._nonlocal.isChecked())
 
         # The guess angles only mean anything for the rotated core-Hamiltonian guess.
+        spin = self._spin.isChecked()
+        for widget in (self._spinlock, self._atomspin):
+            widget.setEnabled(spin)
+        for widget in (self._spinlock_nspin, self._spinlock_ncyc):
+            widget.setEnabled(spin and self._spinlock.isChecked())
+
         rotated_guess = self._soc_guess.currentText() == "GCOREROT"
         for widget in (self._soc_theta, self._soc_phi):
             widget.setEnabled(rotated_guess)
@@ -1125,7 +1185,7 @@ class InputBuilderDialog(QDialog):
             method=MethodOptions(
                 kind="DFT" if self._method.currentText() == "DFT" else "HF",
                 functional_mode="SPLIT" if self._functional_mode.currentIndex() else "COMBINED",
-                functional=self._functional.currentText().strip(),
+                functional=functional_keyword(self._functional),
                 exchange=_chosen(self._exchange, _HF_EXCHANGE),
                 correlation=_chosen(self._correlation, _NO_CORRELATION),
                 hybrid_percent=_int_of(self._hybrid),
@@ -1162,6 +1222,13 @@ class InputBuilderDialog(QDialog):
                 toldee=_int_of(self._toldee),
                 maxcycle=self._maxcycle.value(),
                 spin_polarized=self._spin.isChecked(),
+                spinlock=(
+                    (self._spinlock_nspin.value(), self._spinlock_ncyc.value())
+                    if self._spin.isChecked() and self._spinlock.isChecked() else None
+                ),
+                atomspin=(
+                    parse_atomspin(self._atomspin.text()) if self._spin.isChecked() else ()
+                ),
             ),
             task=TaskOptions(
                 kind=self._task_kind(),
@@ -1414,6 +1481,80 @@ def _plain_double(
     box.setSingleStep(step)
     box.setValue(value)
     return box
+
+
+def _row_widget(layout) -> QWidget:
+    """Wrap a layout so it can sit in a QFormLayout row."""
+    holder = QWidget()
+    holder.setLayout(layout)
+    layout.setContentsMargins(0, 0, 0, 0)
+    return holder
+
+
+def _fill_functionals(combo: QComboBox) -> None:
+    """Populate a combo with the grouped functionals.
+
+    Each row carries the CRYSTAL keyword as its data and shows the keyword plus
+    what it is, so the list can be searched by the name people know. Group
+    headers are inserted as disabled rows — a QComboBox has no real section
+    header, and a bare separator would not say what the section is.
+    """
+    from PySide6.QtGui import QStandardItem
+
+    model = combo.model()
+    for group, entries in FUNCTIONAL_GROUPS:
+        header = QStandardItem(f"— {group} —")
+        header.setFlags(Qt.NoItemFlags)  # a label, not a choice
+        model.appendRow(header)
+        for keyword, description in entries:
+            combo.addItem(f"{keyword} — {description}", keyword)
+
+
+def functional_keyword(combo: QComboBox) -> str:
+    """The CRYSTAL keyword a functional combo is currently naming.
+
+    A listed row carries its keyword as data; anything typed is taken at face
+    value, after the alias table has had a look at it. Without that, choosing a
+    row would write "PBEXC — GGA — PBE (Perdew-Burke-Ernzerhof)" into the deck.
+    """
+    index = combo.findText(combo.currentText())
+    if index >= 0 and combo.itemData(index):
+        return str(combo.itemData(index))
+    typed = combo.currentText().strip()
+    # a typed alias, matched without regard to case: PBE -> PBEXC
+    for alias, keyword in FUNCTIONAL_ALIASES.items():
+        if typed.upper() == alias.upper():
+            return keyword
+    return typed
+
+
+def parse_atomspin(text: str) -> tuple:
+    """Read an ATOMSPIN entry into ``((label, spin), ...)``.
+
+    Deliberately forgiving about separators — commas, newlines, semicolons or
+    plain spaces all work — because the alternative is a table widget for what
+    is usually two numbers. Raises ValueError with something a user can act on.
+    """
+    import re
+
+    tokens = [t for t in re.split(r"[\s,;]+", text.strip()) if t]
+    if not tokens:
+        return ()
+    if len(tokens) % 2:
+        raise ValueError(
+            "ATOMSPIN needs an atom number and a spin for each atom, so an even "
+            f"number of values — got {len(tokens)}."
+        )
+    pairs = []
+    for raw_label, raw_spin in zip(tokens[::2], tokens[1::2]):
+        try:
+            label, spin = int(raw_label), int(raw_spin)
+        except ValueError:
+            raise ValueError(
+                f"ATOMSPIN takes whole numbers; could not read {raw_label!r} {raw_spin!r}."
+            ) from None
+        pairs.append((label, spin))
+    return tuple(pairs)
 
 
 def _plain_spin(value: int, minimum: int, maximum: int) -> QSpinBox:
