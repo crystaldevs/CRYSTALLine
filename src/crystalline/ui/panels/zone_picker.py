@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,10 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
-    QFrame,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -35,11 +32,13 @@ from crystalline.core.brillouin import (
     CONVENTIONAL,
     PRIMITIVE,
     brillouin_zone,
+    display_label,
     reciprocal_cell,
     special_points,
     zone_lattice,
 )
 from crystalline.core.structure import Structure
+from crystalline.ui import wheel_zoom
 from crystalline.ui.safety import guard
 
 # Special points are halves, thirds, quarters, sixths and eighths, and every
@@ -56,22 +55,19 @@ _VULGAR = {
 _POINT_RADIUS = 0.024
 _PATH_WIDTH = 5
 
-# A label drawn at a point's own centre is legible until you zoom in, at which
-# point the marker grows in screen space and swallows it. Offsetting the label
-# by a multiple of the marker's *world* radius makes it grow at exactly the same
-# rate, so the text sits just clear of the sphere at every zoom.
-_LABEL_OFFSET = 2.4
+# Every label is pushed out to the same radius, as a multiple of the zone's
+# extent — a ring of text around the polyhedron rather than a fringe hugging it.
+# The high-symmetry points of an fcc lattice all sit within about thirty degrees
+# of each other, so a fixed *offset* leaves the labels as bunched as the points
+# are; a common radius spreads them by their angular separation instead, which
+# is the only thing that actually differs between them.
+_LABEL_RADIUS = 1.18
 
 # Dash and gap for the guide lines, as fractions of the zone's extent. VTK's
 # OpenGL2 backend dropped line stippling, so a dashed line is built out of real
 # short segments; these are the pieces.
 _DASH = 0.045
 _GAP = 0.035
-
-# VTK dollies by 1.1 ** (MotionFactor * 0.2 * this) per wheel notch. The
-# default of 1.0 gives 21% a notch, which reads as jumping rather than zooming;
-# this gives about 3%.
-_WHEEL_FACTOR = 0.15
 
 # The markers, and the one the side panel is pointing at.
 _POINT_COLOUR = "#d6453c"
@@ -90,6 +86,7 @@ class ZonePickerDialog(QDialog):
         # well as the path, and both want to be readable at once.
         self.resize(1000, 620)
         self._picking = picking
+        self._selected: Optional[str] = None
         self._structure = structure
         self._setting = PRIMITIVE
         self._picked: List[str] = []
@@ -141,12 +138,59 @@ class ZonePickerDialog(QDialog):
         chooser.addStretch(1)
         outer.addLayout(chooser)
 
+        # The tools live in a row above the picture rather than in a column
+        # beside it, so nothing competes with the zone for width.
+        tools = QHBoxLayout()
+        tools.addWidget(QLabel("View"))
+        for name, direction in (("kx", (1, 0, 0)), ("ky", (0, 1, 0)),
+                                ("kz", (0, 0, 1)), ("⌂", None)):
+            button = QPushButton(name)
+            button.setFixedWidth(40)
+            button.setToolTip("Back to the default three-quarter view"
+                              if direction is None else f"Look down {name}")
+            button.clicked.connect(
+                lambda _checked=False, d=direction: self._look_along(d))
+            tools.addWidget(button)
+        tools.addSpacing(12)
+        self._guides = QCheckBox("Symmetry lines")
+        self._guides.setToolTip(
+            "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
+            "Dashed, because they run through the inside of the zone."
+        )
+        self._guides.setChecked(True)
+        self._guides.toggled.connect(lambda _on: self._draw_and_sync())
+        tools.addWidget(self._guides)
+        # The coordinates ride with the points they belong to, in the picture
+        # itself — a column of numbers beside a diagram makes the reader do the
+        # matching. Off is for when the zone is wanted as a clean figure.
+        self._coordinates = QCheckBox("All coordinates")
+        self._coordinates.setToolTip(
+            "Coordinates for every point at once. Off by default because the "
+            "high-symmetry points of a cubic lattice all sit within about "
+            "thirty degrees of each other, so six two-line labels overlap into "
+            "an unreadable heap — which is why printed zone diagrams label the "
+            "points and table the vectors.\n\n"
+            "Click any point to see its own coordinates whatever this says."
+        )
+        self._coordinates.setChecked(False)
+        self._coordinates.toggled.connect(lambda _on: self._draw_and_sync())
+        tools.addWidget(self._coordinates)
+        tools.addStretch(1)
+        save = QPushButton("Save image…")
+        save.setToolTip("Write the view to a PNG at twice the on-screen size, "
+                        "which is what a figure wants.")
+        save.clicked.connect(self._save_image)
+        tools.addWidget(save)
+        outer.addLayout(tools)
+
         body = QHBoxLayout()
         self._view = _ZoneView(self)
         body.addWidget(self._view, 1)
         self._list = QListWidget()
-        side = QVBoxLayout()
+        self._total = QLabel()
+        self._total.setStyleSheet("color: palette(mid);")
         if picking:
+            side = QVBoxLayout()
             side.addWidget(QLabel("Path"))
             self._list.setMaximumWidth(240)
             side.addWidget(self._list, 1)
@@ -156,38 +200,9 @@ class ZonePickerDialog(QDialog):
             clear.clicked.connect(self._clear)
             side.addWidget(undo)
             side.addWidget(clear)
-
-        # The coordinates the deck is actually written from. A picture of the
-        # zone says where a point is; only the numbers say which point it is,
-        # and they are what ends up in the BAND record.
-        side.addWidget(QLabel("Special points"))
-        self._cards: dict = {}
-        self._card_box = QVBoxLayout()
-        self._card_box.setContentsMargins(0, 0, 0, 0)
-        self._card_box.setSpacing(4)
-        holder = QWidget()
-        holder.setLayout(self._card_box)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidget(holder)
-        scroll.setMaximumWidth(250)
-        scroll.setToolTip(
-            "Fractional coordinates in this cell's reciprocal basis — the "
-            "numbers CRYSTAL reads, once multiplied by the shrinking factor."
-        )
-        side.addWidget(scroll, 2)
-        self._guides = QCheckBox("Symmetry lines from Γ")
-        self._guides.setToolTip(
-            "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
-            "Dashed, because they run through the inside of the zone."
-        )
-        self._guides.setChecked(True)
-        self._guides.toggled.connect(lambda _on: self._draw_and_sync())
-        side.addWidget(self._guides)
-        body.addLayout(side)
+            side.addWidget(self._total)
+            body.addLayout(side)
         outer.addLayout(body)
-
         # Opened from the menu there is nothing to accept: it is a picture, and
         # the only thing to do with it is close it.
         standard = (QDialogButtonBox.Ok | QDialogButtonBox.Cancel if picking
@@ -198,47 +213,45 @@ class ZonePickerDialog(QDialog):
         outer.addWidget(buttons)
 
         self._draw()
-        self._fill_table()
 
     def _draw_and_sync(self) -> None:
-        self._draw()
+        """Redraw for a change of options, leaving the camera where it was."""
+        self._draw(keep_camera=self._view.plotter.camera_position)
         self._sync()
 
-    def _fill_table(self) -> None:
-        """One card per labelled point: its badge, its coordinates, its |k|."""
-        while self._card_box.count():
-            item = self._card_box.takeAt(0)
-            if item.widget() is not None:
-                item.widget().deleteLater()
-        self._cards = {}
-        for label, fractional in sorted(self._points.items()):
-            cartesian = np.asarray(fractional) @ self._reciprocal
-            card = _PointCard(label, fractional, float(np.linalg.norm(cartesian)))
-            card.clicked.connect(self._on_card_clicked)
-            self._card_box.addWidget(card)
-            self._cards[label] = card
-        self._card_box.addStretch(1)
+    @guard()
+    def _look_along(self, direction) -> None:
+        """Point the camera down a reciprocal axis, or back to the default.
+
+        Straight down an axis is how a zone is drawn in a paper — the faces
+        perpendicular to it show their true shape — and getting there by
+        dragging is fiddly and never quite square.
+        """
+        plotter = self._view.plotter
+        if direction is None:
+            plotter.view_isometric()
+        else:
+            eye = np.asarray(direction, dtype=float)
+            # Any up vector will do so long as it is not the direction itself.
+            up = (0, 0, 1) if abs(eye[2]) < 0.9 else (0, 1, 0)
+            plotter.camera_position = [tuple(eye * self._extent * 4),
+                                       (0.0, 0.0, 0.0), up]
+        self._centre_on_gamma()
+        plotter.render()
 
     @guard()
-    def _on_card_clicked(self, label: str) -> None:
-        """A card is the same thing as its marker, and easier to hit.
+    def _save_image(self) -> None:
+        """Write the view out as a PNG, at figure resolution."""
+        from PySide6.QtWidgets import QFileDialog
 
-        The markers are small on purpose — big ones swallow their own labels —
-        which makes them fiddly to click. The card is the generous target for
-        the same point.
-        """
-        if self._picking:
-            self._picked.append(label)
-            self._sync()
-        self._highlight(label)
-
-    def _highlight(self, label: Optional[str]) -> None:
-        """Mark one point as the current one, in the list and in the picture."""
-        for name, card in self._cards.items():
-            card.set_current(name == label)
-        for name, (actor, _centre) in self._actors.items():
-            actor.prop.color = _CURRENT_COLOUR if name == label else _POINT_COLOUR
-        self._view.plotter.render()
+        name = "brillouin-zone.png"
+        path, _filter = QFileDialog.getSaveFileName(
+            self, "Save the zone", name, "PNG image (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        self._view.plotter.screenshot(path, scale=2)
 
     def _resolve_lattice(self) -> None:
         """Fix the cell once; the zone and its labels then cannot disagree."""
@@ -255,10 +268,11 @@ class ZonePickerDialog(QDialog):
         self._picked = []
         self._draw()
         self._sync()
-        self._fill_table()
 
     # ── the picture ─────────────────────────────────────────────────────
-    def _draw(self) -> None:
+    def _draw(self, keep_camera=None) -> None:
+        """Rebuild the scene. ``keep_camera`` restores a saved camera instead of
+        refitting, so selecting a point does not also swing the view."""
         plotter = self._view.plotter
         plotter.clear()
         self._actors = {}
@@ -287,10 +301,19 @@ class ZonePickerDialog(QDialog):
         for label, fractional in self._points.items():
             centre = np.asarray(fractional) @ self._reciprocal
             sphere = pv.Sphere(radius=radius, center=centre)
-            actor = plotter.add_mesh(sphere, color=_POINT_COLOUR, pickable=True)
+            actor = plotter.add_mesh(
+                sphere, color=_CURRENT_COLOUR if label == self._selected
+                else _POINT_COLOUR, pickable=True)
             self._actors[label] = (actor, centre)
-            plotter.add_point_labels([centre + _outward(centre) * radius * _LABEL_OFFSET],
-                                     [label], font_size=14, bold=True,
+            # The name, and under it the numbers it stands for. One label with
+            # a newline rather than two labels: the second line has to sit
+            # under the first on *screen*, and two world-anchored labels would
+            # only line up from one direction.
+            caption = display_label(label)
+            if self._coordinates.isChecked() or label == self._selected:
+                caption += "\n" + "  ".join(_tidy_number(v) for v in fractional)
+            anchor = self._label_anchor(centre, radius)
+            plotter.add_point_labels([anchor], [caption], font_size=13, bold=True,
                                      shape=None, always_visible=True,
                                      show_points=False,
                                      text_color=self._label_colour(),
@@ -298,10 +321,46 @@ class ZonePickerDialog(QDialog):
         if self._guides.isChecked():
             self._draw_guides(plotter, radius)
         self._draw_axes(plotter)
-        if self._picking:
-            plotter.enable_mesh_picking(callback=self._on_pick, show=False,
-                                        show_message=False, left_clicking=True)
+        # Every redraw re-arms the picker, and pyvista refuses to enable one
+        # that is already enabled — so it is taken down first. Without this the
+        # second redraw raises, and the safety net eats it: the picture stops
+        # updating and nothing says why.
+        plotter.disable_picking()
+        plotter.enable_mesh_picking(callback=self._on_pick, show=False,
+                                    show_message=False, left_clicking=True)
+        if keep_camera is None:
+            self._centre_on_gamma()
+        else:
+            plotter.camera_position = keep_camera
+            plotter.renderer.ResetCameraClippingRange()
+        plotter.render()
+
+    def _centre_on_gamma(self) -> None:
+        """Fit the view, then put Γ back in the middle of it.
+
+        ``reset_camera`` centres on the bounding box of everything drawn, and
+        the axes only run in +kx, +ky and +kz — so the box is not centred on
+        the zone and the zone drifts off-centre, taking a "look down kx" view
+        off-axis with it. The zone is the subject; Γ is its centre.
+        """
+        plotter = self._view.plotter
         plotter.reset_camera()
+        camera = plotter.renderer.GetActiveCamera()
+        offset = np.asarray(camera.GetFocalPoint(), dtype=float)
+        camera.SetFocalPoint(0.0, 0.0, 0.0)
+        camera.SetPosition(*(np.asarray(camera.GetPosition(), dtype=float) - offset))
+        plotter.renderer.ResetCameraClippingRange()
+
+    def _label_anchor(self, centre: np.ndarray, radius: float) -> np.ndarray:
+        """Where a point's label goes: out on the ring, or beside Γ.
+
+        Γ is the one point with no direction of its own, and it is alone in the
+        middle of the picture — so its label stays with it rather than being
+        flung out to a ring position it does not have.
+        """
+        if float(np.linalg.norm(centre)) < 1e-9:
+            return centre + np.array([0.0, 0.0, 1.0]) * radius * 3.0
+        return _outward(centre) * self._extent * _LABEL_RADIUS
 
     def _draw_guides(self, plotter, radius: float) -> None:
         """Γ to every special point, dashed.
@@ -368,7 +427,10 @@ class ZonePickerDialog(QDialog):
                 best, best_distance = label, distance
         if best is None or best_distance > _POINT_RADIUS * self._extent * 2:
             return
-        self._picked.append(best)
+        self._selected = best
+        if self._picking:
+            self._picked.append(best)
+        self._draw(keep_camera=self._view.plotter.camera_position)
         self._sync()
 
     def _undo(self) -> None:
@@ -383,10 +445,31 @@ class ZonePickerDialog(QDialog):
     def _sync(self) -> None:
         self._list.clear()
         for start, end in zip(self._picked, self._picked[1:]):
-            self._list.addItem(f"{start}  →  {end}")
+            self._list.addItem(
+                f"{display_label(start)}  →  {display_label(end)}"
+                f"     {self._segment_length(start, end):.3f} Å⁻¹")
         if len(self._picked) == 1:
-            self._list.addItem(f"{self._picked[0]}  → …")
+            self._list.addItem(f"{display_label(self._picked[0])}  → …")
+        total = self._path_length()
+        self._total.setText(f"total  {total:.3f} Å⁻¹" if total else "")
         self._draw_path()
+
+    def _segment_length(self, start: str, end: str) -> float:
+        """|Δk| along one leg, in Å⁻¹.
+
+        A band plot's horizontal axis is this distance, so it is what decides
+        how the segments share out the points you ask for — a leg twice as long
+        gets half the sampling density for the same NSUB.
+        """
+        here, there = self._points.get(start), self._points.get(end)
+        if here is None or there is None:
+            return 0.0
+        return float(np.linalg.norm((np.asarray(there) - np.asarray(here))
+                                    @ self._reciprocal))
+
+    def _path_length(self) -> float:
+        return sum(self._segment_length(a, b)
+                   for a, b in zip(self._picked, self._picked[1:]))
 
     def _draw_path(self) -> None:
         import pyvista as pv
@@ -430,67 +513,6 @@ class ZonePickerDialog(QDialog):
         """Show the zone on its own, with nothing to pick and nothing to return."""
         cls(structure, parent, picking=False).exec()
 
-
-class _PointCard(QFrame):
-    """One special point: a badge, its coordinates, and how far out it sits."""
-
-    clicked = Signal(str)
-
-    def __init__(self, label: str, fractional, magnitude: float) -> None:
-        super().__init__()
-        self.setObjectName("pointCard")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self._label = label
-
-        row = QHBoxLayout(self)
-        row.setContentsMargins(8, 6, 8, 6)
-        row.setSpacing(10)
-
-        badge = QLabel("Γ" if label == "G" else label)
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setFixedSize(28, 28)
-        badge.setObjectName("pointBadge")
-        row.addWidget(badge)
-
-        text = QVBoxLayout()
-        text.setContentsMargins(0, 0, 0, 0)
-        text.setSpacing(0)
-        coordinates = QLabel("  ".join(_tidy_number(v) for v in fractional))
-        font = coordinates.font()
-        font.setPointSizeF(font.pointSizeF() + 1.5)
-        coordinates.setFont(font)
-        text.addWidget(coordinates)
-        distance = QLabel(f"{magnitude:.3f} Å⁻¹ from Γ")
-        distance.setStyleSheet("color: palette(mid); font-size: 11px;")
-        text.addWidget(distance)
-        row.addLayout(text, 1)
-
-        self.set_current(False)
-
-    def set_current(self, current: bool) -> None:
-        """Accent the card the picture is currently pointing at."""
-        edge = _CURRENT_COLOUR if current else "palette(mid)"
-        self.setStyleSheet(
-            f"""
-            QFrame#pointCard {{
-                border: 1px solid {edge};
-                border-radius: 6px;
-                background: palette(base);
-            }}
-            QFrame#pointCard:hover {{ border-color: {_CURRENT_COLOUR}; }}
-            QLabel#pointBadge {{
-                background: {_CURRENT_COLOUR if current else _POINT_COLOUR};
-                color: white;
-                border-radius: 14px;
-                font-weight: 600;
-            }}
-            """
-        )
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        self.clicked.emit(self._label)
-        super().mousePressEvent(event)
 
 
 def _tidy_number(value: float) -> str:
@@ -573,25 +595,31 @@ class _ZoneView(QWidget):
         self.setMinimumSize(360, 320)
 
     def _smooth_the_zoom(self) -> None:
-        """Make the wheel move the camera in small, even steps.
+        """Zoom exactly as the structure viewport does.
 
-        Two things made zooming feel like jumping. VTK dollies by
-        ``1.1 ** (MotionFactor * 0.2 * MouseWheelMotionFactor)`` per notch,
-        which with the defaults (10 and 1.0) is **21% a notch** — a handful of
-        notches and the zone has left the screen. And under perspective
-        projection a dolly moves the camera *towards* the focal point, so the
-        same notch does more the closer you get, and eventually the near plane
-        eats the geometry.
+        Not "smoothly" by some separate measure — *the same*, from the same
+        module, so the two 3D views in the app cannot end up with different
+        wheels under the same hand. VTK's own fixed-step dolly is consumed and
+        replaced with one proportional to the real scroll delta.
 
-        A parallel projection is the right one for a polyhedron diagram anyway
-        — no perspective distortion, and every face's edges stay parallel the
-        way a published zone figure draws them — and it turns zooming into a
-        plain change of scale that behaves the same at every distance.
+        The parallel projection stays: it is the right one for a polyhedron
+        diagram, since every face's edges stay parallel the way a published
+        zone figure draws them.
         """
         self.plotter.enable_parallel_projection()
-        style = self.plotter.iren.interactor.GetInteractorStyle()
-        if hasattr(style, "SetMouseWheelMotionFactor"):
-            style.SetMouseWheelMotionFactor(_WHEEL_FACTOR)
+        self.plotter.interactor.installEventFilter(self)
+
+    @guard(default=False)
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name
+        if obj is self.plotter.interactor and event.type() == QEvent.Wheel:
+            factor = wheel_zoom.zoom_factor(event)
+            if factor != 1.0:
+                wheel_zoom.apply_zoom(
+                    self.plotter.renderer.GetActiveCamera(), factor)
+                self.plotter.renderer.ResetCameraClippingRange()
+                self.plotter.render()
+            return True  # consumed: VTK's own fixed-step dolly must not also run
+        return super().eventFilter(obj, event)
 
 
 __all__ = ["ZonePickerDialog"]

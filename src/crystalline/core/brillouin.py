@@ -185,6 +185,17 @@ def special_points(structure: Structure) -> Dict[str, Tuple[float, float, float]
         return {}
 
 
+def display_label(label: str) -> str:
+    """``G`` -> ``Γ``, for anything a person reads.
+
+    The stored label stays ``G`` because that is what goes into a deck: a
+    CRYSTAL title record is echoed back through Fortran I/O, and there is
+    nothing to gain by sending two bytes of UTF-8 through it. On screen there
+    is no such constraint, and the point is called Gamma.
+    """
+    return "Γ" if label == "G" else str(label)
+
+
 def _tidy(label: str) -> str:
     name = str(label).replace("\\", "").strip()
     return "G" if name.lower() == "gamma" else name
@@ -223,6 +234,7 @@ __all__ = [
     "CONVENTIONAL",
     "PRIMITIVE",
     "brillouin_zone",
+    "display_label",
     "nearest_special_point",
     "reciprocal_cell",
     "special_points",

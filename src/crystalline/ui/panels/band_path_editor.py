@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.core.brillouin import special_points, zone_lattice
+from crystalline.core.brillouin import display_label, special_points, zone_lattice
 from crystalline.core.properties_input import PropertiesInputError, band_path, band_shrink
 from crystalline.core.structure import Structure
 from crystalline.ui.safety import guard
@@ -238,7 +238,8 @@ class BandPathEditor(QWidget):
         self.changed.emit()
 
     def _add_row(self, labels, segment) -> None:
-        item = QListWidgetItem(f"{labels[0]}  →  {labels[1]}")
+        item = QListWidgetItem(
+            f"{display_label(labels[0])}  →  {display_label(labels[1])}")
         item.setData(Qt.UserRole, (tuple(labels), tuple(segment)))
         self._list.addItem(item)
 
@@ -336,7 +337,8 @@ def _kpoint_combo(points) -> QComboBox:
     combo = QComboBox()
     combo.setEditable(True)
     for label in points:
-        combo.addItem(label)
+        # Shown as Γ, and read back as Γ too — read_kpoint takes either.
+        combo.addItem(display_label(label))
     combo.setToolTip(
         "A labelled special point, or three fractional coordinates — "
         "'0.5 0 0.5', or '1/2 0 1/2'."
@@ -355,6 +357,8 @@ def read_kpoint(text: str, points: dict):
     text = text.strip()
     if not text:
         raise ValueError("Give a point label, or three fractional coordinates.")
+    if text == "Γ":       # what the combo shows for the point stored as G
+        text = "G"
     if text in points:
         return text, tuple(points[text])
     for label, point in points.items():          # tolerate a different case

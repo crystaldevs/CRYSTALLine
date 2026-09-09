@@ -28,6 +28,7 @@ from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from crystalline.core.structure import Structure
+from crystalline.ui import wheel_zoom
 from crystalline.ui.drag_controller import install_atom_drag
 from crystalline.ui.safety import guard
 from crystalline.viz.renderer import StructureRenderer
@@ -44,11 +45,6 @@ _ARROW_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
 # Wheel zoom. A mouse notch is 120 units of angleDelta; a trackpad sends much
 # smaller amounts, many times. Scaling the zoom by the actual delta makes both
 # continuous instead of stepping by VTK's fixed ~21% per event.
-_ZOOM_PER_NOTCH = 1.15
-_WHEEL_UNITS_PER_NOTCH = 120.0
-# One gesture should never invert or teleport the view, however large a delta a
-# device reports.
-_MAX_ZOOM_PER_EVENT = 4.0
 
 # A wheel zoom has no "end": it is a stream of discrete events, and a trackpad
 # sends a long one. The camera counts as still busy until this long after the
@@ -165,12 +161,9 @@ class Viewport(QWidget):
         raising the per-notch factor to it makes the zoom continuous, and gives a
         trackpad's stream of small events a proportionally small effect each.
         """
-        delta = event.angleDelta().y() or event.angleDelta().x()
-        if not delta:
+        factor = wheel_zoom.zoom_factor(event)
+        if factor == 1.0:
             return
-        notches = float(delta) / _WHEEL_UNITS_PER_NOTCH
-        factor = float(np.clip(_ZOOM_PER_NOTCH ** notches,
-                               1.0 / _MAX_ZOOM_PER_EVENT, _MAX_ZOOM_PER_EVENT))
         # A wheel zoom is a camera move like any other, and a trackpad's is a
         # long one; it just has no end event of its own, so it is timed out.
         self._set_camera_busy(True)
