@@ -14,7 +14,9 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -22,6 +24,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -48,6 +52,12 @@ _PATH_WIDTH = 5
 # rate, so the text sits just clear of the sphere at every zoom.
 _LABEL_OFFSET = 2.4
 
+# Dash and gap for the guide lines, as fractions of the zone's extent. VTK's
+# OpenGL2 backend dropped line stippling, so a dashed line is built out of real
+# short segments; these are the pieces.
+_DASH = 0.045
+_GAP = 0.035
+
 
 class ZonePickerDialog(QDialog):
     """Click special points in order; the path is the chain between them."""
@@ -57,7 +67,9 @@ class ZonePickerDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Pick a path on the Brillouin zone" if picking
                             else "Brillouin zone")
-        self.resize(880, 560)
+        # Wider than it was: the side column now carries the coordinates as
+        # well as the path, and both want to be readable at once.
+        self.resize(1000, 620)
         self._picking = picking
         self._structure = structure
         self._setting = PRIMITIVE
@@ -114,10 +126,10 @@ class ZonePickerDialog(QDialog):
         self._view = _ZoneView(self)
         body.addWidget(self._view, 1)
         self._list = QListWidget()
+        side = QVBoxLayout()
         if picking:
-            side = QVBoxLayout()
             side.addWidget(QLabel("Path"))
-            self._list.setMaximumWidth(190)
+            self._list.setMaximumWidth(240)
             side.addWidget(self._list, 1)
             undo = QPushButton("Remove last")
             undo.clicked.connect(self._undo)
@@ -125,7 +137,31 @@ class ZonePickerDialog(QDialog):
             clear.clicked.connect(self._clear)
             side.addWidget(undo)
             side.addWidget(clear)
-            body.addLayout(side)
+
+        # The coordinates the deck is actually written from. A picture of the
+        # zone says where a point is; only the numbers say which point it is,
+        # and they are what ends up in the BAND record.
+        side.addWidget(QLabel("Special points"))
+        self._table = QTableWidget(0, 3)
+        self._table.setHorizontalHeaderLabels(["", "fractional", "|k| (Å⁻¹)"])
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self._table.setSelectionBehavior(QTableWidget.SelectRows)
+        self._table.setMaximumWidth(240)
+        self._table.setToolTip(
+            "Fractional coordinates in this cell's reciprocal basis — the "
+            "numbers CRYSTAL reads, once multiplied by the shrinking factor."
+        )
+        side.addWidget(self._table, 2)
+        self._guides = QCheckBox("Symmetry lines from Γ")
+        self._guides.setToolTip(
+            "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
+            "Dashed, because they run through the inside of the zone."
+        )
+        self._guides.setChecked(True)
+        self._guides.toggled.connect(lambda _on: self._draw_and_sync())
+        side.addWidget(self._guides)
+        body.addLayout(side)
         outer.addLayout(body)
 
         # Opened from the menu there is nothing to accept: it is a picture, and
@@ -138,6 +174,28 @@ class ZonePickerDialog(QDialog):
         outer.addWidget(buttons)
 
         self._draw()
+        self._fill_table()
+
+    def _draw_and_sync(self) -> None:
+        self._draw()
+        self._sync()
+
+    def _fill_table(self) -> None:
+        """List every labelled point with the numbers behind it."""
+        self._table.setRowCount(len(self._points))
+        for row, (label, fractional) in enumerate(sorted(self._points.items())):
+            cartesian = np.asarray(fractional) @ self._reciprocal
+            cells = (
+                label,
+                " ".join(_tidy_number(v) for v in fractional),
+                f"{float(np.linalg.norm(cartesian)):.3f}",
+            )
+            for column, text in enumerate(cells):
+                item = QTableWidgetItem(text)
+                if column:
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self._table.setItem(row, column, item)
+        self._table.resizeColumnsToContents()
 
     def _resolve_lattice(self) -> None:
         """Fix the cell once; the zone and its labels then cannot disagree."""
@@ -154,6 +212,7 @@ class ZonePickerDialog(QDialog):
         self._picked = []
         self._draw()
         self._sync()
+        self._fill_table()
 
     # ── the picture ─────────────────────────────────────────────────────
     def _draw(self) -> None:
@@ -193,10 +252,52 @@ class ZonePickerDialog(QDialog):
                                      show_points=False,
                                      text_color=self._label_colour(),
                                      pickable=False)
+        if self._guides.isChecked():
+            self._draw_guides(plotter, radius)
+        self._draw_axes(plotter)
         if self._picking:
             plotter.enable_mesh_picking(callback=self._on_pick, show=False,
                                         show_message=False, left_clicking=True)
         plotter.reset_camera()
+
+    def _draw_guides(self, plotter, radius: float) -> None:
+        """Γ to every special point, dashed.
+
+        These are the symmetry lines a zone diagram names Δ, Λ and Σ. They run
+        through the inside of the zone, and a dashed line is how a drawing says
+        "this is behind the surface you are looking at" — the same convention
+        the Bilbao diagrams use for the hidden parts.
+        """
+        for _label, (_actor, centre) in self._actors.items():
+            if float(np.linalg.norm(centre)) < 1e-9:
+                continue   # Γ itself: there is no line from a point to itself
+            dashes = _dashed_line(np.zeros(3), centre, self._extent)
+            if dashes is not None:
+                plotter.add_mesh(dashes, color="#8a94a6", line_width=2,
+                                 pickable=False)
+
+    def _draw_axes(self, plotter) -> None:
+        """The reciprocal axes out of Γ, labelled as a zone diagram labels them."""
+        reach = self._extent * 1.35
+        for direction, name in ((np.array([1.0, 0, 0]), "kx"),
+                                (np.array([0, 1.0, 0]), "ky"),
+                                (np.array([0, 0, 1.0]), "kz")):
+            import pyvista as pv
+
+            tip = direction * reach
+            plotter.add_mesh(pv.lines_from_points(np.array([np.zeros(3), tip])),
+                             color="#8a94a6", line_width=1, pickable=False)
+            # A head, so the line reads as an axis rather than as another edge.
+            head = self._extent * 0.06
+            plotter.add_mesh(pv.Cone(center=tip - direction * head * 0.5,
+                                     direction=direction, height=head,
+                                     radius=head * 0.32, resolution=16),
+                             color="#8a94a6", pickable=False)
+            plotter.add_point_labels([tip * 1.04], [name], font_size=12,
+                                     shape=None, always_visible=True,
+                                     show_points=False, italic=True,
+                                     text_color=self._label_colour(),
+                                     pickable=False)
 
     def _label_colour(self) -> str:
         """Text that reads against both the marker and the viewport's ground.
@@ -285,6 +386,50 @@ class ZonePickerDialog(QDialog):
     def visualise(cls, structure: Structure, parent=None) -> None:
         """Show the zone on its own, with nothing to pick and nothing to return."""
         cls(structure, parent, picking=False).exec()
+
+
+def _tidy_number(value: float) -> str:
+    """A coordinate as the simple fraction it almost always is.
+
+    Special points are halves, thirds, quarters and eighths; ``0.333`` reads as
+    an approximation of something, while ``1/3`` reads as the thing itself.
+    """
+    from fractions import Fraction
+
+    ratio = Fraction(float(value)).limit_denominator(24)
+    if abs(float(ratio) - float(value)) > 1e-6:
+        return f"{value:.4g}"
+    if ratio.denominator == 1:
+        return str(ratio.numerator)
+    return f"{ratio.numerator}/{ratio.denominator}"
+
+
+def _dashed_line(start, end, extent: float):
+    """A line as a run of short segments.
+
+    VTK's OpenGL2 backend dropped line stippling, so a dashed line has to be
+    built out of real pieces. The dash and gap scale with the zone so the
+    pattern looks the same whatever the lattice parameters are.
+    """
+    import pyvista as pv
+
+    start, end = np.asarray(start, dtype=float), np.asarray(end, dtype=float)
+    length = float(np.linalg.norm(end - start))
+    dash, gap = _DASH * extent, _GAP * extent
+    if length < 1e-9 or dash < 1e-12:
+        return None
+    direction = (end - start) / length
+    points, lines, offset = [], [], 0.0
+    while offset < length:
+        head = start + direction * offset
+        tail = start + direction * min(offset + dash, length)
+        index = len(points)
+        points += [head, tail]
+        lines += [2, index, index + 1]
+        offset += dash + gap
+    if not points:
+        return None
+    return pv.PolyData(np.asarray(points), lines=np.asarray(lines))
 
 
 def _outward(point: np.ndarray) -> np.ndarray:
