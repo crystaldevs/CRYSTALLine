@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -25,7 +26,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.core.brillouin import brillouin_zone, reciprocal_cell, special_points
+from crystalline.core.brillouin import (
+    CONVENTIONAL,
+    PRIMITIVE,
+    brillouin_zone,
+    reciprocal_cell,
+    special_points,
+    zone_lattice,
+)
 from crystalline.core.structure import Structure
 from crystalline.ui.safety import guard
 
@@ -52,12 +60,16 @@ class ZonePickerDialog(QDialog):
         self.resize(880, 560)
         self._picking = picking
         self._structure = structure
+        self._setting = PRIMITIVE
         self._picked: List[str] = []
-        self._points = special_points(structure)
+        self._lattice = structure
+        self._points: dict = {}
         self._reciprocal = reciprocal_cell(structure)
         self._actors: dict = {}
         self._path_actors: list = []
         self._extent = 1.0
+
+        self._resolve_lattice()
 
         outer = QVBoxLayout(self)
         if not self._points:
@@ -75,6 +87,28 @@ class ZonePickerDialog(QDialog):
         note.setWordWrap(True)
         note.setStyleSheet("color: palette(mid);")
         outer.addWidget(note)
+
+        # Which cell's zone. Two different pictures of the same crystal, and
+        # picking one of them wrong is the classic way to draw a Brillouin zone
+        # that looks plausible and is not the crystal's.
+        chooser = QHBoxLayout()
+        chooser.addWidget(QLabel("Cell"))
+        self._setting_box = QComboBox()
+        self._setting_box.addItem("Primitive (the Bravais lattice's own zone)", PRIMITIVE)
+        self._setting_box.addItem("Conventional (the crystallographic cell)", CONVENTIONAL)
+        self._setting_box.currentIndexChanged.connect(self._on_setting_changed)
+        chooser.addWidget(self._setting_box, 1)
+        if picking:
+            # CRYSTAL reads a BAND path in the primitive reciprocal basis, so a
+            # path picked on the conventional zone would be the wrong numbers.
+            self._setting_box.setEnabled(False)
+            self._setting_box.setToolTip(
+                "A band path is written in the primitive reciprocal basis, which "
+                "is what CRYSTAL reads — so a path is always picked on the "
+                "primitive zone. Cell ▸ Brillouin zone can show either."
+            )
+        chooser.addStretch(1)
+        outer.addLayout(chooser)
 
         body = QHBoxLayout()
         self._view = _ZoneView(self)
@@ -105,6 +139,22 @@ class ZonePickerDialog(QDialog):
 
         self._draw()
 
+    def _resolve_lattice(self) -> None:
+        """Fix the cell once; the zone and its labels then cannot disagree."""
+        self._lattice = zone_lattice(self._structure, self._setting)
+        self._points = special_points(self._lattice)
+        self._reciprocal = reciprocal_cell(self._lattice)
+
+    @guard()
+    def _on_setting_changed(self, _index: int = 0) -> None:
+        """``currentIndexChanged`` carries the index — take it, or the slot
+        raises TypeError into the safety net and the switch does nothing."""
+        self._setting = self._setting_box.currentData()
+        self._resolve_lattice()
+        self._picked = []
+        self._draw()
+        self._sync()
+
     # ── the picture ─────────────────────────────────────────────────────
     def _draw(self) -> None:
         plotter = self._view.plotter
@@ -112,7 +162,7 @@ class ZonePickerDialog(QDialog):
         self._actors = {}
         self._path_actors = []
         try:
-            vertices, faces = brillouin_zone(self._structure)
+            vertices, faces = brillouin_zone(self._lattice)
         except Exception as exc:  # noqa: BLE001 - a lattice we cannot build
             plotter.add_text(f"No Brillouin zone: {exc}", font_size=9)
             return

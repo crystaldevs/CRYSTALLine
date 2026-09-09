@@ -11,11 +11,14 @@ import pytest
 from ase.build import bulk
 
 from crystalline.core.brillouin import (
+    CONVENTIONAL,
+    PRIMITIVE,
     brillouin_zone,
     nearest_special_point,
     reciprocal_cell,
     special_points,
     to_cartesian,
+    zone_lattice,
 )
 from crystalline.core.structure import Structure
 
@@ -103,12 +106,42 @@ def test_gamma_is_called_g_as_crystal_writes_it():
     assert points["G"] == (0.0, 0.0, 0.0)
 
 
-def test_special_points_land_inside_the_zone():
-    structure = Structure.from_ase(bulk("Cu", "fcc", a=3.6))
-    vertices, _faces = brillouin_zone(structure)
-    radius = np.linalg.norm(vertices, axis=1).max()
-    for label, fractional in special_points(structure).items():
-        assert np.linalg.norm(to_cartesian(structure, fractional)) <= radius + 1e-6, label
+def _bounding_planes(structure, reach=2):
+    """The perpendicular bisectors that bound the zone, as reciprocal vectors."""
+    reciprocal = reciprocal_cell(structure)
+    span = range(-reach, reach + 1)
+    return np.array([(i, j, k) for i in span for j in span for k in span
+                     if (i, j, k) != (0, 0, 0)], dtype=float) @ reciprocal
+
+
+def _surface_margin(structure, cartesian):
+    """How far outside the zone a point is: 0 on the surface, <0 inside."""
+    planes = _bounding_planes(structure)
+    return float((planes @ cartesian - 0.5 * np.einsum("ij,ij->i", planes, planes)).max())
+
+
+@pytest.mark.parametrize("name, atoms", [
+    ("fcc", bulk("Cu", "fcc", a=3.6)),
+    ("bcc", bulk("Fe", "bcc", a=2.87)),
+    ("hcp", bulk("Mg", "hcp", a=3.21, c=5.21)),
+])
+def test_every_labelled_point_lies_exactly_on_the_zone_surface(name, atoms):
+    """The invariant that catches a zone drawn from the wrong cell.
+
+    A high-symmetry point other than Γ is on the zone boundary by definition —
+    it is a face centre, an edge or a vertex. Label a zone from one lattice and
+    draw it from another and these points drift off the surface, which is
+    exactly what a conventional-cell file used to do: the picture was a cube
+    and W, K and U were outside it entirely.
+    """
+    structure = Structure.from_ase(atoms)
+    points = special_points(structure)
+    assert points, name
+    for label, fractional in points.items():
+        cartesian = to_cartesian(structure, fractional)
+        if np.linalg.norm(cartesian) < 1e-9:
+            continue  # Γ, at the centre
+        assert abs(_surface_margin(structure, cartesian)) < 1e-9, f"{name}: {label}"
 
 
 def test_an_unclassifiable_lattice_gives_no_labels_rather_than_raising():
@@ -127,3 +160,61 @@ def test_the_nearest_special_point_is_found_and_far_ones_are_not():
     x = to_cartesian(structure, special_points(structure)["X"])
     assert nearest_special_point(structure, x) == "X"
     assert nearest_special_point(structure, x * 100) is None
+
+
+# ── which cell the zone belongs to ────────────────────────────────────────
+def _mgo(cubic):
+    from ase.build import bulk as _bulk
+
+    return Structure.from_ase(_bulk("MgO", "rocksalt", a=4.21, cubic=cubic))
+
+
+@pytest.mark.parametrize("cubic", [False, True])
+def test_the_primitive_zone_is_the_truncated_octahedron_whatever_the_file_says(cubic):
+    """MgO's zone is the same shape whether the file holds the primitive cell
+    or the conventional one — the lattice is fcc either way.
+
+    This is the bug the switch exists to make impossible. Handed a conventional
+    cubic MgO, the zone used to come out a cube (6 faces) while the labels
+    stayed fcc, putting W, K and U outside the picture.
+    """
+    lattice = zone_lattice(_mgo(cubic), PRIMITIVE)
+    vertices, faces = brillouin_zone(lattice)
+    assert len(faces) == 14
+    assert len(vertices) == 24
+    assert {len(face) for face in faces} == {4, 6}
+    assert set(special_points(lattice)) == {"G", "K", "L", "U", "W", "X"}
+
+
+@pytest.mark.parametrize("cubic", [False, True])
+def test_the_conventional_zone_is_the_cube_with_its_own_labels(cubic):
+    """The other picture, and an honest one: the cubic cell's zone is a cube,
+    and it carries the simple-cubic labels rather than fcc's."""
+    lattice = zone_lattice(_mgo(cubic), CONVENTIONAL)
+    vertices, faces = brillouin_zone(lattice)
+    assert len(faces) == 6
+    assert len(vertices) == 8
+    assert set(special_points(lattice)) == {"G", "M", "R", "X"}
+
+
+def test_each_setting_labels_the_zone_it_draws():
+    """Both settings are self-consistent — that is the point of resolving the
+    cell once and being literal about it everywhere after."""
+    for setting in (PRIMITIVE, CONVENTIONAL):
+        lattice = zone_lattice(_mgo(True), setting)
+        for label, fractional in special_points(lattice).items():
+            cartesian = to_cartesian(lattice, fractional)
+            if np.linalg.norm(cartesian) < 1e-9:
+                continue
+            assert abs(_surface_margin(lattice, cartesian)) < 1e-9, f"{setting}: {label}"
+
+
+def test_an_unclassifiable_lattice_keeps_its_own_cell():
+    """No standard setting exists, and the Wigner-Seitz cell is still fine."""
+    from ase import Atoms
+
+    odd = Structure.from_ase(Atoms("H", positions=[[0, 0, 0]],
+                                   cell=[[3.1, 0.2, 0.1], [0.3, 3.3, 0.2], [0.1, 0.4, 3.7]],
+                                   pbc=True))
+    lattice = zone_lattice(odd, PRIMITIVE)
+    assert brillouin_zone(lattice)[0].shape[1] == 3

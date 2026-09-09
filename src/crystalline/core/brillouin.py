@@ -20,6 +20,14 @@ import numpy as np
 
 from crystalline.core.structure import Structure
 
+# The two cells a Brillouin zone can be asked for. They are genuinely different
+# pictures of the same crystal: MgO's primitive (fcc) zone is the truncated
+# octahedron every band structure is plotted on, while its conventional (cubic)
+# zone is a cube — the *folded* zone of a lattice four times smaller, on which
+# the fcc labels L, W and K do not exist at all.
+PRIMITIVE = "primitive"
+CONVENTIONAL = "conventional"
+
 # Reciprocal lattice points out to this many cells in each direction are fed to
 # the Voronoi construction. The first zone is bounded by the perpendicular
 # bisectors to the *nearest* neighbours, and for any lattice — however oblique —
@@ -30,6 +38,43 @@ _NEIGHBOUR_RANGE = 2
 # output repeats them per face, and a hair of floating-point difference would
 # otherwise leave a mesh full of near-duplicate points.
 _MERGE_TOLERANCE = 1e-6
+
+
+def zone_lattice(structure: Structure, setting: str = PRIMITIVE) -> Structure:
+    """The cell whose zone is drawn — resolve it once, then use it throughout.
+
+    Everything else here is *literal*: it uses the lattice of the structure it
+    is handed and nothing else. That is the whole defence against the mistake
+    this function exists to prevent — drawing the zone from one cell while
+    labelling it from another, which silently produces a cube with fcc points
+    floating outside it.
+
+    ``PRIMITIVE`` gives the standard primitive cell that the high-symmetry
+    labels are defined on, whatever setting the file was written in; it is the
+    zone of the actual Bravais lattice, and the one to compare with a textbook.
+    ``CONVENTIONAL`` gives the crystallographic cell's own, smaller zone.
+
+    A structure that cannot be classified is returned untouched — an
+    unclassifiable lattice still has a perfectly good Wigner–Seitz cell.
+    """
+    if not structure.is_periodic:
+        return structure
+    if setting == CONVENTIONAL:
+        from crystalline.core.cells import to_conventional
+
+        try:
+            return to_conventional(structure)
+        except Exception:  # noqa: BLE001 - the original cell is a usable answer
+            return structure
+    try:
+        from pymatgen.io.ase import AseAtomsAdaptor
+        from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+        pmg = AseAtomsAdaptor.get_structure(structure.to_ase())
+        primitive = SpacegroupAnalyzer(pmg, symprec=1e-2).get_primitive_standard_structure()
+        return Structure.from_ase(AseAtomsAdaptor.get_atoms(primitive))
+    except Exception:  # noqa: BLE001
+        return structure
 
 
 def reciprocal_cell(structure: Structure) -> np.ndarray:
@@ -123,15 +168,18 @@ def special_points(structure: Structure) -> Dict[str, Tuple[float, float, float]
     ``G`` for Γ, as CRYSTAL writes it. Empty when the lattice cannot be
     classified — the caller then has a zone to click on but no labels for it,
     which is still usable.
+
+    Literal about the cell it is given: the points come back in *this*
+    structure's own reciprocal basis, so they always land on the zone
+    :func:`brillouin_zone` draws for the same structure. Ask for the labels of
+    a cell and you are drawing another one and they will not match — see
+    :func:`zone_lattice`, which is how a caller chooses.
     """
     try:
-        from pymatgen.io.ase import AseAtomsAdaptor
-        from pymatgen.symmetry.bandstructure import HighSymmKpath
-
-        kpath = HighSymmKpath(AseAtomsAdaptor.get_structure(structure.to_ase()))
+        points = structure.to_ase().cell.bandpath().special_points
         return {
             _tidy(label): tuple(float(v) for v in point)
-            for label, point in kpath.kpath["kpoints"].items()
+            for label, point in points.items()
         }
     except Exception:  # noqa: BLE001 - no labels is a usable state, a crash is not
         return {}
@@ -172,9 +220,12 @@ def nearest_special_point(
 
 
 __all__ = [
+    "CONVENTIONAL",
+    "PRIMITIVE",
     "brillouin_zone",
     "nearest_special_point",
     "reciprocal_cell",
     "special_points",
     "to_cartesian",
+    "zone_lattice",
 ]

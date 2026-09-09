@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.core.brillouin import special_points
+from crystalline.core.brillouin import special_points, zone_lattice
 from crystalline.core.crystal_input import suggest_shrink
 from crystalline.core.properties_input import (
     BandOptions,
@@ -485,7 +485,10 @@ class PropertiesBuilderDialog(QDialog):
     def _add_segment(self) -> None:
         if self._path_conventional.isChecked():
             return
-        points = special_points(self._structure)
+        # The primitive cell's points, to match the path band_path writes and
+        # the basis CRYSTAL reads a BAND record in — not the loaded cell's,
+        # which for a conventional MgO file would be a different zone's labels.
+        points = special_points(zone_lattice(self._structure))
         try:
             start_label, start = _read_kpoint(self._path_from.currentText(), points)
             end_label, end = _read_kpoint(self._path_to.currentText(), points)
@@ -668,7 +671,7 @@ def _kpoint_combo(structure) -> QComboBox:
     """
     combo = QComboBox()
     combo.setEditable(True)
-    for label in special_points(structure):
+    for label in special_points(zone_lattice(structure)):
         combo.addItem(label)
     combo.setToolTip(
         "A labelled special point, or three fractional coordinates — "
