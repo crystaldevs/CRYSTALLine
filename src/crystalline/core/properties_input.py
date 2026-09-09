@@ -70,6 +70,10 @@ class BandOptions:
     points: int = 200        # NSUB, total k points along the whole path
     first_band: int = 1      # INZB
     last_band: Optional[int] = None  # IFNB; None -> filled in from the basis
+    # ISS: the denominator the path's whole numbers are written over. None
+    # derives the smallest that works — a chosen one that would leave a
+    # coordinate fractional is refused by _to_integer rather than rounded.
+    shrink: Optional[int] = None
     store: bool = True       # IPLO=1: write fort.25/BAND.DAT for plotting
     print_eigenvalues: bool = False  # LPR66
 
@@ -391,7 +395,7 @@ def _band_lines(structure: Structure, opts: BandOptions) -> List[str]:
     labels = list(opts.labels)
     if not segments:
         labels, segments = band_path(structure)
-    shrink = band_shrink(segments)
+    shrink = opts.shrink if opts.shrink is not None else band_shrink(segments)
     last = opts.last_band if opts.last_band is not None else _band_ceiling(structure)
     if last < opts.first_band:
         raise PropertiesInputError(

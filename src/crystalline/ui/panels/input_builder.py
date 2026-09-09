@@ -80,6 +80,7 @@ from crystalline.core.crystal_input import (
     write_input,
 )
 from crystalline.core.structure import Structure
+from crystalline.ui.panels.band_path_editor import BandPathEditor
 
 _GRID_DEFAULT_LABEL = "Default"
 # Sentinels for the split-functional combos: both "unset" states are meaningful
@@ -741,30 +742,27 @@ class InputBuilderDialog(QDialog):
             "matrices account for long-range Coulomb interactions."
         )
         form.addRow(self._disp_wang)
-        self._disp_wang_tensor = QLineEdit("1 0 0 0 1 0 0 0 1")
-        self._disp_wang_tensor.setToolTip("Nine elements of the dielectric tensor, by rows.")
-        form.addRow("Dielectric tensor", self._disp_wang_tensor)
+        # One field per row, because that is one record per row in the deck.
+        # A single nine-number field invited writing them on one line, which
+        # CRYSTAL misreads.
+        self._disp_wang_rows = []
+        for index, default in enumerate(("1 0 0", "0 1 0", "0 0 1")):
+            row = QLineEdit(default)
+            row.setToolTip("Three elements of this row of the dielectric tensor.")
+            form.addRow("Dielectric tensor" if index == 0 else "", row)
+            self._disp_wang_rows.append(row)
 
         self._disp_bands = QCheckBox("Phonon bands (BANDS)")
         form.addRow(self._disp_bands)
-        self._disp_bands_shrink = _plain_spin(16, 1, 96)
         self._disp_bands_points = _plain_spin(30, 2, 500)
-        form.addRow("Shrinking factor (ISS)", self._disp_bands_shrink)
         form.addRow("Points per line (NSUB)", self._disp_bands_points)
-        self._disp_bands_path = _extra_box("One segment per line:  I1 I2 I3  J1 J2 J3")
-        form.addRow("Path segments", self._disp_bands_path)
-        fill = QPushButton("Fill with the conventional path")
-        fill.setToolTip(
-            "The standard Setyawan–Curtarolo path for this Bravais lattice, "
-            "written as the integers over a shrinking factor that BANDS reads. "
-            "It also sets the shrinking factor to match."
-        )
-        fill.clicked.connect(self._fill_conventional_phonon_path)
-        form.addRow("", fill)
-        self._disp_bands_route = QLabel()
-        self._disp_bands_route.setWordWrap(True)
-        self._disp_bands_route.setStyleSheet("color: palette(mid);")
-        form.addRow("", self._disp_bands_route)
+        # The same editor as the .d3 builder's: a phonon path and an electron
+        # path are the same object, and the integers CRYSTAL reads mean nothing
+        # without the shrinking factor they are written over — which the editor
+        # owns, so the two cannot be set to disagree.
+        self._disp_bands_editor = BandPathEditor(self._structure)
+        self._disp_bands_editor.changed.connect(self._on_form_changed)
+        form.addRow("Path", self._disp_bands_editor)
 
         self._disp_pdos = QCheckBox("Phonon DOS (PDOS)")
         form.addRow(self._disp_pdos)
@@ -984,7 +982,8 @@ class InputBuilderDialog(QDialog):
         ]
         for check in checks:
             check.toggled.connect(self._refresh_preview)
-        self._disp_wang_tensor.textChanged.connect(self._refresh_preview)
+        for row in self._disp_wang_rows:
+            row.textChanged.connect(self._refresh_preview)
 
         self._title.textChanged.connect(self._refresh_preview)
         spins = [
@@ -994,7 +993,7 @@ class InputBuilderDialog(QDialog):
             self._eos_vmin, self._eos_vmax, self._eos_vn,
             self._eos_pmin, self._eos_pmax, self._eos_pn,
             self._el_numderiv, self._el_stepsize,
-            self._disp_bands_shrink, self._disp_bands_points,
+            self._disp_bands_points,
             self._disp_pdos_max, self._disp_pdos_bins,
             self._disp_ins_max, self._disp_ins_bins,
             self._qha_step, self._qha_nt, self._qha_t1, self._qha_t2,
@@ -1015,45 +1014,29 @@ class InputBuilderDialog(QDialog):
 
         for editor in (self._extra, self._opt_extra, self._freq_extra,
                        self._eos_extra, self._el_extra,
-                       self._disp_bands_path, self._disp_extra, self._qha_extra,
+                       self._disp_extra, self._qha_extra,
                        self._anh_modes, self._anh_extra, self._anharm_extra, self._soc_extra,
                        self._cphf.extra, self._freq_cphf.extra):
             editor.textChanged.connect(self._refresh_preview)
 
     # ── reactivity ──────────────────────────────────────────────────────
-    def _fill_conventional_phonon_path(self) -> None:
-        """Put the lattice's conventional path into the BANDS box.
+    def _phonon_bands_shrink(self) -> int:
+        """The ISS the phonon path is written over — the editor's, never a
+        separate control that could drift out of step with the numbers."""
+        return self._disp_bands_editor.effective_shrink() or 1
 
-        The same path the electronic band structure uses, in the same integers
-        -over-a-shrinking-factor form — a phonon dispersion is asked along the
-        same route, and writing it out by hand is a dozen lines of arithmetic
-        nobody should be doing twice.
+    def _phonon_bands_path(self) -> str:
+        """The path as whole numbers over that factor, one segment per record.
+
+        A factor that cannot express the path raises out of the editor; the
+        preview shows the complaint rather than a rounded path.
         """
-        from crystalline.core.properties_input import (
-            PropertiesInputError, band_path, band_shrink,
-        )
+        from crystalline.core.properties_input import PropertiesInputError
 
         try:
-            labels, segments = band_path(self._structure)
-            shrink = band_shrink(segments)
-        except PropertiesInputError as exc:
-            QMessageBox.information(self, "No conventional path", str(exc))
-            return
-        # Numbers only. A trailing "# G -> X" would read nicely, but CRYSTAL's
-        # list-directed input is not reliably tolerant of text after the values
-        # it wants, and no working deck carries any — the route goes in the
-        # label below the box instead, where it costs nothing to be wrong.
-        rows = [" ".join(str(int(round(v * shrink))) for v in (*start, *end))
-                for start, end in segments]
-        self._disp_bands_shrink.setValue(shrink)
-        self._disp_bands_path.setPlainText("\n".join(rows))
-        self._disp_bands.setChecked(True)
-        route = labels[0][0] + "".join(
-            (" | " if index and start != labels[index - 1][1] else " ") + end
-            for index, (start, end) in enumerate(labels)
-        )
-        self._disp_bands_route.setText(f"conventional path:  {route}")
-        self._on_form_changed()
+            return "\n".join(self._disp_bands_editor.integer_rows())
+        except PropertiesInputError:
+            return ""
 
     def _on_form_changed(self) -> None:
         """A change that alters which rows apply, then refreshes the preview."""
@@ -1133,8 +1116,9 @@ class InputBuilderDialog(QDialog):
 
         for widget in (*self._disp_interp_l, self._disp_interp_print):
             widget.setEnabled(self._disp_interp.isChecked())
-        self._disp_wang_tensor.setEnabled(self._disp_wang.isChecked())
-        for widget in (self._disp_bands_shrink, self._disp_bands_points, self._disp_bands_path):
+        for row in self._disp_wang_rows:
+            row.setEnabled(self._disp_wang.isChecked())
+        for widget in (self._disp_bands_points, self._disp_bands_editor):
             widget.setEnabled(self._disp_bands.isChecked())
         # BANDS already implies NOKSYMDISP, so the separate switch stops applying.
         self._disp_noksym.setEnabled(not self._disp_bands.isChecked())
@@ -1180,8 +1164,9 @@ class InputBuilderDialog(QDialog):
         Returning ``None`` lets the preview show the builder's own complaint
         rather than raising out of the middle of a keystroke.
         """
+        text = " ".join(row.text() for row in self._disp_wang_rows)
         try:
-            values = [float(v) for v in self._disp_wang_tensor.text().replace(",", " ").split()]
+            values = [float(v) for v in text.replace(",", " ").split()]
         except ValueError:
             return None
         return values or None
@@ -1352,9 +1337,9 @@ class InputBuilderDialog(QDialog):
                 dispersion=DispersionOptions(
                     noksymdisp=self._disp_noksym.isChecked(),
                     bands=self._disp_bands.isChecked(),
-                    bands_shrink=self._disp_bands_shrink.value(),
+                    bands_shrink=self._phonon_bands_shrink(),
                     bands_points=self._disp_bands_points.value(),
-                    bands_path=self._disp_bands_path.toPlainText(),
+                    bands_path=self._phonon_bands_path(),
                     interphess=(
                         (*[b.value() for b in self._disp_interp_l],
                          int(self._disp_interp_print.isChecked()))

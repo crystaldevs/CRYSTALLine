@@ -449,19 +449,19 @@ def _editable_builder():
     exactly as a user does.
     """
     dialog = _builder()
-    dialog._path_conventional.setChecked(False)
+    dialog._path_editor.conventional.setChecked(False)
     return dialog
 
 
 def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
     dialog = _editable_builder()
-    conventional = dialog._path_list.count()
+    conventional = dialog._path_editor._list.count()
     assert conventional > 1
-    dialog._path_list.setCurrentRow(0)
-    dialog._remove_segment()
-    assert dialog._path_list.count() == conventional - 1
-    dialog._reset_path()
-    assert dialog._path_list.count() == conventional
+    dialog._path_editor._list.setCurrentRow(0)
+    dialog._path_editor.remove_segment()
+    assert dialog._path_editor._list.count() == conventional - 1
+    dialog._path_editor.reset()
+    assert dialog._path_editor._list.count() == conventional
 
 
 def test_a_sub_path_is_expressible():
@@ -470,22 +470,22 @@ def test_a_sub_path_is_expressible():
     dialog = _editable_builder()
     # Bounded, not `while count > 1`: a removal that silently does nothing would
     # spin that loop forever instead of failing the test.
-    for _ in range(dialog._path_list.count() - 1):
-        dialog._path_list.setCurrentRow(1)
-        dialog._remove_segment()
-    assert dialog._path_list.count() == 1
+    for _ in range(dialog._path_editor._list.count() - 1):
+        dialog._path_editor._list.setCurrentRow(1)
+        dialog._path_editor.remove_segment()
+    assert dialog._path_editor._list.count() == 1
     lines = dialog._preview.toPlainText().splitlines()
     assert lines[2].split()[0] == "1", "one segment should mean NLINE = 1"
 
 
 def test_a_custom_point_the_conventional_path_never_visits_can_be_added():
     dialog = _editable_builder()
-    dialog._path_from.setEditText("X")
-    dialog._path_to.setEditText("1/2 1/4 3/4")
-    dialog._add_segment()
-    labels = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    dialog._path_editor._from.setEditText("X")
+    dialog._path_editor._to.setEditText("1/2 1/4 3/4")
+    dialog._path_editor.add_typed_segment()
+    labels = [dialog._path_editor._list.item(i).text() for i in range(dialog._path_editor._list.count())]
     assert any("(0.5 0.25 0.75)" in text for text in labels)
-    segments = [seg for _labels, seg in dialog._segments()]
+    segments = dialog._path_editor.segments()
     assert (0.5, 0.25, 0.75) in [end for _start, end in segments]
 
 
@@ -493,36 +493,36 @@ def test_an_unreadable_endpoint_is_refused_with_a_reason():
     """Not quietly rounded to the origin, which would be a band structure of a
     path nobody asked for."""
     dialog = _editable_builder()
-    before = dialog._path_list.count()
-    dialog._path_from.setEditText("nonsense")
-    dialog._path_to.setEditText("G")
-    dialog._add_segment()
-    assert dialog._path_list.count() == before
-    assert "not a point on this lattice" in dialog._path_note.text()
+    before = dialog._path_editor._list.count()
+    dialog._path_editor._from.setEditText("nonsense")
+    dialog._path_editor._to.setEditText("G")
+    dialog._path_editor.add_typed_segment()
+    assert dialog._path_editor._list.count() == before
+    assert "not a point on this lattice" in dialog._path_editor.note.text()
 
 
 def test_segments_can_be_reordered():
     dialog = _editable_builder()
-    first = dialog._path_list.item(0).text()
-    dialog._path_list.setCurrentRow(0)
-    dialog._move_segment(1)
-    assert dialog._path_list.item(1).text() == first
-    assert dialog._path_list.currentRow() == 1
+    first = dialog._path_editor._list.item(0).text()
+    dialog._path_editor._list.setCurrentRow(0)
+    dialog._path_editor.move_segment(1)
+    assert dialog._path_editor._list.item(1).text() == first
+    assert dialog._path_editor._list.currentRow() == 1
 
 
 def test_moving_past_the_ends_does_nothing():
     dialog = _editable_builder()
-    rows = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
-    dialog._path_list.setCurrentRow(0)
-    dialog._move_segment(-1)
-    dialog._path_list.setCurrentRow(dialog._path_list.count() - 1)
-    dialog._move_segment(1)
-    assert [dialog._path_list.item(i).text()
-            for i in range(dialog._path_list.count())] == rows
+    rows = [dialog._path_editor._list.item(i).text() for i in range(dialog._path_editor._list.count())]
+    dialog._path_editor._list.setCurrentRow(0)
+    dialog._path_editor.move_segment(-1)
+    dialog._path_editor._list.setCurrentRow(dialog._path_editor._list.count() - 1)
+    dialog._path_editor.move_segment(1)
+    assert [dialog._path_editor._list.item(i).text()
+            for i in range(dialog._path_editor._list.count())] == rows
 
 
 def test_a_typed_point_may_be_a_label_in_any_case_or_three_numbers():
-    from crystalline.ui.panels.properties_builder import _read_kpoint
+    from crystalline.ui.panels.band_path_editor import read_kpoint as _read_kpoint
 
     points = {"G": (0.0, 0.0, 0.0), "X": (0.5, 0.0, 0.5)}
     assert _read_kpoint("X", points) == ("X", (0.5, 0.0, 0.5))
@@ -542,21 +542,21 @@ def test_the_tick_makes_every_path_editor_refuse():
     which turned "remove until one segment is left" into an endless loop.
     """
     dialog = _builder()
-    assert dialog._path_conventional.isChecked()
-    before = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
-    dialog._path_list.setCurrentRow(0)
-    dialog._remove_segment()
-    dialog._move_segment(1)
-    dialog._add_segment()
-    after = [dialog._path_list.item(i).text() for i in range(dialog._path_list.count())]
+    assert dialog._path_editor.conventional.isChecked()
+    before = [dialog._path_editor._list.item(i).text() for i in range(dialog._path_editor._list.count())]
+    dialog._path_editor._list.setCurrentRow(0)
+    dialog._path_editor.remove_segment()
+    dialog._path_editor.move_segment(1)
+    dialog._path_editor.add_typed_segment()
+    after = [dialog._path_editor._list.item(i).text() for i in range(dialog._path_editor._list.count())]
     assert after == before
 
 
 def test_an_edited_path_survives_a_refresh():
     """What the removed self-repair used to eat."""
     dialog = _editable_builder()
-    dialog._path_list.setCurrentRow(0)
-    dialog._remove_segment()
-    shortened = dialog._path_list.count()
+    dialog._path_editor._list.setCurrentRow(0)
+    dialog._path_editor.remove_segment()
+    shortened = dialog._path_editor._list.count()
     dialog._refresh()
-    assert dialog._path_list.count() == shortened
+    assert dialog._path_editor._list.count() == shortened
