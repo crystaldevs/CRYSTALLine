@@ -1014,7 +1014,13 @@ def _dispersion_body(opts: DispersionOptions) -> List[str]:
         tensor = [float(v) for v in opts.wang]
         if len(tensor) != 9:
             raise CrystalInputError("WANG needs the 9 elements of the dielectric tensor.")
-        lines += ["WANG", " ".join(_fmt_float(v) for v in tensor)]
+        # Three records of three, one per row of the tensor — not nine on a
+        # line. Every working deck writes it this way (e.g. the ZnO WANG runs
+        # on the Desktop), and CRYSTAL reads three values per record: nine on
+        # one line leaves it reading the *next* keyword as numbers.
+        lines.append("WANG")
+        lines += [" ".join(_fmt_float(v) for v in tensor[row:row + 3])
+                  for row in (0, 3, 6)]
     if opts.bands:
         segments = _extra_lines(opts.bands_path)
         if not segments:

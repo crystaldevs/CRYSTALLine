@@ -602,7 +602,10 @@ def test_dispersion_interphess_and_wang():
     lines = _lines(deck)
     i = lines.index("INTERPHESS")
     assert lines[i + 1 : i + 3] == ["4 4 4", "0"]
-    assert lines[lines.index("WANG") + 1] == "2.5 0 0 0 2.5 0 0 0 2.5"
+    # Three records of three, as every working WANG deck writes it — nine on
+    # one line leaves CRYSTAL reading the following keyword as numbers.
+    at = lines.index("WANG")
+    assert lines[at + 1:at + 4] == ["2.5 0 0", "0 2.5 0", "0 0 2.5"]
 
 
 def test_wang_needs_nine_tensor_elements():
