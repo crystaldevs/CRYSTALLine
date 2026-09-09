@@ -49,11 +49,17 @@ def test_a_coordinate_is_shown_as_the_fraction_it_is():
     what explains the shrinking factor — a path through K = 1/3 1/3 0 and
     M = 1/2 0 0 needs ISS 6 because lcm(3, 2) is 6.
     """
-    assert zone_picker._tidy_number(1 / 3) == "1/3"
-    assert zone_picker._tidy_number(0.5) == "1/2"
-    assert zone_picker._tidy_number(0.375) == "3/8"
+    assert zone_picker._tidy_number(1 / 3) == "⅓"
+    assert zone_picker._tidy_number(0.5) == "½"
+    assert zone_picker._tidy_number(0.375) == "⅜"
     assert zone_picker._tidy_number(0.0) == "0"
-    assert zone_picker._tidy_number(-0.5) == "-1/2"
+    assert zone_picker._tidy_number(-0.5) == "-½"
+
+
+def test_a_fraction_with_no_glyph_falls_back_to_a_slash():
+    """The glyphs cover the denominators special points use; 1/7 is not one of
+    them, and inventing a glyph for it is not an option."""
+    assert zone_picker._tidy_number(1 / 7) == "1/7"
 
 
 def test_a_coordinate_that_is_not_a_simple_fraction_is_left_as_a_number():

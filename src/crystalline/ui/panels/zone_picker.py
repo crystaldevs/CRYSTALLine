@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,9 +23,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QFrame,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QScrollArea,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -40,6 +41,15 @@ from crystalline.core.brillouin import (
 )
 from crystalline.core.structure import Structure
 from crystalline.ui.safety import guard
+
+# Special points are halves, thirds, quarters, sixths and eighths, and every
+# one of those has a glyph of its own — which reads as the number it is rather
+# than as two numbers with a slash between them.
+_VULGAR = {
+    (1, 2): "½", (1, 3): "⅓", (2, 3): "⅔", (1, 4): "¼", (3, 4): "¾",
+    (1, 5): "⅕", (2, 5): "⅖", (3, 5): "⅗", (4, 5): "⅘",
+    (1, 6): "⅙", (5, 6): "⅚", (1, 8): "⅛", (3, 8): "⅜", (5, 8): "⅝", (7, 8): "⅞",
+}
 
 # How big a special point is drawn, as a fraction of the zone's own extent, so
 # the marker is the same visual size whatever the lattice parameters are.
@@ -57,6 +67,15 @@ _LABEL_OFFSET = 2.4
 # short segments; these are the pieces.
 _DASH = 0.045
 _GAP = 0.035
+
+# VTK dollies by 1.1 ** (MotionFactor * 0.2 * this) per wheel notch. The
+# default of 1.0 gives 21% a notch, which reads as jumping rather than zooming;
+# this gives about 3%.
+_WHEEL_FACTOR = 0.15
+
+# The markers, and the one the side panel is pointing at.
+_POINT_COLOUR = "#d6453c"
+_CURRENT_COLOUR = "#f5a623"
 
 
 class ZonePickerDialog(QDialog):
@@ -142,17 +161,22 @@ class ZonePickerDialog(QDialog):
         # zone says where a point is; only the numbers say which point it is,
         # and they are what ends up in the BAND record.
         side.addWidget(QLabel("Special points"))
-        self._table = QTableWidget(0, 3)
-        self._table.setHorizontalHeaderLabels(["", "fractional", "|k| (Å⁻¹)"])
-        self._table.verticalHeader().setVisible(False)
-        self._table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self._table.setSelectionBehavior(QTableWidget.SelectRows)
-        self._table.setMaximumWidth(240)
-        self._table.setToolTip(
+        self._cards: dict = {}
+        self._card_box = QVBoxLayout()
+        self._card_box.setContentsMargins(0, 0, 0, 0)
+        self._card_box.setSpacing(4)
+        holder = QWidget()
+        holder.setLayout(self._card_box)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(holder)
+        scroll.setMaximumWidth(250)
+        scroll.setToolTip(
             "Fractional coordinates in this cell's reciprocal basis — the "
             "numbers CRYSTAL reads, once multiplied by the shrinking factor."
         )
-        side.addWidget(self._table, 2)
+        side.addWidget(scroll, 2)
         self._guides = QCheckBox("Symmetry lines from Γ")
         self._guides.setToolTip(
             "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
@@ -181,21 +205,40 @@ class ZonePickerDialog(QDialog):
         self._sync()
 
     def _fill_table(self) -> None:
-        """List every labelled point with the numbers behind it."""
-        self._table.setRowCount(len(self._points))
-        for row, (label, fractional) in enumerate(sorted(self._points.items())):
+        """One card per labelled point: its badge, its coordinates, its |k|."""
+        while self._card_box.count():
+            item = self._card_box.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        self._cards = {}
+        for label, fractional in sorted(self._points.items()):
             cartesian = np.asarray(fractional) @ self._reciprocal
-            cells = (
-                label,
-                " ".join(_tidy_number(v) for v in fractional),
-                f"{float(np.linalg.norm(cartesian)):.3f}",
-            )
-            for column, text in enumerate(cells):
-                item = QTableWidgetItem(text)
-                if column:
-                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                self._table.setItem(row, column, item)
-        self._table.resizeColumnsToContents()
+            card = _PointCard(label, fractional, float(np.linalg.norm(cartesian)))
+            card.clicked.connect(self._on_card_clicked)
+            self._card_box.addWidget(card)
+            self._cards[label] = card
+        self._card_box.addStretch(1)
+
+    @guard()
+    def _on_card_clicked(self, label: str) -> None:
+        """A card is the same thing as its marker, and easier to hit.
+
+        The markers are small on purpose — big ones swallow their own labels —
+        which makes them fiddly to click. The card is the generous target for
+        the same point.
+        """
+        if self._picking:
+            self._picked.append(label)
+            self._sync()
+        self._highlight(label)
+
+    def _highlight(self, label: Optional[str]) -> None:
+        """Mark one point as the current one, in the list and in the picture."""
+        for name, card in self._cards.items():
+            card.set_current(name == label)
+        for name, (actor, _centre) in self._actors.items():
+            actor.prop.color = _CURRENT_COLOUR if name == label else _POINT_COLOUR
+        self._view.plotter.render()
 
     def _resolve_lattice(self) -> None:
         """Fix the cell once; the zone and its labels then cannot disagree."""
@@ -244,7 +287,7 @@ class ZonePickerDialog(QDialog):
         for label, fractional in self._points.items():
             centre = np.asarray(fractional) @ self._reciprocal
             sphere = pv.Sphere(radius=radius, center=centre)
-            actor = plotter.add_mesh(sphere, color="#d6453c", pickable=True)
+            actor = plotter.add_mesh(sphere, color=_POINT_COLOUR, pickable=True)
             self._actors[label] = (actor, centre)
             plotter.add_point_labels([centre + _outward(centre) * radius * _LABEL_OFFSET],
                                      [label], font_size=14, bold=True,
@@ -388,6 +431,68 @@ class ZonePickerDialog(QDialog):
         cls(structure, parent, picking=False).exec()
 
 
+class _PointCard(QFrame):
+    """One special point: a badge, its coordinates, and how far out it sits."""
+
+    clicked = Signal(str)
+
+    def __init__(self, label: str, fractional, magnitude: float) -> None:
+        super().__init__()
+        self.setObjectName("pointCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._label = label
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 6, 8, 6)
+        row.setSpacing(10)
+
+        badge = QLabel("Γ" if label == "G" else label)
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedSize(28, 28)
+        badge.setObjectName("pointBadge")
+        row.addWidget(badge)
+
+        text = QVBoxLayout()
+        text.setContentsMargins(0, 0, 0, 0)
+        text.setSpacing(0)
+        coordinates = QLabel("  ".join(_tidy_number(v) for v in fractional))
+        font = coordinates.font()
+        font.setPointSizeF(font.pointSizeF() + 1.5)
+        coordinates.setFont(font)
+        text.addWidget(coordinates)
+        distance = QLabel(f"{magnitude:.3f} Å⁻¹ from Γ")
+        distance.setStyleSheet("color: palette(mid); font-size: 11px;")
+        text.addWidget(distance)
+        row.addLayout(text, 1)
+
+        self.set_current(False)
+
+    def set_current(self, current: bool) -> None:
+        """Accent the card the picture is currently pointing at."""
+        edge = _CURRENT_COLOUR if current else "palette(mid)"
+        self.setStyleSheet(
+            f"""
+            QFrame#pointCard {{
+                border: 1px solid {edge};
+                border-radius: 6px;
+                background: palette(base);
+            }}
+            QFrame#pointCard:hover {{ border-color: {_CURRENT_COLOUR}; }}
+            QLabel#pointBadge {{
+                background: {_CURRENT_COLOUR if current else _POINT_COLOUR};
+                color: white;
+                border-radius: 14px;
+                font-weight: 600;
+            }}
+            """
+        )
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        self.clicked.emit(self._label)
+        super().mousePressEvent(event)
+
+
 def _tidy_number(value: float) -> str:
     """A coordinate as the simple fraction it almost always is.
 
@@ -401,6 +506,10 @@ def _tidy_number(value: float) -> str:
         return f"{value:.4g}"
     if ratio.denominator == 1:
         return str(ratio.numerator)
+    sign = "-" if ratio.numerator < 0 else ""
+    glyph = _VULGAR.get((abs(ratio.numerator), ratio.denominator))
+    if glyph:
+        return sign + glyph
     return f"{ratio.numerator}/{ratio.denominator}"
 
 
@@ -460,7 +569,29 @@ class _ZoneView(QWidget):
         from PySide6.QtWidgets import QApplication
 
         self.plotter.set_background(theme.active_palette(QApplication.instance()).scene)
+        self._smooth_the_zoom()
         self.setMinimumSize(360, 320)
+
+    def _smooth_the_zoom(self) -> None:
+        """Make the wheel move the camera in small, even steps.
+
+        Two things made zooming feel like jumping. VTK dollies by
+        ``1.1 ** (MotionFactor * 0.2 * MouseWheelMotionFactor)`` per notch,
+        which with the defaults (10 and 1.0) is **21% a notch** — a handful of
+        notches and the zone has left the screen. And under perspective
+        projection a dolly moves the camera *towards* the focal point, so the
+        same notch does more the closer you get, and eventually the near plane
+        eats the geometry.
+
+        A parallel projection is the right one for a polyhedron diagram anyway
+        — no perspective distortion, and every face's edges stay parallel the
+        way a published zone figure draws them — and it turns zooming into a
+        plain change of scale that behaves the same at every distance.
+        """
+        self.plotter.enable_parallel_projection()
+        style = self.plotter.iren.interactor.GetInteractorStyle()
+        if hasattr(style, "SetMouseWheelMotionFactor"):
+            style.SetMouseWheelMotionFactor(_WHEEL_FACTOR)
 
 
 __all__ = ["ZonePickerDialog"]
