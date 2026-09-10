@@ -185,3 +185,56 @@ def test_the_exporter_offers_vector_formats_too():
 
     extensions = {ext for ext, _label, _vector, _alpha in FORMATS}
     assert {"png", "jpg", "tif", "svg", "pdf", "eps"} <= extensions
+
+
+# ── the toolbar mirrors the structure window's ────────────────────────────
+def test_the_axis_chips_are_drawn_with_real_subscripts():
+    """A QToolButton renders plain text, and Unicode has a subscript x but no
+    subscript y or z — so "k_y" cannot be written as a string at all. The chip
+    label is drawn instead, which is why it is an icon."""
+    from PySide6.QtGui import QFont, QIcon
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    icon = zone_picker._subscript_icon("k", "y", "#ffffff", QFont())
+    assert isinstance(icon, QIcon)
+    assert not icon.isNull()
+    size = icon.availableSizes()[0]
+    assert size.width() > 0 and size.height() > 0
+
+
+def test_the_zone_and_the_structure_window_rotate_by_the_same_step():
+    """Two 3D views that orbit by different amounts would be two apps."""
+    from crystalline.ui import menus
+
+    assert zone_picker._ROTATE_STEP_DEG == menus._ROTATE_STEP_DEG
+
+
+def test_the_corner_readout_is_inset_from_the_edge():
+    """Text hard against the frame reads as though it has been cropped."""
+    assert 0.5 < zone_picker._LEGEND_X < 1.0
+    assert 0.5 < zone_picker._LEGEND_TOP < 1.0
+    # a comfortable margin, not a hairline
+    assert 1.0 - zone_picker._LEGEND_X > 0.02
+    assert 1.0 - zone_picker._LEGEND_TOP > 0.05
+
+
+def test_the_legend_does_not_repeat_the_path_list():
+    """The path's legs are listed beside the view, in the same colours. Saying
+    it again in the corner grew the corner with the path and told the reader
+    nothing new."""
+    import inspect
+
+    source = inspect.getsource(zone_picker.ZonePickerDialog._draw_legend)
+    assert "_legend_selection" in source
+    assert not hasattr(zone_picker.ZonePickerDialog, "_legend_segment")
+
+
+def test_there_is_no_control_that_does_nothing():
+    """The 'All coordinates' tick was left behind when the coordinates moved to
+    the corner: it redrew the scene and changed nothing anyone could see."""
+    import inspect
+
+    source = inspect.getsource(zone_picker)
+    assert "All coordinates" not in source
+    assert "_coordinates" not in source

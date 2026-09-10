@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PySide6.QtCore import QEvent
-from PySide6.QtGui import QColor
+from PySide6.QtCore import QEvent, QSize
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QIcon
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -28,6 +29,9 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
+    QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -67,6 +71,14 @@ _LABEL_OFFSET = 2.4
 
 # One colour per leg of the path, reused around when a path is longer than the
 # list. Chosen to stay apart on a pale ground and in the legend beside them.
+# The same step the structure window's rotate chips use.
+_ROTATE_STEP_DEG = 15.0
+
+# Where the corner readout sits, in viewport fractions. Inset from the edge:
+# text hard against the frame reads as though it has been cropped.
+_LEGEND_X = 0.955
+_LEGEND_TOP = 0.915
+
 _SEGMENT_COLOURS = [
     "#e8710a", "#1a73e8", "#12a150", "#a142f4",
     "#d93025", "#00897b", "#c77700", "#5b6bd6",
@@ -93,8 +105,7 @@ class ZonePickerDialog(QDialog):
     def __init__(self, structure: Structure, parent: Optional[QWidget] = None,
                  picking: bool = True) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Pick a path on the Brillouin zone" if picking
-                            else "Brillouin zone")
+        self.setWindowTitle("Path builder" if picking else "Brillouin zone")
         # Wider than it was: the side column now carries the coordinates as
         # well as the path, and both want to be readable at once.
         self.resize(1000, 620)
@@ -152,50 +163,11 @@ class ZonePickerDialog(QDialog):
         chooser.addStretch(1)
         outer.addLayout(chooser)
 
-        # The tools live in a row above the picture rather than in a column
-        # beside it, so nothing competes with the zone for width.
-        tools = QHBoxLayout()
-        tools.addWidget(QLabel("View"))
-        for name, direction in (("kx", (1, 0, 0)), ("ky", (0, 1, 0)),
-                                ("kz", (0, 0, 1)), ("⌂", None)):
-            button = QPushButton(name)
-            button.setFixedWidth(40)
-            button.setToolTip("Back to the default three-quarter view"
-                              if direction is None else f"Look down {name}")
-            button.clicked.connect(
-                lambda _checked=False, d=direction: self._look_along(d))
-            tools.addWidget(button)
-        tools.addSpacing(12)
-        self._guides = QCheckBox("Symmetry lines")
-        self._guides.setToolTip(
-            "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
-            "Dashed, because they run through the inside of the zone."
-        )
-        self._guides.setChecked(True)
-        self._guides.toggled.connect(lambda _on: self._draw_and_sync())
-        tools.addWidget(self._guides)
-        # The coordinates ride with the points they belong to, in the picture
-        # itself — a column of numbers beside a diagram makes the reader do the
-        # matching. Off is for when the zone is wanted as a clean figure.
-        self._coordinates = QCheckBox("All coordinates")
-        self._coordinates.setToolTip(
-            "Coordinates for every point at once. Off by default because the "
-            "high-symmetry points of a cubic lattice all sit within about "
-            "thirty degrees of each other, so six two-line labels overlap into "
-            "an unreadable heap — which is why printed zone diagrams label the "
-            "points and table the vectors.\n\n"
-            "Click any point to see its own coordinates whatever this says."
-        )
-        self._coordinates.setChecked(False)
-        self._coordinates.toggled.connect(lambda _on: self._draw_and_sync())
-        tools.addWidget(self._coordinates)
-        tools.addStretch(1)
-        save = QPushButton("Export image…")
-        save.setToolTip("Save the view — the same formats, resolution and "
-                        "transparency as the structure window's export.")
-        save.clicked.connect(self._save_image)
-        tools.addWidget(save)
-        outer.addLayout(tools)
+        # The same controls as the structure window's view toolbar, in the same
+        # shapes: solid axis chips to look down an axis, ghost chips to orbit by
+        # a step. A second 3D view that invented its own vocabulary would make
+        # the user learn the app twice.
+        outer.addWidget(self._view_toolbar())
 
         body = QHBoxLayout()
         self._view = _ZoneView(self)
@@ -259,6 +231,98 @@ class ZonePickerDialog(QDialog):
         from crystalline.ui.image_export import export_view
 
         export_view(self, self._view.export_image, "brillouin_zone")
+
+    # ── the view toolbar, mirroring the structure window's ──────────────
+    def _view_toolbar(self) -> QWidget:
+        bar = QToolBar(self)
+        bar.setIconSize(QSize(22, 18))
+
+        caption = QLabel("VIEW")
+        caption.setContentsMargins(6, 0, 6, 0)
+        bar.addWidget(caption)
+        # Coloured like the structure window's a/b/c chips and like the axes
+        # drawn in the view, so a chip and its arrow are plainly the same axis.
+        for axis, letter, direction in (("a", "x", (1, 0, 0)),
+                                        ("b", "y", (0, 1, 0)),
+                                        ("c", "z", (0, 0, 1))):
+            button = QToolButton(bar)
+            button.setIcon(_subscript_icon("k", letter, "#ffffff", self.font()))
+            button.setToolTip(f"Look down k{letter}")
+            button.setProperty("chip", "axis")
+            button.setProperty("axis", axis)
+            button.clicked.connect(
+                lambda _checked=False, d=direction: self._look_along(d))
+            bar.addWidget(button)
+
+        bar.addWidget(_spacer(10))
+        rotate = QLabel("ROTATE")
+        rotate.setContentsMargins(2, 0, 6, 0)
+        bar.addWidget(rotate)
+        for label, tip, azimuth, elevation, roll in (
+            ("◀", "Rotate left", -_ROTATE_STEP_DEG, 0.0, 0.0),
+            ("▶", "Rotate right", _ROTATE_STEP_DEG, 0.0, 0.0),
+            ("▲", "Rotate up", 0.0, _ROTATE_STEP_DEG, 0.0),
+            ("▼", "Rotate down", 0.0, -_ROTATE_STEP_DEG, 0.0),
+            ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -_ROTATE_STEP_DEG),
+            ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, _ROTATE_STEP_DEG),
+        ):
+            button = QToolButton(bar)
+            button.setText(label)
+            button.setToolTip(f"{tip} ({_ROTATE_STEP_DEG:g}°)")
+            button.setAutoRepeat(True)          # hold to keep turning
+            button.setProperty("chip", "ghost")
+            button.clicked.connect(
+                lambda _checked=False, a=azimuth, e=elevation, r=roll:
+                self._rotate_view(a, e, r))
+            bar.addWidget(button)
+
+        bar.addWidget(_spacer(10))
+        home = QToolButton(bar)
+        home.setText("⌂")
+        home.setToolTip("Back to the default three-quarter view")
+        home.setProperty("chip", "ghost")
+        home.clicked.connect(lambda _checked=False: self._look_along(None))
+        bar.addWidget(home)
+
+        bar.addWidget(_spacer(10))
+        self._guides = QCheckBox("Symmetry lines")
+        self._guides.setToolTip(
+            "The lines Γ→X, Γ→L, Γ→K … that a zone diagram labels Δ, Λ and Σ. "
+            "Dashed, because they run through the inside of the zone."
+        )
+        self._guides.setChecked(True)
+        self._guides.toggled.connect(lambda _on: self._draw_and_sync())
+        bar.addWidget(self._guides)
+
+        stretch = QWidget(bar)
+        stretch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        bar.addWidget(stretch)
+        save = QToolButton(bar)
+        save.setText("Export image…")
+        save.setToolTip("Save the view — the same formats, resolution and "
+                        "transparency as the structure window's export.")
+        save.setProperty("chip", "ghost")
+        save.clicked.connect(self._save_image)
+        bar.addWidget(save)
+        return bar
+
+    @guard()
+    def _rotate_view(self, azimuth: float = 0.0, elevation: float = 0.0,
+                     roll: float = 0.0) -> None:
+        """Orbit by a step, exactly as the structure viewport's chips do."""
+        camera = self._view.plotter.renderer.GetActiveCamera()
+        if azimuth:
+            camera.Azimuth(azimuth)
+        if elevation:
+            camera.Elevation(elevation)
+            # Elevation alone skews (and at the poles flips) the up vector.
+            camera.OrthogonalizeViewUp()
+        if roll:
+            # vtkCamera.Roll turns the *up vector*, so the scene appears to go
+            # the other way: negate to make a positive roll read as clockwise.
+            camera.Roll(-roll)
+        self._view.plotter.renderer.ResetCameraClippingRange()
+        self._view.plotter.render()
 
     def _resolve_lattice(self) -> None:
         """Fix the cell once; the zone and its labels then cannot disagree."""
@@ -445,7 +509,6 @@ class ZonePickerDialog(QDialog):
                                         color=segment_colour(index),
                                         line_width=_PATH_WIDTH, pickable=False)
         )
-        self._legend_segment(index)
 
     def _undo(self) -> None:
         if self._picked:
@@ -545,8 +608,8 @@ class ZonePickerDialog(QDialog):
     def _legend_line(self, slot: int, text: str, colour: str) -> str:
         plotter = self._view.plotter
         name = f"zone-legend-{slot}"
-        plotter.add_text(text, position=(0.985, 0.955 - slot * 0.045),
-                         viewport=True, font_size=11, color=colour,
+        plotter.add_text(text, position=(_LEGEND_X, _LEGEND_TOP - slot * 0.045),
+                         viewport=True, font_size=12, color=colour,
                          font_file=_unicode_font(), name=name, render=False)
         actor = plotter.renderer.actors.get(name)
         if actor is not None:                     # right-align on the corner
@@ -555,18 +618,13 @@ class ZonePickerDialog(QDialog):
             self._legend_names.append(name)
         return name
 
-    def _legend_segment(self, index: int) -> None:
-        """The legend line for one leg of the path."""
-        start, end = self._picked[index], self._picked[index + 1]
-        self._legend_line(
-            index + 1,
-            f"{display_label(start)} → {display_label(end)}"
-            f"    {self._segment_length(start, end):.3f} Å⁻¹",
-            segment_colour(index),
-        )
-
     def _legend_selection(self) -> None:
-        """The top line: whichever point was last clicked, and its components."""
+        """The corner reads out the clicked point, and only that.
+
+        It used to list the legs of the path as well — which the Path list
+        beside the view already does, in the same colours. Saying it twice made
+        the corner grow with the path and told the reader nothing new.
+        """
         fractional = (self._points.get(self._selected)
                       if self._selected is not None else None)
         if fractional is None:
@@ -585,11 +643,9 @@ class ZonePickerDialog(QDialog):
         self._legend_names = []
 
     def _draw_legend(self) -> None:
-        """Rebuild the whole legend — for a path that changed shape, not grew."""
+        """Rebuild the legend — one line, for whichever point is selected."""
         self._clear_legend()
         self._legend_selection()
-        for index in range(max(len(self._picked) - 1, 0)):
-            self._legend_segment(index)
 
     # ── the result ──────────────────────────────────────────────────────
     def path(self) -> List[Tuple[Tuple[str, str], tuple]]:
@@ -701,6 +757,52 @@ def _unicode_font() -> Optional[str]:
         return str(path) if path.exists() else None
     except Exception:  # noqa: BLE001 - the labels degrade, nothing breaks
         return None
+
+
+def _spacer(width: int) -> QWidget:
+    """A fixed gap between groups of chips, as the structure toolbar uses."""
+    widget = QWidget()
+    widget.setFixedWidth(width)
+    return widget
+
+
+def _subscript_icon(base: str, sub: str, colour: str, font) -> QIcon:
+    """``k`` with a real subscript, drawn as an icon.
+
+    A QToolButton renders plain text only, and Unicode has a subscript x but no
+    subscript y or z — so "k_y" cannot be written as a string at all. Drawing
+    the two pieces at two sizes is the only way to label these chips the way a
+    reciprocal-space axis is written.
+    """
+    from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPixmap
+
+    big = QFont(font)
+    big.setBold(True)
+    big.setPointSizeF(font.pointSizeF() + 1.0)
+    small = QFont(big)
+    small.setPointSizeF(big.pointSizeF() * 0.68)
+
+    big_metrics, small_metrics = QFontMetrics(big), QFontMetrics(small)
+    drop = small_metrics.height() * 0.28          # how far the subscript sits low
+    width = big_metrics.horizontalAdvance(base) + small_metrics.horizontalAdvance(sub) + 2
+    height = int(big_metrics.height() + drop) + 2
+
+    # Retina: draw at the device ratio so the glyphs are not soft.
+    ratio = 2
+    pixmap = QPixmap(int(width) * ratio, height * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.TextAntialiasing, True)
+    painter.setPen(QColor(colour))
+    baseline = big_metrics.ascent()
+    painter.setFont(big)
+    painter.drawText(1, baseline, base)
+    painter.setFont(small)
+    painter.drawText(1 + big_metrics.horizontalAdvance(base),
+                     int(baseline + drop), sub)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def _enable_mathtext() -> None:
