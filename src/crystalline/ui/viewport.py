@@ -253,6 +253,19 @@ class Viewport(QWidget):
         """Draw the Symmetry panel's ticked elements over the structure."""
         self.renderer.set_symmetry_elements(elements, labels=labels)
 
+    @guard()
+    def reset_view(self) -> None:
+        """Frame the whole structure again, from the default direction.
+
+        The counterpart of the a/b/c chips: those choose a direction, this
+        undoes whatever orbiting and zooming has happened since.
+        """
+        self.interactor.view_isometric()
+        self.interactor.reset_camera()
+        self._limit_zoom_out()
+        self._drag.reactivate()
+        self.interactor.render()
+
     def rotate_view(self, azimuth: float = 0.0, elevation: float = 0.0, roll: float = 0.0) -> None:
         """Orbit the camera around the structure by the given angles (degrees).
 

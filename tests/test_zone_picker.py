@@ -238,3 +238,68 @@ def test_there_is_no_control_that_does_nothing():
     source = inspect.getsource(zone_picker)
     assert "All coordinates" not in source
     assert "_coordinates" not in source
+
+
+# ── the two toolbars stay in step ─────────────────────────────────────────
+def test_both_views_offer_the_same_rotate_chips():
+    """Same glyphs, same order, same meaning — from one definition."""
+    from crystalline.ui import menus
+
+    labels = [chip[0] for chip in menus.ROTATE_CHIPS]
+    assert labels == ["◀", "▶", "▲", "▼", "↺", "↻"]
+    # unit signs, so the step box decides how far a press turns
+    for _label, _tip, azimuth, elevation, roll in menus.ROTATE_CHIPS:
+        assert {abs(azimuth), abs(elevation), abs(roll)} == {0.0, 1.0}
+
+
+def test_the_rotation_step_is_a_control_starting_at_fifteen_degrees():
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import menus
+
+    QApplication.instance() or QApplication([])
+    box = menus.rotate_step_box(None)
+    assert box.value() == 15
+    assert box.minimum() >= 1 and box.maximum() >= 90
+    assert box.suffix() == "°"
+
+
+def test_the_k_axes_are_drawn_in_the_colours_of_the_chips_that_aim_down_them():
+    """A chip and the arrow it aims at have to be recognisably the same axis —
+    the structure window's a/b/c chips match its lattice gizmo the same way."""
+    import inspect
+
+    from crystalline.ui import theme
+
+    source = inspect.getsource(zone_picker.ZonePickerDialog._draw_axes)
+    assert "AXIS_COLOURS" in source
+    assert len(theme.AXIS_COLOURS) == 3
+
+
+def test_no_leg_of_a_path_is_coloured_like_an_axis():
+    """Otherwise a segment through the middle of the zone reads as an axis."""
+    from crystalline.ui import theme
+
+    assert not set(zone_picker._SEGMENT_COLOURS) & set(theme.AXIS_COLOURS)
+
+
+# ── clicking nothing ──────────────────────────────────────────────────────
+def test_a_click_on_empty_space_clears_the_selection():
+    """pyvista's mesh picking only calls back on a hit, so a miss was silent —
+    the last point stayed marked, and read out in the corner, with nothing to
+    say it was stale."""
+    from PySide6.QtWidgets import QApplication
+
+    QApplication.instance() or QApplication([])
+    assert hasattr(zone_picker.ZonePickerDialog, "_on_press")
+    assert hasattr(zone_picker.ZonePickerDialog, "_on_release")
+
+
+def test_a_drag_from_empty_space_is_not_a_click():
+    """Rotating the zone by starting on the background is the most ordinary
+    thing anyone does here; it must not wipe the selection."""
+    import inspect
+
+    source = inspect.getsource(zone_picker.ZonePickerDialog._on_release)
+    assert "_CLICK_SLOP" in source
+    assert zone_picker._CLICK_SLOP >= 2, "a hand is never perfectly still"

@@ -97,6 +97,11 @@ _AXIS_A = "#d62728"
 _AXIS_B = "#2ca02c"
 _AXIS_C = "#1f77b4"
 
+# The same three, for anything outside this module that has to match a chip —
+# the Brillouin zone's k_x/k_y/k_z axes, drawn in the colours of the buttons
+# that aim down them.
+AXIS_COLOURS = (_AXIS_A, _AXIS_B, _AXIS_C)
+
 # Geometry shared by every control, so nothing is a one-off.
 _RADIUS = 5
 _RADIUS_SMALL = 4

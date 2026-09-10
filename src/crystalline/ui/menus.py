@@ -25,6 +25,40 @@ from crystalline.ui.widgets import ToggleSwitch
 # theme change restyles them without anything here being told about it.
 _ROTATE_STEP_DEG = 15.0
 
+# The orbit chips, shared with the Brillouin-zone view so the two 3D views
+# offer the same gestures. The angles are unit signs; the step multiplies them.
+ROTATE_CHIPS = (
+    ("◀", "Rotate left", -1.0, 0.0, 0.0),
+    ("▶", "Rotate right", 1.0, 0.0, 0.0),
+    ("▲", "Rotate up", 0.0, 1.0, 0.0),
+    ("▼", "Rotate down", 0.0, -1.0, 0.0),
+    ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -1.0),
+    ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, 1.0),
+)
+
+
+def rotate_step_box(parent):
+    """How far one press of a rotate chip turns the view, in degrees."""
+    from PySide6.QtWidgets import QSpinBox
+
+    box = QSpinBox(parent)
+    box.setRange(1, 90)
+    box.setValue(int(_ROTATE_STEP_DEG))
+    box.setSuffix("°")
+    box.setFixedWidth(64)
+    box.setToolTip("How far one press of a rotate button turns the view.")
+    return box
+
+
+def reset_view_icon(parent=None):
+    """The fit-the-view glyph, in the current theme's text colour."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    palette = theme.active_palette(QApplication.instance())
+    return theme.monochrome_icon("fit-view.svg", palette.text)
+
 
 def build_menus(window) -> None:
     """Build the whole menu bar and the toolbars, in dependency order."""
@@ -227,6 +261,11 @@ def refresh_history_icons(window) -> None:
         action = getattr(window, attribute, None)
         if action is not None:
             action.setIcon(_history_icon(window, name))
+    # The reset chip is drawn the same way, and vanishes into the toolbar if it
+    # keeps the other theme's colour.
+    reset = getattr(window, "_reset_view_button", None)
+    if reset is not None:
+        reset.setIcon(reset_view_icon(window))
 
 
 def refresh_appearance_button(window) -> None:
@@ -476,7 +515,17 @@ def _build_toolbars(window) -> None:
         view_toolbar.addWidget(button)
         window._axis_buttons.append(button)
 
-    # Orbit the view by a fixed step. Unlike a/b/c alignment these need no cell,
+    # Back to the framed default. Not an axis — it undoes orbiting and zooming
+    # rather than choosing a direction — so it is a quiet chip, not a coloured one.
+    window._reset_view_button = QToolButton(window)
+    window._reset_view_button.setToolTip("Fit the whole structure, from the default view")
+    window._reset_view_button.setProperty("chip", "ghost")
+    window._reset_view_button.setIcon(reset_view_icon(window))
+    window._reset_view_button.clicked.connect(
+        lambda _checked=False: window.viewport.reset_view())
+    view_toolbar.addWidget(window._reset_view_button)
+
+    # Orbit the view by a step. Unlike a/b/c alignment these need no cell,
     # so they stay enabled for molecules too.
     view_toolbar.addWidget(_toolbar_spacer(10))
     rotate_caption = QLabel("ROTATE")
@@ -484,26 +533,25 @@ def _build_toolbars(window) -> None:
     view_toolbar.addWidget(rotate_caption)
     # The last two spin the structure in the screen plane (about the axis
     # perpendicular to the screen) rather than orbiting the camera around it.
-    for label, tooltip, azimuth, elevation, roll in (
-        ("◀", "Rotate left", -_ROTATE_STEP_DEG, 0.0, 0.0),
-        ("▶", "Rotate right", _ROTATE_STEP_DEG, 0.0, 0.0),
-        ("▲", "Rotate up", 0.0, _ROTATE_STEP_DEG, 0.0),
-        ("▼", "Rotate down", 0.0, -_ROTATE_STEP_DEG, 0.0),
-        ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -_ROTATE_STEP_DEG),
-        ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, _ROTATE_STEP_DEG),
-    ):
+    for label, tooltip, azimuth, elevation, roll in ROTATE_CHIPS:
         button = QToolButton(window)
         button.setText(label)
-        button.setToolTip(f"{tooltip} ({_ROTATE_STEP_DEG:g}°)")
+        button.setToolTip(tooltip)
         button.setAutoRepeat(True)  # hold to keep turning
         button.setProperty("chip", "ghost")
+        # The signs are fixed; how far each press turns is read from the step
+        # box when it is pressed, so changing the step needs no rewiring.
         button.clicked.connect(
-            lambda _checked=False, a=azimuth, e=elevation, r=roll: window.viewport.rotate_view(
-                a, e, r
-            )
+            lambda _checked=False, a=azimuth, e=elevation, r=roll:
+            window.viewport.rotate_view(a * window._rotate_step.value(),
+                                        e * window._rotate_step.value(),
+                                        r * window._rotate_step.value())
         )
         view_toolbar.addWidget(button)
         window._rotate_buttons.append(button)
+
+    window._rotate_step = rotate_step_box(window)
+    view_toolbar.addWidget(window._rotate_step)
 
     # The cell being drawn, beside the view controls: it is a property of what is
     # on screen, and worth flipping without going to a menu.

@@ -46,7 +46,7 @@ from crystalline.core.brillouin import (
     zone_lattice,
 )
 from crystalline.core.structure import Structure
-from crystalline.ui import wheel_zoom
+from crystalline.ui import menus, theme, wheel_zoom
 from crystalline.ui.safety import guard
 
 # Special points are halves, thirds, quarters, sixths and eighths, and every
@@ -70,7 +70,9 @@ _PATH_WIDTH = 5
 _LABEL_OFFSET = 2.4
 
 # One colour per leg of the path, reused around when a path is longer than the
-# list. Chosen to stay apart on a pale ground and in the legend beside them.
+# list. Chosen to stay apart on a pale ground and in the legend beside them —
+# and to avoid the axis red, green and blue, which now belong to k_x, k_y and
+# k_z and would otherwise say "axis" in the middle of the zone.
 # The same step the structure window's rotate chips use.
 _ROTATE_STEP_DEG = 15.0
 
@@ -79,9 +81,13 @@ _ROTATE_STEP_DEG = 15.0
 _LEGEND_X = 0.955
 _LEGEND_TOP = 0.915
 
+# How far the mouse may travel between press and release and still count as a
+# click rather than a drag of the camera, in pixels.
+_CLICK_SLOP = 3
+
 _SEGMENT_COLOURS = [
-    "#e8710a", "#1a73e8", "#12a150", "#a142f4",
-    "#d93025", "#00897b", "#c77700", "#5b6bd6",
+    "#e8710a", "#a142f4", "#00897b", "#d81b60",
+    "#6d4c41", "#5b6bd6", "#8d6e00", "#00838f",
 ]
 
 # Dash and gap for the guide lines, as fractions of the zone's extent. VTK's
@@ -199,6 +205,7 @@ class ZonePickerDialog(QDialog):
         outer.addWidget(buttons)
 
         self._draw()
+        self._watch_for_empty_clicks()
 
     def _draw_and_sync(self) -> None:
         """Redraw for a change of options, leaving the camera where it was."""
@@ -248,6 +255,7 @@ class ZonePickerDialog(QDialog):
             button = QToolButton(bar)
             button.setIcon(_subscript_icon("k", letter, "#ffffff", self.font()))
             button.setToolTip(f"Look down k{letter}")
+            button.setToolTip(f"Look down k{letter}")
             button.setProperty("chip", "axis")
             button.setProperty("axis", axis)
             button.clicked.connect(
@@ -258,31 +266,29 @@ class ZonePickerDialog(QDialog):
         rotate = QLabel("ROTATE")
         rotate.setContentsMargins(2, 0, 6, 0)
         bar.addWidget(rotate)
-        for label, tip, azimuth, elevation, roll in (
-            ("◀", "Rotate left", -_ROTATE_STEP_DEG, 0.0, 0.0),
-            ("▶", "Rotate right", _ROTATE_STEP_DEG, 0.0, 0.0),
-            ("▲", "Rotate up", 0.0, _ROTATE_STEP_DEG, 0.0),
-            ("▼", "Rotate down", 0.0, -_ROTATE_STEP_DEG, 0.0),
-            ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -_ROTATE_STEP_DEG),
-            ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, _ROTATE_STEP_DEG),
-        ):
+        for label, tip, azimuth, elevation, roll in menus.ROTATE_CHIPS:
             button = QToolButton(bar)
             button.setText(label)
-            button.setToolTip(f"{tip} ({_ROTATE_STEP_DEG:g}°)")
+            button.setToolTip(tip)
             button.setAutoRepeat(True)          # hold to keep turning
             button.setProperty("chip", "ghost")
+            # Unit signs; the step box says how far a press turns.
             button.clicked.connect(
                 lambda _checked=False, a=azimuth, e=elevation, r=roll:
-                self._rotate_view(a, e, r))
+                self._rotate_view(a * self._step.value(),
+                                  e * self._step.value(),
+                                  r * self._step.value()))
             bar.addWidget(button)
+        self._step = menus.rotate_step_box(bar)
+        bar.addWidget(self._step)
 
-        bar.addWidget(_spacer(10))
-        home = QToolButton(bar)
-        home.setText("⌂")
-        home.setToolTip("Back to the default three-quarter view")
-        home.setProperty("chip", "ghost")
-        home.clicked.connect(lambda _checked=False: self._look_along(None))
-        bar.addWidget(home)
+        self._reset_button = QToolButton(bar)
+        self._reset_button.setToolTip("Fit the whole zone, from the default view")
+        self._reset_button.setProperty("chip", "ghost")
+        self._reset_button.setIcon(menus.reset_view_icon(bar))
+        self._reset_button.clicked.connect(
+            lambda _checked=False: self._look_along(None))
+        bar.addWidget(self._reset_button)
 
         bar.addWidget(_spacer(10))
         self._guides = QCheckBox("Symmetry lines")
@@ -437,24 +443,28 @@ class ZonePickerDialog(QDialog):
     def _draw_axes(self, plotter) -> None:
         """The reciprocal axes out of Γ, labelled as a zone diagram labels them."""
         reach = self._extent * 1.35
-        for direction, name in ((np.array([1.0, 0, 0]), r"$k_x$"),
-                                (np.array([0, 1.0, 0]), r"$k_y$"),
-                                (np.array([0, 0, 1.0]), r"$k_z$")):
+        # Each axis in its chip's colour, so the button and the arrow it aims
+        # down are plainly the same thing — the structure window's a/b/c chips
+        # match its lattice gizmo the same way.
+        for direction, name, colour in (
+            (np.array([1.0, 0, 0]), r"$k_x$", theme.AXIS_COLOURS[0]),
+            (np.array([0, 1.0, 0]), r"$k_y$", theme.AXIS_COLOURS[1]),
+            (np.array([0, 0, 1.0]), r"$k_z$", theme.AXIS_COLOURS[2]),
+        ):
             import pyvista as pv
 
             tip = direction * reach
             plotter.add_mesh(pv.lines_from_points(np.array([np.zeros(3), tip])),
-                             color="#8a94a6", line_width=1, pickable=False)
+                             color=colour, line_width=2, pickable=False)
             # A head, so the line reads as an axis rather than as another edge.
             head = self._extent * 0.06
             plotter.add_mesh(pv.Cone(center=tip - direction * head * 0.5,
                                      direction=direction, height=head,
                                      radius=head * 0.32, resolution=16),
-                             color="#8a94a6", pickable=False)
+                             color=colour, pickable=False)
             plotter.add_point_labels([tip * 1.04], [name], font_size=14,
                                      shape=None, always_visible=True,
-                                     show_points=False,
-                                     text_color=self._label_colour(),
+                                     show_points=False, text_color=colour,
                                      pickable=False)
 
     def _label_colour(self) -> str:
@@ -469,6 +479,50 @@ class ZonePickerDialog(QDialog):
         from crystalline.ui import theme
 
         return theme.active_palette(QApplication.instance()).text
+
+    # ── clicking nothing ────────────────────────────────────────────────
+    def _watch_for_empty_clicks(self) -> None:
+        """A click on nothing clears the selection.
+
+        pyvista's mesh picking only calls back on a *hit*, so a click that
+        misses is silent — and the last point stayed marked and read out in the
+        corner with nothing to say it was stale. These two observers catch the
+        miss. They are installed once: a redraw re-arms pyvista's picker, not
+        ours.
+        """
+        interactor = self._view.plotter.iren
+        interactor.add_observer("LeftButtonPressEvent", self._on_press)
+        interactor.add_observer("LeftButtonReleaseEvent", self._on_release)
+
+    @guard()
+    def _on_press(self, *_args) -> None:
+        self._press_at = self._view.plotter.iren.interactor.GetEventPosition()
+
+    @guard()
+    def _on_release(self, *_args) -> None:
+        """Clear the selection if this was a click on empty space.
+
+        A press and release far apart is a drag of the camera, which must not
+        count — rotating the zone by starting on the background is the most
+        ordinary thing anyone does here.
+        """
+        import vtk
+
+        x, y = self._view.plotter.iren.interactor.GetEventPosition()
+        start = getattr(self, "_press_at", None)
+        if start is None or abs(x - start[0]) > _CLICK_SLOP or abs(y - start[1]) > _CLICK_SLOP:
+            return
+        picker = vtk.vtkPropPicker()
+        picker.PickProp(x, y, self._view.plotter.renderer)
+        hit = picker.GetViewProp()
+        if any(hit is actor for actor, _centre in self._actors.values()):
+            return                                   # a marker: _on_pick has it
+        if self._selected is None:
+            return
+        self._selected = None
+        self._recolour_markers()
+        self._legend_selection()
+        self._view.plotter.render()
 
     @guard()
     def _on_pick(self, mesh) -> None:
@@ -629,6 +683,8 @@ class ZonePickerDialog(QDialog):
                       if self._selected is not None else None)
         if fractional is None:
             self._view.plotter.remove_actor("zone-legend-0", render=False)
+            if "zone-legend-0" in self._legend_names:
+                self._legend_names.remove("zone-legend-0")
             return
         self._legend_line(
             0,
