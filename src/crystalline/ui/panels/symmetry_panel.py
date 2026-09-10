@@ -30,7 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+import numpy as np
+
 from crystalline.core import symmetry as symmetry_mod
+from crystalline.ui.safety import guard
 from crystalline.core.structure import Structure
 
 # The three groups, in the order the analysis sorts its elements.
@@ -51,6 +54,11 @@ class SymmetryPanel(QWidget):
 
     # the elements that should be drawn in 3D, and whether to label them
     elements_changed = Signal(list, bool)
+    # The panel is handed a *derived* analysis cell, not the structure the app
+    # is holding — folded to one cell, and replaced on every edit. Setting a
+    # reduction on that copy would change nothing anyone can see, so the panel
+    # asks instead, and the window applies it to the crystal itself.
+    reduction_changed = Signal(tuple)
 
     def __init__(self, structure: Structure, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -89,10 +97,31 @@ class SymmetryPanel(QWidget):
         row.addStretch(1)
         layout.addLayout(row)
 
+        # Reducing the symmetry belongs beside finding it: the same operators,
+        # read once to see what the crystal has and once to decide what to give
+        # up. What is given up is a property of the crystal, so it is reported
+        # here whether or not this panel is drawing anything.
+        reduce_row = QHBoxLayout()
+        self._reduce = QPushButton("Reduce symmetry…")
+        self._reduce.setToolTip(
+            "Declare the crystal in a lower group, so atoms the full symmetry\n"
+            "holds equivalent can move apart. Nothing is moved: what changes is\n"
+            "how many sites are independent."
+        )
+        self._reduce.clicked.connect(lambda: self._open_reduction())
+        reduce_row.addWidget(self._reduce)
+        reduce_row.addStretch(1)
+        layout.addLayout(reduce_row)
+
         self._status = QLabel("")
         self._status.setWordWrap(True)
         self._status.setStyleSheet("color: palette(mid);")
         layout.addWidget(self._status)
+
+        self._reduced_note = QLabel()
+        self._reduced_note.setWordWrap(True)
+        self._reduced_note.setStyleSheet("color: palette(mid);")
+        layout.addWidget(self._reduced_note)
 
         self._tree = QTreeWidget()
         self._tree.setHeaderHidden(True)
@@ -123,6 +152,44 @@ class SymmetryPanel(QWidget):
         self._sync_buttons()
 
     # ── external hooks ──────────────────────────────────────────────────
+    @guard()
+    def _open_reduction(self) -> None:
+        from crystalline.ui.panels.symmetry_reduction import SymmetryReductionDialog
+
+        from PySide6.QtWidgets import QDialog
+
+        dialog = SymmetryReductionDialog(self._structure, self)
+        # QDialog.Accepted, not dialog.Accepted: PySide6 does not put Qt's
+        # scoped enums on the instance, and reaching for one there raises.
+        if dialog.exec() != QDialog.Accepted:
+            return
+        chosen = dialog.chosen()
+        if tuple(self._structure.reduced_symmetry) != chosen:
+            self.reduction_changed.emit(chosen)
+
+    def _refresh_reduced_note(self) -> None:
+        """Say, always, whether the crystal is being treated as less symmetric.
+
+        A reduction is invisible in the structure itself — no atom moves — so
+        without a line saying so it is a setting that silently decides what
+        every deck contains.
+        """
+        kept = self._structure.reduced_symmetry
+        if not kept:
+            self._reduced_note.setText("")
+            return
+        from crystalline.core import symmetry_reduction as reduction
+
+        symmetry = reduction.analyse(self._structure, self._symprec.value())
+        if symmetry is None:
+            self._reduced_note.setText(f"Reduced to {len(kept)} point operators.")
+            return
+        current = reduction.descend(symmetry, [np.asarray(r, dtype=int) for r in kept])
+        full = symmetry.full()
+        self._reduced_note.setText(
+            f"Reduced to {current.symbol} (No. {current.number}) from "
+            f"{full.symbol}: {current.sites} independent sites, was {full.sites}.")
+
     def show_analysis(self) -> None:
         """Run the analysis and draw what it finds, unless that has been done.
 

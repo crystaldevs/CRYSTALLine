@@ -349,6 +349,7 @@ class MainWindow(QMainWindow):
         self.geometry_panel.annotations_changed.connect(self.viewport.set_annotations)
         # Symmetry panel: the ticked elements are drawn over the structure.
         self.symmetry_panel.elements_changed.connect(self.viewport.set_symmetry_elements)
+        self.symmetry_panel.reduction_changed.connect(self._apply_symmetry_reduction)
 
     def _analysis_cell(self) -> Structure:
         """The shown structure folded back into one clean unit cell, edits included.
@@ -1240,6 +1241,22 @@ class MainWindow(QMainWindow):
         """Reveal and raise the (dockable) display-settings panel."""
         self._display_dock.show()
         self._display_dock.raise_()
+
+    @guard()
+    def _apply_symmetry_reduction(self, rotations: tuple) -> None:
+        """Treat the crystal as belonging to a lower group from now on.
+
+        Applied to the structure the app holds, not to the analysis cell the
+        panel was handed: that one is a fold of this one, remade on every edit,
+        and a choice recorded there would vanish with it. From here the
+        reduction rides in ``atoms.info``, so every derived copy — the analysis
+        cell, the builder's structure, an undo snapshot — carries it along.
+        """
+        self.structure.set_reduced_symmetry(rotations)
+        # Nothing else to do by hand: setting it notifies, and the ordinary
+        # change path records the undo, refreshes the Info panel and re-hands
+        # the symmetry panel an analysis cell — which now carries the choice.
+        self.symmetry_panel.set_structure(self._analysis_cell())
 
     def _show_symmetry_panel(self) -> None:
         """Open the point-symmetry panel (a tab beside Phonons) and analyse."""
