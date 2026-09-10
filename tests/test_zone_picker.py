@@ -14,15 +14,14 @@ pytest.importorskip("PySide6")
 from crystalline.ui.panels import zone_picker  # noqa: E402
 
 
-def test_a_label_sits_outside_the_zone_in_its_point_s_own_direction():
-    """Labels ride on a ring around the polyhedron, not on its surface.
+def test_a_label_sits_just_clear_of_its_own_marker():
+    """Close to the dot it names, and outward so it leaves the zone's body.
 
-    The high-symmetry points of a cubic lattice all lie within about thirty
-    degrees of each other, so labels nudged off their markers stay as bunched
-    as the points are. Pushing them all to one radius spreads them by the only
-    thing that differs — their direction.
+    Close is only possible because the coordinates moved to the corner legend:
+    a two-line label on every point overlapped into a heap, a one-line label
+    beside its dot does not.
     """
-    assert zone_picker._LABEL_RADIUS > 1.0, "the ring must clear the zone"
+    assert zone_picker._LABEL_OFFSET > 1.0, "the label must clear the marker"
     centre = np.array([0.4, -0.2, 0.1])
     direction = zone_picker._outward(centre)
     assert float(np.dot(direction, centre)) > 0  # outward, not into the zone
@@ -35,14 +34,13 @@ def test_gamma_gets_a_direction_of_its_own():
     assert pytest.approx(1.0) == float(np.linalg.norm(direction))
 
 
-def test_the_ring_scales_with_the_zone():
-    """Everything is a fraction of the zone's own extent, so the picture looks
-    the same whatever the lattice parameters are."""
+def test_the_gap_scales_with_the_marker():
+    """Both are world lengths, so zooming never closes the gap: the marker and
+    the distance to its label grow together."""
     for extent in (0.1, 1.0, 37.0):
-        ring = extent * zone_picker._LABEL_RADIUS
-        marker = extent * zone_picker._POINT_RADIUS
-        assert ring > extent > marker
-        assert ring / extent == pytest.approx(zone_picker._LABEL_RADIUS)
+        radius = zone_picker._POINT_RADIUS * extent
+        gap = radius * zone_picker._LABEL_OFFSET
+        assert gap / radius == pytest.approx(zone_picker._LABEL_OFFSET)
 
 
 # ── what the side panel shows ─────────────────────────────────────────────
@@ -107,3 +105,83 @@ def test_a_typed_gamma_is_understood_as_the_stored_label():
     points = {"G": (0.0, 0.0, 0.0), "X": (0.5, 0.0, 0.5)}
     assert read_kpoint("Γ", points) == ("G", (0.0, 0.0, 0.0))
     assert read_kpoint("G", points) == ("G", (0.0, 0.0, 0.0))
+
+
+# ── how labels are written into the scene ─────────────────────────────────
+def test_gamma_is_written_as_mathtext_because_the_font_has_no_greek():
+    """VTK's built-in font draws a missing glyph as *nothing*, so a bare "Γ"
+    label rendered blank and the point looked unlabelled. MathText has Greek."""
+    assert zone_picker._math_label("G") == r"$\Gamma$"
+    assert zone_picker._math_label("X") == "$X$"
+    assert zone_picker._math_label("X_1") == "$X_1$"
+
+
+def test_a_greek_named_point_keeps_its_letter_and_its_index():
+    assert zone_picker._math_label("Sigma_1") == r"$\Sigma_1$"
+
+
+def test_a_label_mathtext_could_not_set_falls_back_to_plain_text():
+    """Blank is the one unacceptable outcome; ugly is fine."""
+    assert zone_picker._math_label("X'") == "X'"
+
+
+def test_the_axes_are_labelled_with_real_subscripts():
+    """k_x, not kx: the axis of a reciprocal-space figure is a subscripted k."""
+    import inspect
+
+    source = inspect.getsource(zone_picker.ZonePickerDialog._draw_axes)
+    for axis in ("$k_x$", "$k_y$", "$k_z$"):
+        assert axis in source
+
+
+# ── the path's colours ────────────────────────────────────────────────────
+def test_each_leg_of_the_path_gets_its_own_colour():
+    colours = [zone_picker.segment_colour(i) for i in range(4)]
+    assert len(set(colours)) == 4
+
+
+def test_the_colours_repeat_rather_than_running_out():
+    """A path can be longer than the palette; it must still draw."""
+    palette = len(zone_picker._SEGMENT_COLOURS)
+    assert zone_picker.segment_colour(palette) == zone_picker.segment_colour(0)
+    assert zone_picker.segment_colour(palette * 3 + 2) == zone_picker.segment_colour(2)
+
+
+def test_the_legend_font_can_write_gamma_and_angstrom():
+    """The legend is plain text, not MathText, so it needs a font with the
+    characters in it — the same reason the markers needed MathText."""
+    TTFont = pytest.importorskip("fontTools.ttLib").TTFont
+
+    path = zone_picker._unicode_font()
+    if path is None:
+        pytest.skip("matplotlib's bundled font is not available")
+    cmap = TTFont(path).getBestCmap()
+    for character in "Γ→Å⁻¹½":
+        assert ord(character) in cmap, f"{character!r} is missing from the legend font"
+
+
+# ── one image export, shared with the structure window ────────────────────
+def test_both_windows_export_images_through_the_same_dialog():
+    """The zone offered a bare PNG while the structure window offered format,
+    resolution and transparency. Same job, two answers, and the difference is
+    only visible to someone who has used both — which is everyone."""
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from crystalline.ui import image_export
+
+    root = Path(inspect.getfile(image_export)).parent
+    for module in ("main_window.py", "panels/zone_picker.py"):
+        tree = ast.parse((root / module).read_text())
+        names = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert "export_view" in names, f"{module} does not use the shared exporter"
+
+
+def test_the_exporter_offers_vector_formats_too():
+    """A zone diagram goes into a paper, so PDF and SVG matter as much as PNG."""
+    from crystalline.ui.image_export import FORMATS
+
+    extensions = {ext for ext, _label, _vector, _alpha in FORMATS}
+    assert {"png", "jpg", "tif", "svg", "pdf", "eps"} <= extensions

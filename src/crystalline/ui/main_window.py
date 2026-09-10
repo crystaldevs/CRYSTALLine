@@ -15,7 +15,6 @@ from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -2032,74 +2031,10 @@ class MainWindow(QMainWindow):
     # ── export (image / animation) ──────────────────────────────────────
     def _export_image(self) -> None:
         """Save the current 3D view as an image, choosing format/scale/transparency."""
-        options = self._ask_image_options()
-        if options is None:
-            return
-        ext, label, scale, transparent = options
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export image", f"crystal_view.{ext}", f"{label} (*.{ext})"
-        )
-        if not path:
-            return
-        try:
-            self.viewport.export_image(path, scale=scale, transparent=transparent)
-        except Exception as exc:  # noqa: BLE001 - surface any render/write error
-            QMessageBox.critical(self, "Export failed", f"Could not save the image:\n{exc}")
+        from crystalline.ui.image_export import export_view
 
-    def _ask_image_options(self):
-        """Prompt for ``(ext, filter_label, scale, transparent)``; ``None`` if cancelled.
+        export_view(self, self.viewport.export_image, "crystal_view")
 
-        Scale supersamples raster output (the 3D analogue of DPI); transparency
-        needs an alpha channel, so both are greyed out for the formats that can't
-        use them (vector, and opaque rasters like JPEG/BMP).
-        """
-        # (ext, menu label, is_vector, has_alpha)
-        formats = [
-            ("png", "PNG image", False, True),
-            ("jpg", "JPEG image", False, False),
-            ("tif", "TIFF image", False, True),
-            ("svg", "SVG vector", True, False),
-            ("pdf", "PDF vector", True, False),
-            ("eps", "EPS vector", True, False),
-        ]
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Export image")
-        form = QFormLayout(dialog)
-
-        fmt_box = QComboBox(dialog)
-        for ext, label, is_vector, has_alpha in formats:
-            fmt_box.addItem(label, (ext, label, is_vector, has_alpha))
-        form.addRow("Format:", fmt_box)
-
-        scale_box = QSpinBox(dialog)
-        scale_box.setRange(1, 8)
-        scale_box.setValue(2)
-        scale_box.setPrefix("×")
-        scale_box.setToolTip("Supersampling: ×2 renders at twice the on-screen pixels each way.")
-        form.addRow("Resolution:", scale_box)
-
-        transparent = QCheckBox("Transparent background", dialog)
-        form.addRow("", transparent)
-
-        def sync_enabled() -> None:
-            _ext, _label, is_vector, has_alpha = fmt_box.currentData()
-            scale_box.setEnabled(not is_vector)
-            transparent.setEnabled(not is_vector and has_alpha)
-
-        fmt_box.currentIndexChanged.connect(sync_enabled)
-        sync_enabled()
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, dialog)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
-
-        if dialog.exec() != QDialog.Accepted:
-            return None
-        ext, label, is_vector, _has_alpha = fmt_box.currentData()
-        scale = 1 if is_vector else scale_box.value()
-        want_transparent = transparent.isChecked() and transparent.isEnabled()
-        return ext, label, scale, want_transparent
 
     def _export_animation(self) -> None:
         """Render the selected phonon mode over one cycle and save it.

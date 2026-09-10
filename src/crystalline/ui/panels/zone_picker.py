@@ -11,10 +11,13 @@ fight over the camera. The zone gets its own small viewport with its own view.
 
 from __future__ import annotations
 
+from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
 from PySide6.QtCore import QEvent
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,6 +26,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QListWidget,
+    QListWidgetItem,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -55,19 +59,28 @@ _VULGAR = {
 _POINT_RADIUS = 0.024
 _PATH_WIDTH = 5
 
-# Every label is pushed out to the same radius, as a multiple of the zone's
-# extent — a ring of text around the polyhedron rather than a fringe hugging it.
-# The high-symmetry points of an fcc lattice all sit within about thirty degrees
-# of each other, so a fixed *offset* leaves the labels as bunched as the points
-# are; a common radius spreads them by their angular separation instead, which
-# is the only thing that actually differs between them.
-_LABEL_RADIUS = 1.18
+# A label sits just clear of its own marker, as a multiple of the marker's
+# radius — both are world lengths, so the gap on screen is the same at every
+# zoom. The numbers that used to ride along underneath now go in the corner
+# legend, which is what lets the labels sit this close without colliding.
+_LABEL_OFFSET = 2.4
+
+# One colour per leg of the path, reused around when a path is longer than the
+# list. Chosen to stay apart on a pale ground and in the legend beside them.
+_SEGMENT_COLOURS = [
+    "#e8710a", "#1a73e8", "#12a150", "#a142f4",
+    "#d93025", "#00897b", "#c77700", "#5b6bd6",
+]
 
 # Dash and gap for the guide lines, as fractions of the zone's extent. VTK's
 # OpenGL2 backend dropped line stippling, so a dashed line is built out of real
 # short segments; these are the pieces.
 _DASH = 0.045
 _GAP = 0.035
+
+# Labels pymatgen and ASE spell out, which MathText sets as the letter itself.
+_GREEK = {"G": r"\Gamma", "Gamma": r"\Gamma", "Sigma": r"\Sigma",
+          "Delta": r"\Delta", "Lambda": r"\Lambda"}
 
 # The markers, and the one the side panel is pointing at.
 _POINT_COLOUR = "#d6453c"
@@ -95,6 +108,7 @@ class ZonePickerDialog(QDialog):
         self._reciprocal = reciprocal_cell(structure)
         self._actors: dict = {}
         self._path_actors: list = []
+        self._legend_names: list = []
         self._extent = 1.0
 
         self._resolve_lattice()
@@ -176,9 +190,9 @@ class ZonePickerDialog(QDialog):
         self._coordinates.toggled.connect(lambda _on: self._draw_and_sync())
         tools.addWidget(self._coordinates)
         tools.addStretch(1)
-        save = QPushButton("Save image…")
-        save.setToolTip("Write the view to a PNG at twice the on-screen size, "
-                        "which is what a figure wants.")
+        save = QPushButton("Export image…")
+        save.setToolTip("Save the view — the same formats, resolution and "
+                        "transparency as the structure window's export.")
         save.clicked.connect(self._save_image)
         tools.addWidget(save)
         outer.addLayout(tools)
@@ -241,17 +255,10 @@ class ZonePickerDialog(QDialog):
 
     @guard()
     def _save_image(self) -> None:
-        """Write the view out as a PNG, at figure resolution."""
-        from PySide6.QtWidgets import QFileDialog
+        """Export the view — the same dialog and formats as the structure window."""
+        from crystalline.ui.image_export import export_view
 
-        name = "brillouin-zone.png"
-        path, _filter = QFileDialog.getSaveFileName(
-            self, "Save the zone", name, "PNG image (*.png)")
-        if not path:
-            return
-        if not path.lower().endswith(".png"):
-            path += ".png"
-        self._view.plotter.screenshot(path, scale=2)
+        export_view(self, self._view.export_image, "brillouin_zone")
 
     def _resolve_lattice(self) -> None:
         """Fix the cell once; the zone and its labels then cannot disagree."""
@@ -309,22 +316,18 @@ class ZonePickerDialog(QDialog):
             # a newline rather than two labels: the second line has to sit
             # under the first on *screen*, and two world-anchored labels would
             # only line up from one direction.
-            caption = display_label(label)
-            if self._coordinates.isChecked() or label == self._selected:
-                caption += "\n" + "  ".join(_tidy_number(v) for v in fractional)
-            anchor = self._label_anchor(centre, radius)
-            plotter.add_point_labels([anchor], [caption], font_size=13, bold=True,
-                                     shape=None, always_visible=True,
-                                     show_points=False,
+            anchor = centre + _outward(centre) * radius * _LABEL_OFFSET
+            plotter.add_point_labels([anchor], [_math_label(label)],
+                                     font_size=15, shape=None,
+                                     always_visible=True, show_points=False,
                                      text_color=self._label_colour(),
                                      pickable=False)
         if self._guides.isChecked():
             self._draw_guides(plotter, radius)
         self._draw_axes(plotter)
-        # Every redraw re-arms the picker, and pyvista refuses to enable one
-        # that is already enabled — so it is taken down first. Without this the
-        # second redraw raises, and the safety net eats it: the picture stops
-        # updating and nothing says why.
+        # pyvista refuses to enable a picker that is already enabled, so the
+        # old one comes down first. A redraw is now rare — options and the
+        # cell setting, not every click — so this costs nothing.
         plotter.disable_picking()
         plotter.enable_mesh_picking(callback=self._on_pick, show=False,
                                     show_message=False, left_clicking=True)
@@ -351,17 +354,6 @@ class ZonePickerDialog(QDialog):
         camera.SetPosition(*(np.asarray(camera.GetPosition(), dtype=float) - offset))
         plotter.renderer.ResetCameraClippingRange()
 
-    def _label_anchor(self, centre: np.ndarray, radius: float) -> np.ndarray:
-        """Where a point's label goes: out on the ring, or beside Γ.
-
-        Γ is the one point with no direction of its own, and it is alone in the
-        middle of the picture — so its label stays with it rather than being
-        flung out to a ring position it does not have.
-        """
-        if float(np.linalg.norm(centre)) < 1e-9:
-            return centre + np.array([0.0, 0.0, 1.0]) * radius * 3.0
-        return _outward(centre) * self._extent * _LABEL_RADIUS
-
     def _draw_guides(self, plotter, radius: float) -> None:
         """Γ to every special point, dashed.
 
@@ -381,9 +373,9 @@ class ZonePickerDialog(QDialog):
     def _draw_axes(self, plotter) -> None:
         """The reciprocal axes out of Γ, labelled as a zone diagram labels them."""
         reach = self._extent * 1.35
-        for direction, name in ((np.array([1.0, 0, 0]), "kx"),
-                                (np.array([0, 1.0, 0]), "ky"),
-                                (np.array([0, 0, 1.0]), "kz")):
+        for direction, name in ((np.array([1.0, 0, 0]), r"$k_x$"),
+                                (np.array([0, 1.0, 0]), r"$k_y$"),
+                                (np.array([0, 0, 1.0]), r"$k_z$")):
             import pyvista as pv
 
             tip = direction * reach
@@ -395,9 +387,9 @@ class ZonePickerDialog(QDialog):
                                      direction=direction, height=head,
                                      radius=head * 0.32, resolution=16),
                              color="#8a94a6", pickable=False)
-            plotter.add_point_labels([tip * 1.04], [name], font_size=12,
+            plotter.add_point_labels([tip * 1.04], [name], font_size=14,
                                      shape=None, always_visible=True,
-                                     show_points=False, italic=True,
+                                     show_points=False,
                                      text_color=self._label_colour(),
                                      pickable=False)
 
@@ -430,29 +422,75 @@ class ZonePickerDialog(QDialog):
         self._selected = best
         if self._picking:
             self._picked.append(best)
-        self._draw(keep_camera=self._view.plotter.camera_position)
-        self._sync()
+        # Only what changed: the marker colours and the legend. Rebuilding the
+        # whole scene here re-made fourteen face actors, the hull, every label
+        # and the picker on *every click*, which is what made the view slower
+        # the more it was used.
+        self._recolour_markers()
+        self._sync(append_only=True)
+
+    def _append_leg(self) -> None:
+        """Draw just the leg the last click added, and its legend line."""
+        import pyvista as pv
+
+        index = len(self._picked) - 2
+        if index < 0:
+            return
+        start, end = self._picked[index], self._picked[index + 1]
+        if start not in self._actors or end not in self._actors:
+            return
+        ends = np.array([self._actors[start][1], self._actors[end][1]])
+        self._path_actors.append(
+            self._view.plotter.add_mesh(pv.lines_from_points(ends),
+                                        color=segment_colour(index),
+                                        line_width=_PATH_WIDTH, pickable=False)
+        )
+        self._legend_segment(index)
 
     def _undo(self) -> None:
         if self._picked:
             self._picked.pop()
+            self._selected = None
+            self._recolour_markers()
             self._sync()
 
     def _clear(self) -> None:
         self._picked = []
+        self._selected = None
+        self._recolour_markers()
         self._sync()
 
-    def _sync(self) -> None:
+    def _sync(self, append_only: bool = False) -> None:
+        """Refresh the path list, and the picture of the path.
+
+        ``append_only`` says the path grew by one leg at the end, which is the
+        common case and the one that has to stay cheap.
+        """
         self._list.clear()
-        for start, end in zip(self._picked, self._picked[1:]):
-            self._list.addItem(
+        for index, (start, end) in enumerate(zip(self._picked, self._picked[1:])):
+            item = QListWidgetItem(
                 f"{display_label(start)}  →  {display_label(end)}"
                 f"     {self._segment_length(start, end):.3f} Å⁻¹")
+            # The same colour as the leg it names, so the list and the picture
+            # can be read against each other without counting positions.
+            item.setForeground(QColor(segment_colour(index)))
+            self._list.addItem(item)
         if len(self._picked) == 1:
             self._list.addItem(f"{display_label(self._picked[0])}  → …")
         total = self._path_length()
         self._total.setText(f"total  {total:.3f} Å⁻¹" if total else "")
-        self._draw_path()
+        if append_only:
+            self._append_leg()
+            self._legend_selection()
+            self._view.plotter.render()
+        else:
+            self._draw_path()
+
+    def _recolour_markers(self) -> None:
+        """Mark the selected point, without touching anything else."""
+        for name, (actor, _centre) in self._actors.items():
+            actor.prop.color = (_CURRENT_COLOUR if name == self._selected
+                                else _POINT_COLOUR)
 
     def _segment_length(self, start: str, end: str) -> float:
         """|Δk| along one leg, in Å⁻¹.
@@ -478,16 +516,80 @@ class ZonePickerDialog(QDialog):
         for actor in list(self._path_actors):
             plotter.remove_actor(actor, render=False)
         self._path_actors = []
-        if len(self._picked) >= 2:
-            points = np.array([self._actors[label][1] for label in self._picked
-                               if label in self._actors])
-            if len(points) >= 2:
-                self._path_actors.append(
-                    plotter.add_mesh(pv.lines_from_points(points),
-                                     color="#f5a623", line_width=_PATH_WIDTH,
-                                     pickable=False)
-                )
+        # A leg at a time, each in its own colour, so the picture and the
+        # legend beside it name the same thing twice.
+        for index, (start, end) in enumerate(zip(self._picked, self._picked[1:])):
+            if start not in self._actors or end not in self._actors:
+                continue
+            ends = np.array([self._actors[start][1], self._actors[end][1]])
+            self._path_actors.append(
+                plotter.add_mesh(pv.lines_from_points(ends),
+                                 color=segment_colour(index),
+                                 line_width=_PATH_WIDTH, pickable=False)
+            )
+        self._draw_legend()
         plotter.render()
+
+    # ── the corner legend ───────────────────────────────────────────────
+    #
+    # In the corner rather than under each marker: the points of a cubic
+    # lattice all lie within about thirty degrees of each other, so coordinates
+    # drawn at the points overlap into a heap however they are placed. A corner
+    # reads as a caption and has as much room as it needs.
+    #
+    # Every line is added under a name, and a name replaces its previous actor
+    # in place — so appending a leg costs one text actor, not a rebuild. That
+    # matters: rebuilding the whole legend and the whole path on every click
+    # made each click cost more than the last, and by two dozen clicks a
+    # selection took half a second.
+    def _legend_line(self, slot: int, text: str, colour: str) -> str:
+        plotter = self._view.plotter
+        name = f"zone-legend-{slot}"
+        plotter.add_text(text, position=(0.985, 0.955 - slot * 0.045),
+                         viewport=True, font_size=11, color=colour,
+                         font_file=_unicode_font(), name=name, render=False)
+        actor = plotter.renderer.actors.get(name)
+        if actor is not None:                     # right-align on the corner
+            actor.GetTextProperty().SetJustificationToRight()
+        if name not in self._legend_names:
+            self._legend_names.append(name)
+        return name
+
+    def _legend_segment(self, index: int) -> None:
+        """The legend line for one leg of the path."""
+        start, end = self._picked[index], self._picked[index + 1]
+        self._legend_line(
+            index + 1,
+            f"{display_label(start)} → {display_label(end)}"
+            f"    {self._segment_length(start, end):.3f} Å⁻¹",
+            segment_colour(index),
+        )
+
+    def _legend_selection(self) -> None:
+        """The top line: whichever point was last clicked, and its components."""
+        fractional = (self._points.get(self._selected)
+                      if self._selected is not None else None)
+        if fractional is None:
+            self._view.plotter.remove_actor("zone-legend-0", render=False)
+            return
+        self._legend_line(
+            0,
+            f"{display_label(self._selected)}    "
+            + "  ".join(_tidy_number(v) for v in fractional),
+            _CURRENT_COLOUR,
+        )
+
+    def _clear_legend(self) -> None:
+        for name in self._legend_names:
+            self._view.plotter.remove_actor(name, render=False)
+        self._legend_names = []
+
+    def _draw_legend(self) -> None:
+        """Rebuild the whole legend — for a path that changed shape, not grew."""
+        self._clear_legend()
+        self._legend_selection()
+        for index in range(max(len(self._picked) - 1, 0)):
+            self._legend_segment(index)
 
     # ── the result ──────────────────────────────────────────────────────
     def path(self) -> List[Tuple[Tuple[str, str], tuple]]:
@@ -513,6 +615,25 @@ class ZonePickerDialog(QDialog):
         """Show the zone on its own, with nothing to pick and nothing to return."""
         cls(structure, parent, picking=False).exec()
 
+
+
+def _math_label(label: str) -> str:
+    """A k-point label as VTK will actually draw it.
+
+    VTK's built-in font has no Greek, so a bare "Γ" renders as *nothing at all*
+    — the point looked unlabelled. Its MathText backend (matplotlib, registered
+    by importing vtkRenderingMatplotlib) does have Greek, and italicises the
+    letter the way a band diagram sets it, so labels go through that instead.
+    Anything MathText might choke on falls back to plain text, which is worse
+    looking but never blank.
+    """
+    name = str(label)
+    greek = _GREEK.get(name.split("_")[0])
+    if greek:
+        name = greek + name[len(name.split("_")[0]):]
+    elif not name.replace("_", "").isalnum():
+        return display_label(label)
+    return f"${name}$"
 
 
 def _tidy_number(value: float) -> str:
@@ -563,6 +684,46 @@ def _dashed_line(start, end, extent: float):
     return pv.PolyData(np.asarray(points), lines=np.asarray(lines))
 
 
+@lru_cache(maxsize=1)
+def _unicode_font() -> Optional[str]:
+    """A font file that actually has Γ, → and Å in it.
+
+    VTK's built-in font has none of them, and draws a missing glyph as nothing
+    at all — so a legend line reading "Γ → X  0.238 Å⁻¹" came out with holes
+    where its most important characters were. DejaVu Sans ships with
+    matplotlib, which is already a dependency.
+    """
+    try:
+        import matplotlib
+
+        path = (Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf"
+                / "DejaVuSans.ttf")
+        return str(path) if path.exists() else None
+    except Exception:  # noqa: BLE001 - the labels degrade, nothing breaks
+        return None
+
+
+def _enable_mathtext() -> None:
+    """Let VTK render ``$\\Gamma$`` and ``$k_x$`` instead of nothing.
+
+    VTK's built-in font carries no Greek and cannot set a subscript, so those
+    labels came out blank. Its MathText backend can do both — but only if
+    ``vtkRenderingMatplotlib`` has been imported, which registers it. Importing
+    it is the whole of the fix, and it is not an error if the build lacks it:
+    the labels fall back to plain text.
+    """
+    try:
+        import vtkmodules.vtkRenderingMatplotlib as _mathtext  # noqa: F401
+        _ = _mathtext  # imported purely to register the backend
+    except Exception:  # noqa: BLE001 - a build without it still draws a zone
+        pass
+
+
+def segment_colour(index: int) -> str:
+    """The colour of the ``index``-th leg of a path, in the picture and the legend."""
+    return _SEGMENT_COLOURS[index % len(_SEGMENT_COLOURS)]
+
+
 def _outward(point: np.ndarray) -> np.ndarray:
     """A unit vector pointing away from the zone's centre, for label placement.
 
@@ -580,6 +741,7 @@ class _ZoneView(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        _enable_mathtext()
         from pyvistaqt import QtInteractor
 
         layout = QVBoxLayout(self)
@@ -593,6 +755,14 @@ class _ZoneView(QWidget):
         self.plotter.set_background(theme.active_palette(QApplication.instance()).scene)
         self._smooth_the_zoom()
         self.setMinimumSize(360, 320)
+
+    def export_image(self, path: str, *, scale: int = 1,
+                     transparent: bool = False) -> str:
+        """Save the view, by the same route the structure viewport uses."""
+        from crystalline.viz.export import save_view_image
+
+        return save_view_image(self.plotter, path, scale=scale,
+                               transparent=transparent)
 
     def _smooth_the_zoom(self) -> None:
         """Zoom exactly as the structure viewport does.
