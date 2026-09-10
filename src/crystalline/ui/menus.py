@@ -13,7 +13,7 @@ menu before the toolbar's ``_update_view_actions`` call.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import QLabel, QToolBar, QToolButton, QWidget
 
@@ -26,7 +26,9 @@ from crystalline.ui.widgets import ToggleSwitch
 _ROTATE_STEP_DEG = 15.0
 
 # The orbit chips, shared with the Brillouin-zone view so the two 3D views
-# offer the same gestures. The angles are unit signs; the step multiplies them.
+# offer the same gestures. The signs say what the *scene* does — press ▶ and
+# the crystal turns right — because that is what the arrow on the button
+# promises and what the eye follows. See :func:`camera_angles`.
 ROTATE_CHIPS = (
     ("◀", "Rotate left", -1.0, 0.0, 0.0),
     ("▶", "Rotate right", 1.0, 0.0, 0.0),
@@ -37,6 +39,20 @@ ROTATE_CHIPS = (
 )
 
 
+def camera_angles(azimuth: float, elevation: float, roll: float, step: float):
+    """A chip's scene direction as the camera angles that produce it.
+
+    Orbiting the camera to the right slides the scene to the *left*, so the two
+    are opposite in azimuth and elevation. The buttons are labelled with arrows
+    and read as "turn the thing I am looking at", so the chips are written
+    scene-side and converted here — in one place, for both views.
+
+    Roll needs no flip: ``rotate_view`` already negates it, so a positive roll
+    turns the scene clockwise on screen rather than the camera.
+    """
+    return -azimuth * step, -elevation * step, roll * step
+
+
 def rotate_step_box(parent):
     """How far one press of a rotate chip turns the view, in degrees."""
     from PySide6.QtWidgets import QSpinBox
@@ -45,19 +61,85 @@ def rotate_step_box(parent):
     box.setRange(1, 90)
     box.setValue(int(_ROTATE_STEP_DEG))
     box.setSuffix("°")
-    box.setFixedWidth(64)
+    # As tall as the chips it sits among, or the row has a step in it.
+    box.setFixedSize(64, CHIP_SIZE.height())
     box.setToolTip("How far one press of a rotate button turns the view.")
     return box
 
 
 def reset_view_icon(parent=None):
-    """The fit-the-view glyph, in the current theme's text colour."""
+    """The reset-the-view glyph — a cube seen from a corner — in theme colour."""
     from PySide6.QtWidgets import QApplication
 
     from crystalline.ui import theme
 
     palette = theme.active_palette(QApplication.instance())
-    return theme.monochrome_icon("fit-view.svg", palette.text)
+    return theme.monochrome_icon("view-cube.svg", palette.text)
+
+
+# Every chip in every toolbar draws its glyph at this size. Set per button
+# rather than per toolbar, so it does not also shrink the undo/redo icons —
+# and shared, because two toolbars with different chip sizes look like two
+# applications.
+CHIP_ICON = QSize(22, 16)
+
+# And every chip is this size. A QToolButton showing an icon asks for more room
+# than one showing text, so without this the axis chips stand a head taller than
+# the rotate chips beside them — in both toolbars, differently.
+CHIP_SIZE = QSize(40, 26)
+
+
+def style_chip(button, kind: str, axis: str = "") -> None:
+    """Give a toolbar button its shape: one size and one icon size, everywhere."""
+    button.setProperty("chip", kind)
+    if axis:
+        button.setProperty("axis", axis)
+    button.setIconSize(CHIP_ICON)
+    button.setFixedSize(CHIP_SIZE)
+
+
+def axis_icon(base: str, subscript: str, colour: str, font) -> QIcon:
+    """An axis chip's label, drawn rather than set as text.
+
+    Drawn for two reasons. A QToolButton renders plain text, and Unicode has a
+    subscript x but no subscript y or z — so ``k_y`` cannot be written as a
+    string at all. And once one toolbar's chips are icons, the other's must be
+    too, or the same control is two different sizes in two windows.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+
+    big = QFont(font)
+    big.setBold(True)
+    big.setPointSizeF(font.pointSizeF() + 1.0)
+    small = QFont(big)
+    small.setPointSizeF(big.pointSizeF() * 0.68)
+
+    big_metrics, small_metrics = QFontMetrics(big), QFontMetrics(small)
+    drop = small_metrics.height() * 0.28 if subscript else 0.0
+    width = big_metrics.horizontalAdvance(base) + 2
+    if subscript:
+        width += small_metrics.horizontalAdvance(subscript)
+    height = int(big_metrics.height() + drop) + 2
+
+    # Drawn at the screen's real pixel density: a pixmap made at logical size
+    # on a 2x display is blown up, which is exactly the soft look to avoid.
+    ratio = 2
+    pixmap = QPixmap(int(width) * ratio, height * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.TextAntialiasing, True)
+    painter.setPen(QColor(colour))
+    baseline = big_metrics.ascent()
+    painter.setFont(big)
+    painter.drawText(1, baseline, base)
+    if subscript:
+        painter.setFont(small)
+        painter.drawText(1 + big_metrics.horizontalAdvance(base),
+                         int(baseline + drop), subscript)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def build_menus(window) -> None:
@@ -507,10 +589,12 @@ def _build_toolbars(window) -> None:
     window._rotate_buttons: list = []
     for label, axis in (("a", 0), ("b", 1), ("c", 2)):
         button = QToolButton(window)
-        button.setText(label)
+        # An icon, not text — the zone's chips have to be icons (k with a
+        # subscript cannot be written as a string), and the two toolbars must
+        # not size their chips differently.
+        button.setIcon(axis_icon(label, "", "#ffffff", window.font()))
         button.setToolTip(f"Look down the {label} axis")
-        button.setProperty("chip", "axis")
-        button.setProperty("axis", label)
+        style_chip(button, "axis", label)
         button.clicked.connect(lambda _checked=False, a=axis: window.viewport.align_view_along(a))
         view_toolbar.addWidget(button)
         window._axis_buttons.append(button)
@@ -519,8 +603,8 @@ def _build_toolbars(window) -> None:
     # rather than choosing a direction — so it is a quiet chip, not a coloured one.
     window._reset_view_button = QToolButton(window)
     window._reset_view_button.setToolTip("Fit the whole structure, from the default view")
-    window._reset_view_button.setProperty("chip", "ghost")
     window._reset_view_button.setIcon(reset_view_icon(window))
+    style_chip(window._reset_view_button, "ghost")
     window._reset_view_button.clicked.connect(
         lambda _checked=False: window.viewport.reset_view())
     view_toolbar.addWidget(window._reset_view_button)
@@ -538,14 +622,13 @@ def _build_toolbars(window) -> None:
         button.setText(label)
         button.setToolTip(tooltip)
         button.setAutoRepeat(True)  # hold to keep turning
-        button.setProperty("chip", "ghost")
+        style_chip(button, "ghost")
         # The signs are fixed; how far each press turns is read from the step
         # box when it is pressed, so changing the step needs no rewiring.
         button.clicked.connect(
             lambda _checked=False, a=azimuth, e=elevation, r=roll:
-            window.viewport.rotate_view(a * window._rotate_step.value(),
-                                        e * window._rotate_step.value(),
-                                        r * window._rotate_step.value())
+            window.viewport.rotate_view(
+                *camera_angles(a, e, r, window._rotate_step.value()))
         )
         view_toolbar.addWidget(button)
         window._rotate_buttons.append(button)

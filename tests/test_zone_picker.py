@@ -195,12 +195,47 @@ def test_the_axis_chips_are_drawn_with_real_subscripts():
     from PySide6.QtGui import QFont, QIcon
     from PySide6.QtWidgets import QApplication
 
+    from crystalline.ui import menus
+
     QApplication.instance() or QApplication([])
-    icon = zone_picker._subscript_icon("k", "y", "#ffffff", QFont())
-    assert isinstance(icon, QIcon)
-    assert not icon.isNull()
-    size = icon.availableSizes()[0]
-    assert size.width() > 0 and size.height() > 0
+    subscripted = menus.axis_icon("k", "y", "#ffffff", QFont())
+    plain = menus.axis_icon("a", "", "#ffffff", QFont())
+    for icon in (subscripted, plain):
+        assert isinstance(icon, QIcon)
+        assert not icon.isNull()
+    # the subscripted one is wider, because it carries a second glyph
+    assert (subscripted.availableSizes()[0].width()
+            > plain.availableSizes()[0].width())
+
+
+def test_every_chip_in_every_toolbar_is_the_same_size():
+    """Both toolbars offer the same controls; they must not be two sizes.
+
+    The axis chips draw an icon and the rotate chips draw text, and a
+    QToolButton asks for more room for an icon than for a letter — so without
+    one declared size the axis chips stood a head taller than the rotate chips
+    beside them, differently in each window.
+    """
+    from crystalline.ui import menus
+
+    assert menus.CHIP_SIZE.width() > 0 and menus.CHIP_SIZE.height() > 0
+    assert menus.CHIP_ICON.width() < menus.CHIP_SIZE.width()
+    assert menus.CHIP_ICON.height() < menus.CHIP_SIZE.height()
+
+
+def test_both_toolbars_shape_their_chips_through_the_same_helper():
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from crystalline.ui import menus
+
+    root = Path(inspect.getfile(menus)).parent
+    for module in ("menus.py", "panels/zone_picker.py"):
+        tree = ast.parse((root / module).read_text())
+        names = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert "style_chip" in names, f"{module} shapes its chips by hand"
 
 
 def test_the_zone_and_the_structure_window_rotate_by_the_same_step():
@@ -303,3 +338,79 @@ def test_a_drag_from_empty_space_is_not_a_click():
     source = inspect.getsource(zone_picker.ZonePickerDialog._on_release)
     assert "_CLICK_SLOP" in source
     assert zone_picker._CLICK_SLOP >= 2, "a hand is never perfectly still"
+
+
+def test_labels_are_billboards_rather_than_a_placement_hierarchy():
+    """add_point_labels builds a vtkLabelPlacementMapper, which decides for
+    itself which labels are worth drawing — by collision, and by how much time
+    the render was allowed. That is why labels flickered in during a click and
+    vanished on release. A billboard actor has no such opinion."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(zone_picker))
+    called = {node.func.attr for node in ast.walk(tree)
+              if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)}
+    assert "add_point_labels" not in called, "the placement mapper is back"
+    assert "vtkBillboardTextActor3D" in inspect.getsource(zone_picker)
+
+
+def test_a_billboard_label_carries_its_text_and_sits_where_it_is_put():
+    from PySide6.QtWidgets import QApplication
+
+    import pyvista as pv
+
+    QApplication.instance() or QApplication([])
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        actor = zone_picker._billboard(plotter, (0.1, 0.2, 0.3), r"$\Gamma$",
+                                       "#ffffff", 15)
+        assert actor.GetInput() == r"$\Gamma$"
+        assert tuple(round(v, 6) for v in actor.GetPosition()) == (0.1, 0.2, 0.3)
+        assert actor.GetTextProperty().GetFontSize() == 15
+    finally:
+        plotter.close()
+
+
+# ── which way the rotate chips turn things ────────────────────────────────
+def test_the_arrows_describe_the_scene_not_the_camera():
+    """Orbiting the camera right slides the scene left, so a chip labelled ▶
+    that passes its angle straight to the camera moves the crystal the wrong
+    way. The chips are written scene-side and converted once."""
+    from crystalline.ui import menus
+
+    azimuth, elevation, roll = menus.camera_angles(1.0, 0.0, 0.0, 15)
+    assert azimuth == -15, "the camera goes the other way to the scene"
+    assert (elevation, roll) == (0.0, 0.0)
+
+    _azimuth, elevation, _roll = menus.camera_angles(0.0, 1.0, 0.0, 15)
+    assert elevation == -15
+
+    # Roll is already scene-side in rotate_view, which negates it there.
+    _azimuth, _elevation, roll = menus.camera_angles(0.0, 0.0, 1.0, 15)
+    assert roll == 15
+
+
+def test_the_step_scales_every_angle():
+    from crystalline.ui import menus
+
+    for step in (5, 15, 90):
+        angles = menus.camera_angles(1.0, -1.0, 1.0, step)
+        assert {abs(a) for a in angles} == {float(step)}
+
+
+def test_both_views_convert_through_the_same_function():
+    """Two 3D views that turn opposite ways under the same arrow is the bug
+    this replaced."""
+    import ast
+    import inspect
+    from pathlib import Path
+
+    from crystalline.ui import menus
+
+    root = Path(inspect.getfile(menus)).parent
+    for module in ("menus.py", "panels/zone_picker.py"):
+        tree = ast.parse((root / module).read_text())
+        names = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
+        names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+        assert "camera_angles" in names, f"{module} wires its chips by hand"

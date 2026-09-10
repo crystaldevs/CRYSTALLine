@@ -16,9 +16,8 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PySide6.QtCore import QEvent, QSize
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QIcon
+from PySide6.QtCore import QEvent
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -242,7 +241,6 @@ class ZonePickerDialog(QDialog):
     # ── the view toolbar, mirroring the structure window's ──────────────
     def _view_toolbar(self) -> QWidget:
         bar = QToolBar(self)
-        bar.setIconSize(QSize(22, 18))
 
         caption = QLabel("VIEW")
         caption.setContentsMargins(6, 0, 6, 0)
@@ -253,14 +251,20 @@ class ZonePickerDialog(QDialog):
                                         ("b", "y", (0, 1, 0)),
                                         ("c", "z", (0, 0, 1))):
             button = QToolButton(bar)
-            button.setIcon(_subscript_icon("k", letter, "#ffffff", self.font()))
+            button.setIcon(menus.axis_icon("k", letter, "#ffffff", self.font()))
             button.setToolTip(f"Look down k{letter}")
-            button.setToolTip(f"Look down k{letter}")
-            button.setProperty("chip", "axis")
-            button.setProperty("axis", axis)
+            menus.style_chip(button, "axis", axis)
             button.clicked.connect(
                 lambda _checked=False, d=direction: self._look_along(d))
             bar.addWidget(button)
+
+        self._reset_button = QToolButton(bar)
+        self._reset_button.setToolTip("Fit the whole zone, from the default view")
+        self._reset_button.setIcon(menus.reset_view_icon(bar))
+        menus.style_chip(self._reset_button, "ghost")
+        self._reset_button.clicked.connect(
+            lambda _checked=False: self._look_along(None))
+        bar.addWidget(self._reset_button)
 
         bar.addWidget(_spacer(10))
         rotate = QLabel("ROTATE")
@@ -271,24 +275,16 @@ class ZonePickerDialog(QDialog):
             button.setText(label)
             button.setToolTip(tip)
             button.setAutoRepeat(True)          # hold to keep turning
-            button.setProperty("chip", "ghost")
-            # Unit signs; the step box says how far a press turns.
+            menus.style_chip(button, "ghost")
+            # The chip's signs are what the scene does; camera_angles turns
+            # them into what the camera has to do, and the step box says how far.
             button.clicked.connect(
                 lambda _checked=False, a=azimuth, e=elevation, r=roll:
-                self._rotate_view(a * self._step.value(),
-                                  e * self._step.value(),
-                                  r * self._step.value()))
+                self._rotate_view(
+                    *menus.camera_angles(a, e, r, self._step.value())))
             bar.addWidget(button)
         self._step = menus.rotate_step_box(bar)
         bar.addWidget(self._step)
-
-        self._reset_button = QToolButton(bar)
-        self._reset_button.setToolTip("Fit the whole zone, from the default view")
-        self._reset_button.setProperty("chip", "ghost")
-        self._reset_button.setIcon(menus.reset_view_icon(bar))
-        self._reset_button.clicked.connect(
-            lambda _checked=False: self._look_along(None))
-        bar.addWidget(self._reset_button)
 
         bar.addWidget(_spacer(10))
         self._guides = QCheckBox("Symmetry lines")
@@ -387,11 +383,8 @@ class ZonePickerDialog(QDialog):
             # under the first on *screen*, and two world-anchored labels would
             # only line up from one direction.
             anchor = centre + _outward(centre) * radius * _LABEL_OFFSET
-            plotter.add_point_labels([anchor], [_math_label(label)],
-                                     font_size=15, shape=None,
-                                     always_visible=True, show_points=False,
-                                     text_color=self._label_colour(),
-                                     pickable=False)
+            _billboard(plotter, anchor, _math_label(label),
+                       self._label_colour(), 15)
         if self._guides.isChecked():
             self._draw_guides(plotter, radius)
         self._draw_axes(plotter)
@@ -462,10 +455,7 @@ class ZonePickerDialog(QDialog):
                                      direction=direction, height=head,
                                      radius=head * 0.32, resolution=16),
                              color=colour, pickable=False)
-            plotter.add_point_labels([tip * 1.04], [name], font_size=14,
-                                     shape=None, always_visible=True,
-                                     show_points=False, text_color=colour,
-                                     pickable=False)
+            _billboard(plotter, tip * 1.04, name, colour, 14)
 
     def _label_colour(self) -> str:
         """Text that reads against both the marker and the viewport's ground.
@@ -815,50 +805,37 @@ def _unicode_font() -> Optional[str]:
         return None
 
 
+def _billboard(plotter, position, text: str, colour: str, size: int):
+    """A label anchored in the scene, drawn as its own actor.
+
+    Not ``add_point_labels``: that builds a ``vtkLabelPlacementMapper``, which
+    decides for itself which labels are worth drawing — by collision, and by
+    how much time the current render was allowed. The result is labels that
+    flicker in during an interaction and vanish when it ends, with nothing to
+    say why. A billboard actor has no such opinion: it faces the camera, sits
+    where it is put, and is always drawn.
+    """
+    import vtk
+    from pyvista import Color
+
+    actor = vtk.vtkBillboardTextActor3D()
+    actor.SetInput(text)
+    actor.SetPosition(*[float(v) for v in position])
+    prop = actor.GetTextProperty()
+    prop.SetFontSize(size)
+    prop.SetColor(*Color(colour).float_rgb)
+    prop.SetJustificationToLeft()
+    prop.SetVerticalJustificationToCentered()
+    plotter.add_actor(actor, reset_camera=False, pickable=False, render=False)
+    return actor
+
+
 def _spacer(width: int) -> QWidget:
     """A fixed gap between groups of chips, as the structure toolbar uses."""
     widget = QWidget()
     widget.setFixedWidth(width)
     return widget
 
-
-def _subscript_icon(base: str, sub: str, colour: str, font) -> QIcon:
-    """``k`` with a real subscript, drawn as an icon.
-
-    A QToolButton renders plain text only, and Unicode has a subscript x but no
-    subscript y or z — so "k_y" cannot be written as a string at all. Drawing
-    the two pieces at two sizes is the only way to label these chips the way a
-    reciprocal-space axis is written.
-    """
-    from PySide6.QtGui import QFont, QFontMetrics, QPainter, QPixmap
-
-    big = QFont(font)
-    big.setBold(True)
-    big.setPointSizeF(font.pointSizeF() + 1.0)
-    small = QFont(big)
-    small.setPointSizeF(big.pointSizeF() * 0.68)
-
-    big_metrics, small_metrics = QFontMetrics(big), QFontMetrics(small)
-    drop = small_metrics.height() * 0.28          # how far the subscript sits low
-    width = big_metrics.horizontalAdvance(base) + small_metrics.horizontalAdvance(sub) + 2
-    height = int(big_metrics.height() + drop) + 2
-
-    # Retina: draw at the device ratio so the glyphs are not soft.
-    ratio = 2
-    pixmap = QPixmap(int(width) * ratio, height * ratio)
-    pixmap.setDevicePixelRatio(ratio)
-    pixmap.fill(Qt.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.TextAntialiasing, True)
-    painter.setPen(QColor(colour))
-    baseline = big_metrics.ascent()
-    painter.setFont(big)
-    painter.drawText(1, baseline, base)
-    painter.setFont(small)
-    painter.drawText(1 + big_metrics.horizontalAdvance(base),
-                     int(baseline + drop), sub)
-    painter.end()
-    return QIcon(pixmap)
 
 
 def _enable_mathtext() -> None:
