@@ -247,21 +247,31 @@ sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libx
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screen2.png" alt="Raman spectrum and phonon-animation export"></td>
-    <td width="50%"><img src="docs/screen3.png" alt="Display panel, coordination polyhedra and an elastic surface"></td>
+    <td width="50%"><img src="docs/screen2.png" alt="A crystalline orbital drawn across a graphite supercell"></td>
+    <td width="50%"><img src="docs/screen3.png" alt="Polyhedra on a 3x3x3 supercell, an elastic surface and the point-symmetry panel"></td>
   </tr>
   <tr>
     <td align="center" valign="top">
-      <b>🎬 Spectra, and modes as movies</b><br>
-      <sub>A computed Raman spectrum beside the structure. Click a peak to
-      select the mode behind it, animate it, and export the result as a GIF
-      or a video.</sub>
+      <b>⚛️ Crystalline orbitals</b><br>
+      <sub>A Bloch orbital tiled across a 1×6×1 graphite supercell, its two
+      phases in red and blue.</sub>
     </td>
     <td align="center" valign="top">
-      <b>🔷 Polyhedra and elastic surfaces</b><br>
-      <sub>VESTA-style coordination polyhedra on a 2×2×2 supercell, drawn as a
-      single mesh so thousands of atoms stay interactive, with a Young's modulus
-      surface from the elastic tensor.</sub>
+      <b>🔷 Big cells, elasticity, symmetry</b><br>
+      <sub>Coordination polyhedra on a 3×3×3 supercell — 8,100 atoms, still
+      interactive — a Young's modulus surface from the elastic tensor, and every
+      point-symmetry element listed beside it.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screen4.png" alt="Building a .d3 properties input, with the band path picked on the Brillouin zone"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center" valign="top">
+      <b>🧭 Inputs, and a band path you can see</b><br>
+      <sub>Build a <code>.d12</code> or <code>.d3</code> deck from the loaded
+      structure, and pick the band path by clicking points on the Brillouin
+      zone — each leg coloured and measured in Å⁻¹.</sub>
     </td>
   </tr>
   <tr>
