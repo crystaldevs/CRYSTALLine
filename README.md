@@ -274,24 +274,6 @@ sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libx
       zone — each leg coloured and measured in Å⁻¹.</sub>
     </td>
   </tr>
-  <tr>
-    <td width="50%"><img src="docs/plot_anscan.png" alt="Anharmonic scan of a double-well mode"></td>
-    <td width="50%"><img src="docs/plot_pes.png" alt="Anharmonic potential-energy surface of two coupled modes"></td>
-  </tr>
-  <tr>
-    <td align="center" valign="top">
-      <b>〰️ Anharmonic scans</b><br>
-      <sub>Scanned potential, vibrational states and
-      probability densities. Here the double-well of an imaginary mode,
-      whose two lowest states are split by tunnelling.</sub>
-    </td>
-    <td align="center" valign="top">
-      <b>🏔️ Anharmonic PES</b><br>
-      <sub>How two normal modes couple through their cubic and quartic terms,
-      as a 3D surface or a contour map, with the harmonic contribution taken out so the
-      coupling is what you see.</sub>
-    </td>
-  </tr>
 </table>
 
 ## Architecture
