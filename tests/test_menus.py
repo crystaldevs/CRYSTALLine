@@ -157,18 +157,23 @@ def test_rotate_buttons_sit_beside_the_axis_buttons(qapp):
     assert [b.text() for b in window._rotate_buttons] == ["◀", "▶", "▲", "▼", "↺", "↻"]
     assert all(b.autoRepeat() for b in window._rotate_buttons)  # hold to keep turning
 
-    # they orbit the view, and unlike a/b/c alignment they need no cell
+    # They orbit the view, and unlike a/b/c alignment they need no cell.
+    #
+    # The angles are the *camera's*, and the camera goes the opposite way to
+    # the scene: orbiting it right slides the crystal left. The buttons are
+    # arrows and read as "turn the thing I am looking at", so ▶ has to send a
+    # negative azimuth. Roll is already scene-side inside rotate_view.
     turned = []
     window.rotate_view = lambda az=0.0, el=0.0, roll=0.0: turned.append((az, el, roll))
     for button in window._rotate_buttons:
         button.click()
     assert turned == [
-        (-15.0, 0.0, 0.0),
-        (15.0, 0.0, 0.0),
-        (0.0, 15.0, 0.0),
-        (0.0, -15.0, 0.0),
-        (0.0, 0.0, -15.0),  # anticlockwise in the screen plane
-        (0.0, 0.0, 15.0),  # clockwise
+        (15.0, 0.0, 0.0),    # ◀ scene left
+        (-15.0, 0.0, 0.0),   # ▶ scene right
+        (0.0, -15.0, 0.0),   # ▲ scene up
+        (0.0, 15.0, 0.0),    # ▼ scene down
+        (0.0, 0.0, -15.0),   # ↺ anticlockwise in the screen plane
+        (0.0, 0.0, 15.0),    # ↻ clockwise
     ]
 
 

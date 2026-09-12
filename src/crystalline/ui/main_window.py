@@ -15,7 +15,6 @@ from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -50,6 +49,7 @@ _HARTREE_TO_EV = 27.211386245988
 from crystalline.viz.phonon_animator import PhononAnimator
 from crystalline.ui import menus
 from crystalline.ui.viewport import Viewport
+from crystalline.ui.safety import guard
 from crystalline.ui.widgets import BusyOverlay, DropHint, Worker
 from crystalline.ui.panels.structure_panel import StructurePanel
 from crystalline.ui.panels.phonon_panel import PhononPanel
@@ -69,6 +69,17 @@ _PLOT_FLOAT_MARGIN = 24
 # Wide enough to forgive aiming at a broadened peak's flank, narrow enough that
 # clicking empty baseline selects nothing.
 _PEAK_PICK_TOLERANCE = 20.0
+
+
+# Per-axis ceiling in the Supercell dialog. Generous rather than tuned: what
+# actually costs is the total atom count, which is checked separately, and a
+# slab or a polymer legitimately wants a big number down one axis.
+_MAX_SUPERCELL_REPEAT = 99
+# Above this many atoms the view is slow enough to be worth confirming first.
+# Rotation is not the problem — it is display-locked and independent of size —
+# but composing the view and the neighbour analyses behind bonds and polyhedra
+# both grow with it.
+_SLOW_SUPERCELL_ATOMS = 20_000
 
 
 class MainWindow(QMainWindow):
@@ -338,6 +349,7 @@ class MainWindow(QMainWindow):
         self.geometry_panel.annotations_changed.connect(self.viewport.set_annotations)
         # Symmetry panel: the ticked elements are drawn over the structure.
         self.symmetry_panel.elements_changed.connect(self.viewport.set_symmetry_elements)
+        self.symmetry_panel.reduction_changed.connect(self._apply_symmetry_reduction)
 
     def _analysis_cell(self) -> Structure:
         """The shown structure folded back into one clean unit cell, edits included.
@@ -677,6 +689,51 @@ class MainWindow(QMainWindow):
         # The x axis is a wavenumber, so clicking a peak still selects its mode.
         self.plot_panel.add_figure(figure, title, on_pick=self._select_mode_near)
         self._reveal_plot_dock()
+
+    # ── electronic bands and DOS ────────────────────────────────────────
+    def _open_electronic(self) -> None:
+        """A band structure, a DOS or both, with every option in view.
+
+        They used to be two one-click entries drawn at CRYSTALClear's defaults —
+        an x axis of k-distances, energies only relative, no way to put the two
+        side by side. They read files of their own, from a .d3 run, so the
+        dialog looks beside the loaded output for them first.
+        """
+        from pathlib import Path
+
+        from crystalline.crystalio import plot_electronic
+        from crystalline.ui.panels.electronic_dialog import ElectronicDialog
+
+        structure = None
+        current = getattr(self, "structure", None)
+        if current is not None and len(current):
+            try:
+                # The analysis cell, so the path's corners are recognised in
+                # the same cell the band path was written for.
+                structure = self._analysis_cell()
+            except Exception:  # noqa: BLE001 - naming the corners is a nicety
+                structure = None
+        folder = str(Path(self._output_path).parent) if self._output_path else ""
+        # Files named after the run (mgo_band.BAND beside mgo.out) rank first.
+        stem = Path(self._output_path).stem if self._output_path else ""
+
+        dialog = ElectronicDialog(structure=structure, folder=folder, stem=stem,
+                                  parent=self)
+        self._restore_dialog(dialog, "electronic")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "electronic")
+        bands_path, dos_path, options = dialog.request()
+        title = dialog.plot_title()
+
+        def build():
+            return plot_electronic(bands_path, dos_path, options)
+
+        def show(figure) -> None:
+            self.plot_panel.add_figure(figure, title)
+            self._reveal_plot_dock()
+
+        self._run_busy(build, "Building the electronic structure plot…", show, "Plot failed")
 
     def _update_spectra_action(self) -> None:
         """Enable the spectra entry only for an output that has any."""
@@ -1230,11 +1287,44 @@ class MainWindow(QMainWindow):
         self._display_dock.show()
         self._display_dock.raise_()
 
+    @guard()
+    def _apply_symmetry_reduction(self, rotations: tuple) -> None:
+        """Treat the crystal as belonging to a lower group from now on.
+
+        Applied to the structure the app holds, not to the analysis cell the
+        panel was handed: that one is a fold of this one, remade on every edit,
+        and a choice recorded there would vanish with it. From here the
+        reduction rides in ``atoms.info``, so every derived copy — the analysis
+        cell, the builder's structure, an undo snapshot — carries it along.
+        """
+        self.structure.set_reduced_symmetry(rotations)
+        # Nothing else to do by hand: setting it notifies, and the ordinary
+        # change path records the undo, refreshes the Info panel and re-hands
+        # the symmetry panel an analysis cell — which now carries the choice.
+        self.symmetry_panel.set_structure(self._analysis_cell())
+
     def _show_symmetry_panel(self) -> None:
         """Open the point-symmetry panel (a tab beside Phonons) and analyse."""
         self._symmetry_dock.show()
         self._symmetry_dock.raise_()
         self.symmetry_panel.show_analysis()
+
+    def _show_brillouin_zone(self) -> None:
+        """Draw this lattice's first Brillouin zone, on its own.
+
+        On the clean analysis cell, like the band path in the input builders: a
+        supercell's zone is a folded fraction of the real one, and drawing that
+        under the same name would be a lie.
+        """
+        structure = self._analysis_cell()
+        if len(structure) == 0:
+            QMessageBox.information(
+                self, "Brillouin zone", "Open or build a structure first."
+            )
+            return
+        from crystalline.ui.panels.zone_picker import ZonePickerDialog
+
+        ZonePickerDialog.visualise(structure, self)
 
     # ── panels ──────────────────────────────────────────────────────────
     def _panel_docks(self) -> list:
@@ -1533,10 +1623,33 @@ class MainWindow(QMainWindow):
         boxes = []
         for axis, value in zip(("a", "b", "c"), self._supercell):
             box = QSpinBox()
-            box.setRange(1, 12)
+            # The old cap of 12 per axis was arbitrary and got in the way: what
+            # costs anything is the total atom count, not the repetition along
+            # any one direction, and a slab or a chain wants a large number down
+            # one axis and one along the others. So the number is free and the
+            # size is shown instead, with a confirmation past the point where it
+            # is genuinely slow.
+            box.setRange(1, _MAX_SUPERCELL_REPEAT)
             box.setValue(value)
             form.addRow(f"Repeat along {axis}", box)
             boxes.append(box)
+
+        size = QLabel()
+        size.setStyleSheet("color: palette(mid);")
+        form.addRow("", size)
+
+        def show_size() -> None:
+            cells = boxes[0].value() * boxes[1].value() * boxes[2].value()
+            atoms = cells * len(self._source)
+            note = f"{cells} cell{'' if cells == 1 else 's'}, {atoms:,} atoms"
+            if atoms > _SLOW_SUPERCELL_ATOMS:
+                note += " — large; building the view will take a moment"
+            size.setText(note)
+
+        for box in boxes:
+            box.valueChanged.connect(show_size)
+        show_size()
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
@@ -1544,6 +1657,22 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() != QDialog.Accepted:
             return
+        reps = tuple(box.value() for box in boxes)
+        atoms = reps[0] * reps[1] * reps[2] * len(self._source)
+        if atoms > _SLOW_SUPERCELL_ATOMS:
+            # Asked rather than refused: the number is sometimes what someone
+            # actually wants, and a cap they cannot pass is worse than a wait
+            # they agreed to.
+            confirm = QMessageBox.question(
+                self, "Large supercell",
+                f"{reps[0]}×{reps[1]}×{reps[2]} is {atoms:,} atoms.\n\n"
+                f"Building and drawing that will take a while, and analyses that "
+                f"run over neighbours — bonds, polyhedra — will be slower still.\n\n"
+                f"Go ahead?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if confirm != QMessageBox.Yes:
+                return
         # A supercell chosen here is the user's own: the phonon panel's Untile
         # must not offer to throw it away for a cell they never asked for.
         self._tile_restore = None
@@ -1637,6 +1766,7 @@ class MainWindow(QMainWindow):
         self._apply_cell_view()
 
     # ── drag and drop ───────────────────────────────────────────────────
+    @guard()
     def dragEnterEvent(self, event) -> None:
         """Accept a dragged file the app can do something with, and say what.
 
@@ -1656,6 +1786,7 @@ class MainWindow(QMainWindow):
             else "appends to the current structure — undoable",
         )
 
+    @guard()
     def dragMoveEvent(self, event) -> None:
         # Qt asks again on every move; without this the drop is refused whatever
         # dragEnterEvent said.
@@ -1664,10 +1795,12 @@ class MainWindow(QMainWindow):
         else:
             event.acceptProposedAction()
 
+    @guard()
     def dragLeaveEvent(self, event) -> None:
         self._drop_hint.hide_hint()
         super().dragLeaveEvent(event)
 
+    @guard()
     def dropEvent(self, event) -> None:
         """Take the file, and open it on the *next* turn of the event loop.
 
@@ -1904,6 +2037,24 @@ class MainWindow(QMainWindow):
 
         InputBuilderDialog(structure, self).exec()
 
+    def _build_properties_input(self) -> None:
+        """Open the PROPERTIES (``.d3``) builder for the structure as edited.
+
+        The same clean single cell the ``.d12`` builder uses: a ``.d3`` carries
+        no geometry, but the band path is derived from the lattice, and deriving
+        it from a supercell or a boundary-completed view would give the path of
+        a different Brillouin zone.
+        """
+        structure = self._analysis_cell()
+        if len(structure) == 0:
+            QMessageBox.information(
+                self, "Build properties input", "Open or build a structure first."
+            )
+            return
+        from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+        PropertiesBuilderDialog(structure, self).exec()
+
     # ── remembered plot-dialog settings ─────────────────────────────────
     def _restore_dialog(self, dialog, key: str) -> None:
         """Reopen a plot dialog on the settings it was last accepted with.
@@ -1942,74 +2093,10 @@ class MainWindow(QMainWindow):
     # ── export (image / animation) ──────────────────────────────────────
     def _export_image(self) -> None:
         """Save the current 3D view as an image, choosing format/scale/transparency."""
-        options = self._ask_image_options()
-        if options is None:
-            return
-        ext, label, scale, transparent = options
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export image", f"crystal_view.{ext}", f"{label} (*.{ext})"
-        )
-        if not path:
-            return
-        try:
-            self.viewport.export_image(path, scale=scale, transparent=transparent)
-        except Exception as exc:  # noqa: BLE001 - surface any render/write error
-            QMessageBox.critical(self, "Export failed", f"Could not save the image:\n{exc}")
+        from crystalline.ui.image_export import export_view
 
-    def _ask_image_options(self):
-        """Prompt for ``(ext, filter_label, scale, transparent)``; ``None`` if cancelled.
+        export_view(self, self.viewport.export_image, "crystal_view")
 
-        Scale supersamples raster output (the 3D analogue of DPI); transparency
-        needs an alpha channel, so both are greyed out for the formats that can't
-        use them (vector, and opaque rasters like JPEG/BMP).
-        """
-        # (ext, menu label, is_vector, has_alpha)
-        formats = [
-            ("png", "PNG image", False, True),
-            ("jpg", "JPEG image", False, False),
-            ("tif", "TIFF image", False, True),
-            ("svg", "SVG vector", True, False),
-            ("pdf", "PDF vector", True, False),
-            ("eps", "EPS vector", True, False),
-        ]
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Export image")
-        form = QFormLayout(dialog)
-
-        fmt_box = QComboBox(dialog)
-        for ext, label, is_vector, has_alpha in formats:
-            fmt_box.addItem(label, (ext, label, is_vector, has_alpha))
-        form.addRow("Format:", fmt_box)
-
-        scale_box = QSpinBox(dialog)
-        scale_box.setRange(1, 8)
-        scale_box.setValue(2)
-        scale_box.setPrefix("×")
-        scale_box.setToolTip("Supersampling: ×2 renders at twice the on-screen pixels each way.")
-        form.addRow("Resolution:", scale_box)
-
-        transparent = QCheckBox("Transparent background", dialog)
-        form.addRow("", transparent)
-
-        def sync_enabled() -> None:
-            _ext, _label, is_vector, has_alpha = fmt_box.currentData()
-            scale_box.setEnabled(not is_vector)
-            transparent.setEnabled(not is_vector and has_alpha)
-
-        fmt_box.currentIndexChanged.connect(sync_enabled)
-        sync_enabled()
-
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, dialog)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
-
-        if dialog.exec() != QDialog.Accepted:
-            return None
-        ext, label, is_vector, _has_alpha = fmt_box.currentData()
-        scale = 1 if is_vector else scale_box.value()
-        want_transparent = transparent.isChecked() and transparent.isEnabled()
-        return ext, label, scale, want_transparent
 
     def _export_animation(self) -> None:
         """Render the selected phonon mode over one cycle and save it.

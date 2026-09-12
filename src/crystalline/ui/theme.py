@@ -97,6 +97,11 @@ _AXIS_A = "#d62728"
 _AXIS_B = "#2ca02c"
 _AXIS_C = "#1f77b4"
 
+# The same three, for anything outside this module that has to match a chip —
+# the Brillouin zone's k_x/k_y/k_z axes, drawn in the colours of the buttons
+# that aim down them.
+AXIS_COLOURS = (_AXIS_A, _AXIS_B, _AXIS_C)
+
 # Geometry shared by every control, so nothing is a one-off.
 _RADIUS = 5
 _RADIUS_SMALL = 4
@@ -175,6 +180,35 @@ def stylesheet(palette: Palette) -> str:
         font-size: 11px;
         font-weight: 700;
         letter-spacing: 0.09em;
+    }}
+    /* A *checkable* group box draws its own indicator, and it is a separate
+       sub-control from QCheckBox::indicator. Styling only the latter left the
+       group box's tick with no box at all — invisible when unchecked, and a
+       bare floating tick when checked. These mirror the checkbox rules. */
+    QGroupBox::indicator {{
+        width: 15px; height: 15px;
+        border: 1px solid {p.border_strong};
+        border-radius: 3px;
+        background-color: {p.raised};
+    }}
+    QGroupBox::indicator:checked {{
+        background-color: {p.accent};
+        border-color: {p.accent};
+        image: url("{_CHECK_GLYPH}");
+    }}
+    QGroupBox::indicator:hover {{ border-color: {p.accent}; }}
+    QGroupBox::indicator:disabled {{
+        border-color: {p.border};
+        background-color: {p.window};
+    }}
+    /* Disabled *and* checked keeps a filled box, or the white tick is drawn on
+       the light theme's pale ground and vanishes — the state reads as
+       unchecked, which is a different thing entirely. */
+    QGroupBox::indicator:checked:disabled,
+    QCheckBox::indicator:checked:disabled,
+    QRadioButton::indicator:checked:disabled {{
+        background-color: {p.border_strong};
+        border-color: {p.border_strong};
     }}
 
     /* ── text and labels ──────────────────────────────────────────────── */

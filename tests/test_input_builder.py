@@ -212,14 +212,31 @@ def test_qha_supercell_stays_opt_in(qapp):
     assert "SCELPHONO" not in dlg._preview.toPlainText()
 
 
+def _add_segment(editor, start, end):
+    editor._from.setCurrentText(start)
+    editor._to.setCurrentText(end)
+    editor.add_typed_segment()
+
+
 def test_dispersion_bands_and_pdos(qapp):
     dlg = InputBuilderDialog(_nacl())
     _select_task(dlg, "DISPERSION")
     dlg._disp_bands.setChecked(True)
-    dlg._disp_bands_path.setPlainText("0 0 0  8 0 0\n8 0 0  8 8 0")
+    editor = dlg._disp_bands_editor
+    editor.conventional.setChecked(False)
+    editor._list.clear()
+    _add_segment(editor, "0 0 0", "1/2 0 0")
+    _add_segment(editor, "1/2 0 0", "1/2 1/2 0")
+    editor._shrink.setValue(16)
     dlg._disp_pdos.setChecked(True)
     block = _task_block(dlg, "FREQCALC")
-    assert block[block.index("BANDS") + 1] == "16 30 2"
+    # ISS and NPOINTS on one record, then NLINE on its own — as in a working
+    # deck (~/Desktop/phonon_dispersion_forClaude/ZnO_LDA_scelphono444_bands.out).
+    assert block[block.index("BANDS") + 1] == "16 30"
+    assert block[block.index("BANDS") + 2] == "2"
+    # The path is written over the factor above it, so those coordinates mean
+    # (1/2, 0, 0) and nothing else.
+    assert block[block.index("BANDS") + 3] == "0 0 0 8 0 0"
     assert block[block.index("PDOS") + 1] == "2500 250"
     # BANDS implies NOKSYMDISP, so its own switch stops applying
     assert not dlg._disp_noksym.isEnabled()
@@ -228,9 +245,52 @@ def test_dispersion_bands_and_pdos(qapp):
 def test_dispersion_bands_without_a_path_blocks_saving(qapp):
     dlg = InputBuilderDialog(_nacl())
     _select_task(dlg, "DISPERSION")
-    dlg._disp_bands.setChecked(True)  # no path segments given
+    dlg._disp_bands.setChecked(True)
+    dlg._disp_bands_editor.conventional.setChecked(False)
+    dlg._disp_bands_editor._list.clear()   # every segment taken away
+    dlg._on_form_changed()
     assert not dlg._save_btn.isEnabled()
     assert "path segment" in dlg._preview.toPlainText()
+
+
+def test_the_phonon_path_cannot_disagree_with_its_shrinking_factor(qapp):
+    """The hazard the shared editor removes.
+
+    CRYSTAL reads a path as whole numbers over ISS, so the same integers mean
+    different k points at different factors. The old tab had a free-text path
+    and a separate ISS spin box, so changing one silently redefined the other.
+    Now the endpoints are held as fractions and the integers are derived, so
+    the factor and the numbers move together.
+    """
+    dlg = InputBuilderDialog(_nacl())
+    _select_task(dlg, "DISPERSION")
+    dlg._disp_bands.setChecked(True)
+    editor = dlg._disp_bands_editor
+    editor.conventional.setChecked(False)
+    editor._list.clear()
+    _add_segment(editor, "0 0 0", "1/2 0 0")
+
+    def record():
+        block = _task_block(dlg, "FREQCALC")
+        at = block.index("BANDS")
+        return block[at + 1].split()[0], block[at + 3]
+
+    editor._shrink.setValue(2)
+    assert record() == ("2", "0 0 0 1 0 0")
+    editor._shrink.setValue(8)
+    assert record() == ("8", "0 0 0 4 0 0")
+
+
+def test_both_builders_edit_the_path_with_the_same_widget(qapp):
+    """"Identical to the .d3 builder" is a property worth pinning: the two are
+    the same walk through the same zone, and only the record differs."""
+    from crystalline.ui.panels.band_path_editor import BandPathEditor
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    dlg = InputBuilderDialog(_nacl())
+    _select_task(dlg, "DISPERSION")
+    assert isinstance(dlg._disp_bands_editor, BandPathEditor)
+    assert isinstance(PropertiesBuilderDialog(_nacl())._path_editor, BandPathEditor)
 
 
 def test_qha_temperature_range_reaches_the_deck(qapp):

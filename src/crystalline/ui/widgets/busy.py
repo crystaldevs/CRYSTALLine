@@ -26,6 +26,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from crystalline.ui.safety import guard
+
 # The arc sweeps rather than a set of fading dots: one moving shape reads as
 # progress at any size, and costs one repaint of a small rectangle.
 _SPINNER_SIZE = 34
@@ -67,6 +69,7 @@ class BusyOverlay(QWidget):
         self._timer.stop()
         self.setVisible(False)
 
+    @guard(False)
     def eventFilter(self, obj, event):
         if obj is self.parent() and event.type() in (event.Type.Resize, event.Type.Show):
             self._fit()
@@ -82,6 +85,7 @@ class BusyOverlay(QWidget):
         self.update()
 
     # ── painting ────────────────────────────────────────────────────────
+    @guard()
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)

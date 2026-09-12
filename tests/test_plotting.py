@@ -20,20 +20,23 @@ def test_registry_is_well_formed():
         assert k.label and k.caption and k.file_filter
         assert k.source in ("output", "data")
         assert callable(k.build)
-    # electronic/phonon dispersion come from data files; spectra/elastic/EOS
-    # come straight from the CRYSTAL output.
-    assert {"electron_band", "electron_dos", "phonon_band", "phonon_dos"} <= set(keys)
+    # phonon dispersion comes from data files; spectra/elastic/EOS come
+    # straight from the CRYSTAL output.
+    assert {"phonon_band", "phonon_dos"} <= set(keys)
     assert {"ela_young", "eos"} <= set(keys)
     # IR and Raman are deliberately absent: a run's spectra span polarisations
     # and anharmonic levels, so they live behind the vibrational-spectra dialog.
     assert not {"ir", "raman"} & set(keys)
+    # ...and electronic bands/DOS likewise, behind the electronic dialog: they
+    # have options, a combined view, and a choice of energy reference.
+    assert not {"electron_band", "electron_dos"} & set(keys)
 
 
 def test_output_plots_read_the_out_file_and_data_plots_need_a_file():
     by_key = {k.key: k for k in plotting.available_plots()}
     assert by_key["ela_young"].source == "output"
     assert by_key["eos"].source == "output"
-    assert by_key["electron_band"].source == "data"
+    assert by_key["phonon_band"].source == "data"
     assert by_key["xrd"].source == "data"
     # elastic surfaces are grouped into a submenu
     assert by_key["ela_young"].group == "Elastic properties"
@@ -94,7 +97,7 @@ def test_output_availability_empty_without_a_file():
 
 def test_bad_file_raises(tmp_path):
     pytest.importorskip("CRYSTALClear")
-    kind = {k.key: k for k in plotting.available_plots()}["electron_dos"]
+    kind = {k.key: k for k in plotting.available_plots()}["phonon_dos"]
     missing = str(tmp_path / "nope.DAT")
     with pytest.raises(Exception):  # FileNotFoundError / parse error, surfaced to UI
         kind.build(missing)

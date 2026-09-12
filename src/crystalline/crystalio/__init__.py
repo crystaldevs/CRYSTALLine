@@ -18,6 +18,13 @@ from crystalline.crystalio.loader import (
     save_structure_gui,
     save_structure_cif,
 )
+from crystalline.crystalio.electronic import (
+    ElectronicOptions,
+    describe_bands,
+    describe_dos,
+    name_ticks,
+    plot_electronic,
+)
 from crystalline.crystalio.spectra import (
     LINESHAPES,
     SpectrumKind,
@@ -78,6 +85,11 @@ __all__ = [
     "available_plots",
     "crystalclear_available",
     "output_availability",
+    "ElectronicOptions",
+    "describe_bands",
+    "describe_dos",
+    "name_ticks",
+    "plot_electronic",
     "LINESHAPES",
     "SpectrumKind",
     "available_spectra",

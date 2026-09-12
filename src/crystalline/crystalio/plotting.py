@@ -242,12 +242,10 @@ def available_plots() -> List[PlotKind]:
         PlotKind("eos", "Equation of state", "output", "Open CRYSTAL output (.out)", _OUT,
                  _eos_builder(), probe=("get_EOS", "VvsE")),
         # ── from a PROPERTIES / dispersion data file ──
-        PlotKind("electron_band", "Electronic band structure…", "data",
-                 "Open BAND.DAT / fort.25", _DAT,
-                 _prop_builder("read_electron_band", "plot_electron_band")),
-        PlotKind("electron_dos", "Electronic density of states…", "data",
-                 "Open DOSS.DAT / fort.25", _DAT,
-                 _prop_builder("read_electron_dos", "plot_electron_dos")),
+        # Electronic bands and DOS are not here either: they have a dozen
+        # options worth setting, a combined band+DOS view, and a choice of
+        # energy reference, so they live behind the "Electronic bands & DOS…"
+        # dialog (see crystalline.crystalio.electronic).
         PlotKind("phonon_band", "Phonon band structure…", "data",
                  "Open PHONBAND.DAT / fort.25", _DAT,
                  _external_builder("read_phonon_band", "plot_phonon_band")),

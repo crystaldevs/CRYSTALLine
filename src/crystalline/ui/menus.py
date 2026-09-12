@@ -13,7 +13,7 @@ menu before the toolbar's ``_update_view_actions`` call.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon
 from PySide6.QtWidgets import QLabel, QToolBar, QToolButton, QWidget
 
@@ -24,6 +24,122 @@ from crystalline.ui.widgets import ToggleSwitch
 # appearance lives in the theme (they carry a "chip" property it styles), so a
 # theme change restyles them without anything here being told about it.
 _ROTATE_STEP_DEG = 15.0
+
+# The orbit chips, shared with the Brillouin-zone view so the two 3D views
+# offer the same gestures. The signs say what the *scene* does — press ▶ and
+# the crystal turns right — because that is what the arrow on the button
+# promises and what the eye follows. See :func:`camera_angles`.
+ROTATE_CHIPS = (
+    ("◀", "Rotate left", -1.0, 0.0, 0.0),
+    ("▶", "Rotate right", 1.0, 0.0, 0.0),
+    ("▲", "Rotate up", 0.0, 1.0, 0.0),
+    ("▼", "Rotate down", 0.0, -1.0, 0.0),
+    ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -1.0),
+    ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, 1.0),
+)
+
+
+def camera_angles(azimuth: float, elevation: float, roll: float, step: float):
+    """A chip's scene direction as the camera angles that produce it.
+
+    Orbiting the camera to the right slides the scene to the *left*, so the two
+    are opposite in azimuth and elevation. The buttons are labelled with arrows
+    and read as "turn the thing I am looking at", so the chips are written
+    scene-side and converted here — in one place, for both views.
+
+    Roll needs no flip: ``rotate_view`` already negates it, so a positive roll
+    turns the scene clockwise on screen rather than the camera.
+    """
+    return -azimuth * step, -elevation * step, roll * step
+
+
+def rotate_step_box(parent):
+    """How far one press of a rotate chip turns the view, in degrees."""
+    from PySide6.QtWidgets import QSpinBox
+
+    box = QSpinBox(parent)
+    box.setRange(1, 90)
+    box.setValue(int(_ROTATE_STEP_DEG))
+    box.setSuffix("°")
+    # As tall as the chips it sits among, or the row has a step in it.
+    box.setFixedSize(64, CHIP_SIZE.height())
+    box.setToolTip("How far one press of a rotate button turns the view.")
+    return box
+
+
+def reset_view_icon(parent=None):
+    """The reset-the-view glyph — a cube seen from a corner — in theme colour."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    palette = theme.active_palette(QApplication.instance())
+    return theme.monochrome_icon("view-cube.svg", palette.text)
+
+
+# Every chip in every toolbar draws its glyph at this size. Set per button
+# rather than per toolbar, so it does not also shrink the undo/redo icons —
+# and shared, because two toolbars with different chip sizes look like two
+# applications.
+CHIP_ICON = QSize(22, 16)
+
+# And every chip is this size. A QToolButton showing an icon asks for more room
+# than one showing text, so without this the axis chips stand a head taller than
+# the rotate chips beside them — in both toolbars, differently.
+CHIP_SIZE = QSize(40, 26)
+
+
+def style_chip(button, kind: str, axis: str = "") -> None:
+    """Give a toolbar button its shape: one size and one icon size, everywhere."""
+    button.setProperty("chip", kind)
+    if axis:
+        button.setProperty("axis", axis)
+    button.setIconSize(CHIP_ICON)
+    button.setFixedSize(CHIP_SIZE)
+
+
+def axis_icon(base: str, subscript: str, colour: str, font) -> QIcon:
+    """An axis chip's label, drawn rather than set as text.
+
+    Drawn for two reasons. A QToolButton renders plain text, and Unicode has a
+    subscript x but no subscript y or z — so ``k_y`` cannot be written as a
+    string at all. And once one toolbar's chips are icons, the other's must be
+    too, or the same control is two different sizes in two windows.
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QColor, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+
+    big = QFont(font)
+    big.setBold(True)
+    big.setPointSizeF(font.pointSizeF() + 1.0)
+    small = QFont(big)
+    small.setPointSizeF(big.pointSizeF() * 0.68)
+
+    big_metrics, small_metrics = QFontMetrics(big), QFontMetrics(small)
+    drop = small_metrics.height() * 0.28 if subscript else 0.0
+    width = big_metrics.horizontalAdvance(base) + 2
+    if subscript:
+        width += small_metrics.horizontalAdvance(subscript)
+    height = int(big_metrics.height() + drop) + 2
+
+    # Drawn at the screen's real pixel density: a pixmap made at logical size
+    # on a 2x display is blown up, which is exactly the soft look to avoid.
+    ratio = 2
+    pixmap = QPixmap(int(width) * ratio, height * ratio)
+    pixmap.setDevicePixelRatio(ratio)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.TextAntialiasing, True)
+    painter.setPen(QColor(colour))
+    baseline = big_metrics.ascent()
+    painter.setFont(big)
+    painter.drawText(1, baseline, base)
+    if subscript:
+        painter.setFont(small)
+        painter.drawText(1 + big_metrics.horizontalAdvance(base),
+                         int(baseline + drop), subscript)
+    painter.end()
+    return QIcon(pixmap)
 
 
 def build_menus(window) -> None:
@@ -65,6 +181,10 @@ def _build_file_menu(window) -> None:
     build_input = QAction("Build CRYSTAL input (.d12)…", window)
     build_input.triggered.connect(window._build_crystal_input)
     file_menu.addAction(build_input)
+
+    build_properties = QAction("Build properties input (.d3)…", window)
+    build_properties.triggered.connect(window._build_properties_input)
+    file_menu.addAction(build_properties)
 
     file_menu.addSeparator()
     export_image = QAction("Export image…", window)
@@ -129,6 +249,13 @@ def _build_cell_menu(window) -> None:
     )
     symmetry_action.triggered.connect(window._show_symmetry_panel)
     cell_menu.addAction(symmetry_action)
+
+    zone_action = QAction("Brillouin zone…", window)
+    zone_action.setToolTip(
+        "Draw the first Brillouin zone of this lattice and its high-symmetry points"
+    )
+    zone_action.triggered.connect(window._show_brillouin_zone)
+    cell_menu.addAction(zone_action)
 
 
 # ── Edit ──────────────────────────────────────────────────────────────────
@@ -216,6 +343,11 @@ def refresh_history_icons(window) -> None:
         action = getattr(window, attribute, None)
         if action is not None:
             action.setIcon(_history_icon(window, name))
+    # The reset chip is drawn the same way, and vanishes into the toolbar if it
+    # keeps the other theme's colour.
+    reset = getattr(window, "_reset_view_button", None)
+    if reset is not None:
+        reset.setIcon(reset_view_icon(window))
 
 
 def refresh_appearance_button(window) -> None:
@@ -328,6 +460,12 @@ def _build_plot_menu(window) -> None:
     # Raman polarisations and anharmonic levels included — behind one entry,
     # because there are far too many curves for one action each.
     plot_menu.addSeparator()
+    # The one-electron properties the same way: bands, DOS and the two side by
+    # side, with their options and a choice of energy reference, behind one
+    # entry rather than two that could only draw the defaults.
+    window._electronic_action = QAction("Electronic bands & DOS…", window)
+    window._electronic_action.triggered.connect(window._open_electronic)
+    plot_menu.addAction(window._electronic_action)
     window._spectra_action = QAction("Vibrational spectra…", window)
     window._spectra_action.triggered.connect(window._open_spectra)
     plot_menu.addAction(window._spectra_action)
@@ -457,15 +595,27 @@ def _build_toolbars(window) -> None:
     window._rotate_buttons: list = []
     for label, axis in (("a", 0), ("b", 1), ("c", 2)):
         button = QToolButton(window)
-        button.setText(label)
+        # An icon, not text — the zone's chips have to be icons (k with a
+        # subscript cannot be written as a string), and the two toolbars must
+        # not size their chips differently.
+        button.setIcon(axis_icon(label, "", "#ffffff", window.font()))
         button.setToolTip(f"Look down the {label} axis")
-        button.setProperty("chip", "axis")
-        button.setProperty("axis", label)
+        style_chip(button, "axis", label)
         button.clicked.connect(lambda _checked=False, a=axis: window.viewport.align_view_along(a))
         view_toolbar.addWidget(button)
         window._axis_buttons.append(button)
 
-    # Orbit the view by a fixed step. Unlike a/b/c alignment these need no cell,
+    # Back to the framed default. Not an axis — it undoes orbiting and zooming
+    # rather than choosing a direction — so it is a quiet chip, not a coloured one.
+    window._reset_view_button = QToolButton(window)
+    window._reset_view_button.setToolTip("Fit the whole structure, from the default view")
+    window._reset_view_button.setIcon(reset_view_icon(window))
+    style_chip(window._reset_view_button, "ghost")
+    window._reset_view_button.clicked.connect(
+        lambda _checked=False: window.viewport.reset_view())
+    view_toolbar.addWidget(window._reset_view_button)
+
+    # Orbit the view by a step. Unlike a/b/c alignment these need no cell,
     # so they stay enabled for molecules too.
     view_toolbar.addWidget(_toolbar_spacer(10))
     rotate_caption = QLabel("ROTATE")
@@ -473,26 +623,24 @@ def _build_toolbars(window) -> None:
     view_toolbar.addWidget(rotate_caption)
     # The last two spin the structure in the screen plane (about the axis
     # perpendicular to the screen) rather than orbiting the camera around it.
-    for label, tooltip, azimuth, elevation, roll in (
-        ("◀", "Rotate left", -_ROTATE_STEP_DEG, 0.0, 0.0),
-        ("▶", "Rotate right", _ROTATE_STEP_DEG, 0.0, 0.0),
-        ("▲", "Rotate up", 0.0, _ROTATE_STEP_DEG, 0.0),
-        ("▼", "Rotate down", 0.0, -_ROTATE_STEP_DEG, 0.0),
-        ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -_ROTATE_STEP_DEG),
-        ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, _ROTATE_STEP_DEG),
-    ):
+    for label, tooltip, azimuth, elevation, roll in ROTATE_CHIPS:
         button = QToolButton(window)
         button.setText(label)
-        button.setToolTip(f"{tooltip} ({_ROTATE_STEP_DEG:g}°)")
+        button.setToolTip(tooltip)
         button.setAutoRepeat(True)  # hold to keep turning
-        button.setProperty("chip", "ghost")
+        style_chip(button, "ghost")
+        # The signs are fixed; how far each press turns is read from the step
+        # box when it is pressed, so changing the step needs no rewiring.
         button.clicked.connect(
-            lambda _checked=False, a=azimuth, e=elevation, r=roll: window.viewport.rotate_view(
-                a, e, r
-            )
+            lambda _checked=False, a=azimuth, e=elevation, r=roll:
+            window.viewport.rotate_view(
+                *camera_angles(a, e, r, window._rotate_step.value()))
         )
         view_toolbar.addWidget(button)
         window._rotate_buttons.append(button)
+
+    window._rotate_step = rotate_step_box(window)
+    view_toolbar.addWidget(window._rotate_step)
 
     # The cell being drawn, beside the view controls: it is a property of what is
     # on screen, and worth flipping without going to a menu.

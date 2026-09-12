@@ -48,7 +48,8 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.core.crystal_input import (
-    COMMON_FUNCTIONALS,
+    FUNCTIONAL_ALIASES,
+    FUNCTIONAL_GROUPS,
     GRIDS,
     INTERNAL_BASIS_SETS,
     CORRELATION_FUNCTIONALS,
@@ -79,6 +80,7 @@ from crystalline.core.crystal_input import (
     write_input,
 )
 from crystalline.core.structure import Structure
+from crystalline.ui.panels.band_path_editor import BandPathEditor
 
 _GRID_DEFAULT_LABEL = "Default"
 # Sentinels for the split-functional combos: both "unset" states are meaningful
@@ -344,10 +346,18 @@ class InputBuilderDialog(QDialog):
         )
         form.addRow("Functional given as", self._functional_mode)
 
+        # Grouped, and each entry names the functional as well as the keyword:
+        # PBE's stand-alone keyword is PBEXC, so a flat list of keywords hid the
+        # most-wanted functional in the set behind a spelling nobody looks for.
         self._functional = QComboBox()
-        self._functional.setEditable(True)  # any CRYSTAL functional keyword is allowed
-        self._functional.addItems(COMMON_FUNCTIONALS)
-        self._functional.setCurrentText("PBE0")
+        self._functional.setEditable(True)  # any CRYSTAL keyword is still allowed
+        _fill_functionals(self._functional)
+        self._functional.setCurrentIndex(self._functional.findData("PBE0"))
+        self._functional.setToolTip(
+            "The keyword written into the DFT block. Typing is allowed for anything "
+            "not listed — and common spellings are accepted: PBE, PBEsol, SOGGA and "
+            "LDA are translated to the stand-alone keywords CRYSTAL wants."
+        )
         form.addRow("Functional", self._functional)
 
         self._exchange = QComboBox()
@@ -517,7 +527,43 @@ class InputBuilderDialog(QDialog):
         form.addRow("Max SCF cycles", self._maxcycle)
 
         self._spin = QCheckBox("Spin-polarised (open shell)")
+        self._spin.setToolTip(
+            "SPIN inside the DFT block, or UHF for Hartree–Fock. The two settings "
+            "below are only read in a spin-polarised run."
+        )
         form.addRow(self._spin)
+
+        self._spinlock = QCheckBox("Lock the total spin (SPINLOCK)")
+        self._spinlock.setToolTip(
+            "Hold n(α) − n(β) at a chosen value for the first cycles, then let the "
+            "SCF relax. The usual way to reach a particular magnetic state rather "
+            "than whichever one the starting guess happens to fall into."
+        )
+        form.addRow(self._spinlock)
+
+        spinlock_row = QHBoxLayout()
+        self._spinlock_nspin = _plain_spin(0, -200, 200)
+        self._spinlock_nspin.setToolTip("NSPIN: n(α) − n(β), i.e. 2S. 0 is antiferromagnetic.")
+        self._spinlock_ncyc = _plain_spin(50, 1, 9999)
+        self._spinlock_ncyc.setToolTip("NCYC: how many cycles to hold it for.")
+        spinlock_row.addWidget(QLabel("n(α) − n(β)"))
+        spinlock_row.addWidget(self._spinlock_nspin)
+        spinlock_row.addSpacing(10)
+        spinlock_row.addWidget(QLabel("for"))
+        spinlock_row.addWidget(self._spinlock_ncyc)
+        spinlock_row.addWidget(QLabel("cycles"))
+        spinlock_row.addStretch(1)
+        form.addRow("", _row_widget(spinlock_row))
+
+        self._atomspin = QLineEdit()
+        self._atomspin.setPlaceholderText("e.g.  5 +1, 6 -1     (atom number, then +1 or -1)")
+        self._atomspin.setToolTip(
+            "ATOMSPIN: the starting spin of individual atoms, which is what sets up "
+            "an antiferromagnetic arrangement. Atom numbers are CRYSTAL's own, "
+            "counting from 1 — the same numbers the Structure panel shows.\n\n"
+            "Anything separable works: '5 1, 6 -1' or '5 +1 6 -1' or one pair a line."
+        )
+        form.addRow("ATOMSPIN", self._atomspin)
 
         self._extra = QPlainTextEdit()
         self._extra.setPlaceholderText("Extra block-3 keywords, one per line (optional)")
@@ -696,18 +742,27 @@ class InputBuilderDialog(QDialog):
             "matrices account for long-range Coulomb interactions."
         )
         form.addRow(self._disp_wang)
-        self._disp_wang_tensor = QLineEdit("1 0 0 0 1 0 0 0 1")
-        self._disp_wang_tensor.setToolTip("Nine elements of the dielectric tensor, by rows.")
-        form.addRow("Dielectric tensor", self._disp_wang_tensor)
+        # One field per row, because that is one record per row in the deck.
+        # A single nine-number field invited writing them on one line, which
+        # CRYSTAL misreads.
+        self._disp_wang_rows = []
+        for index, default in enumerate(("1 0 0", "0 1 0", "0 0 1")):
+            row = QLineEdit(default)
+            row.setToolTip("Three elements of this row of the dielectric tensor.")
+            form.addRow("Dielectric tensor" if index == 0 else "", row)
+            self._disp_wang_rows.append(row)
 
         self._disp_bands = QCheckBox("Phonon bands (BANDS)")
         form.addRow(self._disp_bands)
-        self._disp_bands_shrink = _plain_spin(16, 1, 96)
         self._disp_bands_points = _plain_spin(30, 2, 500)
-        form.addRow("Shrinking factor (ISS)", self._disp_bands_shrink)
         form.addRow("Points per line (NSUB)", self._disp_bands_points)
-        self._disp_bands_path = _extra_box("One segment per line:  I1 I2 I3  J1 J2 J3")
-        form.addRow("Path segments", self._disp_bands_path)
+        # The same editor as the .d3 builder's: a phonon path and an electron
+        # path are the same object, and the integers CRYSTAL reads mean nothing
+        # without the shrinking factor they are written over — which the editor
+        # owns, so the two cannot be set to disagree.
+        self._disp_bands_editor = BandPathEditor(self._structure)
+        self._disp_bands_editor.changed.connect(self._on_form_changed)
+        form.addRow("Path", self._disp_bands_editor)
 
         self._disp_pdos = QCheckBox("Phonon DOS (PDOS)")
         form.addRow(self._disp_pdos)
@@ -905,8 +960,17 @@ class InputBuilderDialog(QDialog):
             combo.editTextChanged.connect(self._refresh_preview)
             combo.currentIndexChanged.connect(self._refresh_preview)
 
+        # the spin sub-controls gate each other, so they go through
+        # _on_form_changed (which re-runs the enable rules) rather than a plain
+        # preview refresh
+        for widget in (self._spin, self._spinlock):
+            widget.toggled.connect(self._on_form_changed)
+        self._atomspin.textChanged.connect(self._refresh_preview)
+        for box in (self._spinlock_nspin, self._spinlock_ncyc):
+            box.valueChanged.connect(self._refresh_preview)
+
         checks = [
-            self._d3, self._symmetry, self._spin, self._preopt,
+            self._d3, self._symmetry, self._preopt,
             self._freq_irspec, self._freq_ramspec, self._freq_analysis,
             self._freq_print, self._freq_restart, self._el_clampion,
             self._disp_noksym, self._disp_interp_print, self._disp_pdos_proj,
@@ -918,7 +982,8 @@ class InputBuilderDialog(QDialog):
         ]
         for check in checks:
             check.toggled.connect(self._refresh_preview)
-        self._disp_wang_tensor.textChanged.connect(self._refresh_preview)
+        for row in self._disp_wang_rows:
+            row.textChanged.connect(self._refresh_preview)
 
         self._title.textChanged.connect(self._refresh_preview)
         spins = [
@@ -928,7 +993,7 @@ class InputBuilderDialog(QDialog):
             self._eos_vmin, self._eos_vmax, self._eos_vn,
             self._eos_pmin, self._eos_pmax, self._eos_pn,
             self._el_numderiv, self._el_stepsize,
-            self._disp_bands_shrink, self._disp_bands_points,
+            self._disp_bands_points,
             self._disp_pdos_max, self._disp_pdos_bins,
             self._disp_ins_max, self._disp_ins_bins,
             self._qha_step, self._qha_nt, self._qha_t1, self._qha_t2,
@@ -949,12 +1014,30 @@ class InputBuilderDialog(QDialog):
 
         for editor in (self._extra, self._opt_extra, self._freq_extra,
                        self._eos_extra, self._el_extra,
-                       self._disp_bands_path, self._disp_extra, self._qha_extra,
+                       self._disp_extra, self._qha_extra,
                        self._anh_modes, self._anh_extra, self._anharm_extra, self._soc_extra,
                        self._cphf.extra, self._freq_cphf.extra):
             editor.textChanged.connect(self._refresh_preview)
 
     # ── reactivity ──────────────────────────────────────────────────────
+    def _phonon_bands_shrink(self) -> int:
+        """The ISS the phonon path is written over — the editor's, never a
+        separate control that could drift out of step with the numbers."""
+        return self._disp_bands_editor.effective_shrink() or 1
+
+    def _phonon_bands_path(self) -> str:
+        """The path as whole numbers over that factor, one segment per record.
+
+        A factor that cannot express the path raises out of the editor; the
+        preview shows the complaint rather than a rounded path.
+        """
+        from crystalline.core.properties_input import PropertiesInputError
+
+        try:
+            return "\n".join(self._disp_bands_editor.integer_rows())
+        except PropertiesInputError:
+            return ""
+
     def _on_form_changed(self) -> None:
         """A change that alters which rows apply, then refreshes the preview."""
         self._sync_enabled()
@@ -982,6 +1065,12 @@ class InputBuilderDialog(QDialog):
             widget.setEnabled(is_dft and self._nonlocal.isChecked())
 
         # The guess angles only mean anything for the rotated core-Hamiltonian guess.
+        spin = self._spin.isChecked()
+        for widget in (self._spinlock, self._atomspin):
+            widget.setEnabled(spin)
+        for widget in (self._spinlock_nspin, self._spinlock_ncyc):
+            widget.setEnabled(spin and self._spinlock.isChecked())
+
         rotated_guess = self._soc_guess.currentText() == "GCOREROT"
         for widget in (self._soc_theta, self._soc_phi):
             widget.setEnabled(rotated_guess)
@@ -1027,8 +1116,9 @@ class InputBuilderDialog(QDialog):
 
         for widget in (*self._disp_interp_l, self._disp_interp_print):
             widget.setEnabled(self._disp_interp.isChecked())
-        self._disp_wang_tensor.setEnabled(self._disp_wang.isChecked())
-        for widget in (self._disp_bands_shrink, self._disp_bands_points, self._disp_bands_path):
+        for row in self._disp_wang_rows:
+            row.setEnabled(self._disp_wang.isChecked())
+        for widget in (self._disp_bands_points, self._disp_bands_editor):
             widget.setEnabled(self._disp_bands.isChecked())
         # BANDS already implies NOKSYMDISP, so the separate switch stops applying.
         self._disp_noksym.setEnabled(not self._disp_bands.isChecked())
@@ -1074,8 +1164,9 @@ class InputBuilderDialog(QDialog):
         Returning ``None`` lets the preview show the builder's own complaint
         rather than raising out of the middle of a keystroke.
         """
+        text = " ".join(row.text() for row in self._disp_wang_rows)
         try:
-            values = [float(v) for v in self._disp_wang_tensor.text().replace(",", " ").split()]
+            values = [float(v) for v in text.replace(",", " ").split()]
         except ValueError:
             return None
         return values or None
@@ -1118,6 +1209,10 @@ class InputBuilderDialog(QDialog):
             geometry=GeometryOptions(
                 title=self._title.text() or "Generated by CRYSTALLine",
                 use_symmetry=self._symmetry.isChecked(),
+                # A reduction the user has applied to the crystal is part of
+                # the crystal, not a setting of this dialog: it rides on the
+                # structure, so the deck gets it without being told.
+                kept_rotations=tuple(self._structure.reduced_symmetry),
                 supercell=self._supercel.matrix(),
                 supercell_noshift=self._supercel_noshift.isChecked(),
             ),
@@ -1125,7 +1220,7 @@ class InputBuilderDialog(QDialog):
             method=MethodOptions(
                 kind="DFT" if self._method.currentText() == "DFT" else "HF",
                 functional_mode="SPLIT" if self._functional_mode.currentIndex() else "COMBINED",
-                functional=self._functional.currentText().strip(),
+                functional=functional_keyword(self._functional),
                 exchange=_chosen(self._exchange, _HF_EXCHANGE),
                 correlation=_chosen(self._correlation, _NO_CORRELATION),
                 hybrid_percent=_int_of(self._hybrid),
@@ -1162,6 +1257,13 @@ class InputBuilderDialog(QDialog):
                 toldee=_int_of(self._toldee),
                 maxcycle=self._maxcycle.value(),
                 spin_polarized=self._spin.isChecked(),
+                spinlock=(
+                    (self._spinlock_nspin.value(), self._spinlock_ncyc.value())
+                    if self._spin.isChecked() and self._spinlock.isChecked() else None
+                ),
+                atomspin=(
+                    parse_atomspin(self._atomspin.text()) if self._spin.isChecked() else ()
+                ),
             ),
             task=TaskOptions(
                 kind=self._task_kind(),
@@ -1239,9 +1341,9 @@ class InputBuilderDialog(QDialog):
                 dispersion=DispersionOptions(
                     noksymdisp=self._disp_noksym.isChecked(),
                     bands=self._disp_bands.isChecked(),
-                    bands_shrink=self._disp_bands_shrink.value(),
+                    bands_shrink=self._phonon_bands_shrink(),
                     bands_points=self._disp_bands_points.value(),
-                    bands_path=self._disp_bands_path.toPlainText(),
+                    bands_path=self._phonon_bands_path(),
                     interphess=(
                         (*[b.value() for b in self._disp_interp_l],
                          int(self._disp_interp_print.isChecked()))
@@ -1414,6 +1516,81 @@ def _plain_double(
     box.setSingleStep(step)
     box.setValue(value)
     return box
+
+
+def _row_widget(layout) -> QWidget:
+    """Wrap a layout so it can sit in a QFormLayout row."""
+    holder = QWidget()
+    holder.setLayout(layout)
+    layout.setContentsMargins(0, 0, 0, 0)
+    return holder
+
+
+def _fill_functionals(combo: QComboBox) -> None:
+    """Populate a combo with the grouped functionals.
+
+    Just the keyword on each row — spelling out what each functional is made the
+    list long and hard to scan. The grouping stays: it is what turns fifty
+    keywords into five short lists. Group headers are inserted as disabled rows,
+    since a QComboBox has no real section header and a bare separator would not
+    say what the section is.
+    """
+    from PySide6.QtGui import QStandardItem
+
+    model = combo.model()
+    for group, entries in FUNCTIONAL_GROUPS:
+        header = QStandardItem(f"— {group} —")
+        header.setFlags(Qt.NoItemFlags)  # a label, not a choice
+        model.appendRow(header)
+        for keyword, _description in entries:
+            combo.addItem(keyword, keyword)
+
+
+def functional_keyword(combo: QComboBox) -> str:
+    """The CRYSTAL keyword a functional combo is currently naming.
+
+    A listed row carries its keyword as data; anything typed is taken at face
+    value, after the alias table has had a look at it. Without that, choosing a
+    row would write "PBEXC — GGA — PBE (Perdew-Burke-Ernzerhof)" into the deck.
+    """
+    index = combo.findText(combo.currentText())
+    if index >= 0 and combo.itemData(index):
+        return str(combo.itemData(index))
+    typed = combo.currentText().strip()
+    # a typed alias, matched without regard to case: PBE -> PBEXC
+    for alias, keyword in FUNCTIONAL_ALIASES.items():
+        if typed.upper() == alias.upper():
+            return keyword
+    return typed
+
+
+def parse_atomspin(text: str) -> tuple:
+    """Read an ATOMSPIN entry into ``((label, spin), ...)``.
+
+    Deliberately forgiving about separators — commas, newlines, semicolons or
+    plain spaces all work — because the alternative is a table widget for what
+    is usually two numbers. Raises ValueError with something a user can act on.
+    """
+    import re
+
+    tokens = [t for t in re.split(r"[\s,;]+", text.strip()) if t]
+    if not tokens:
+        return ()
+    if len(tokens) % 2:
+        raise ValueError(
+            "ATOMSPIN needs an atom number and a spin for each atom, so an even "
+            f"number of values — got {len(tokens)}."
+        )
+    pairs = []
+    for raw_label, raw_spin in zip(tokens[::2], tokens[1::2]):
+        try:
+            label, spin = int(raw_label), int(raw_spin)
+        except ValueError:
+            raise ValueError(
+                f"ATOMSPIN takes whole numbers; could not read {raw_label!r} {raw_spin!r}."
+            ) from None
+        pairs.append((label, spin))
+    return tuple(pairs)
 
 
 def _plain_spin(value: int, minimum: int, maximum: int) -> QSpinBox:

@@ -16,6 +16,8 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from crystalline.ui.safety import guard
+
 # The dashed frame sits in from the edge so it reads as a target rather than as
 # a border on the viewport.
 _INSET = 18
@@ -66,6 +68,7 @@ class DropHint(QWidget):
     def hide_hint(self) -> None:
         self.setVisible(False)
 
+    @guard(False)
     def eventFilter(self, obj, event):
         if obj is self.parent() and event.type() in (event.Type.Resize, event.Type.Show):
             self._fit()
@@ -82,6 +85,7 @@ class DropHint(QWidget):
         title.setBold(True)
         return title, QFont(self.font())
 
+    @guard()
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)

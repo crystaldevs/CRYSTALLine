@@ -23,6 +23,9 @@ from ase.data import atomic_numbers, chemical_symbols
 ChangeListener = Callable[["Structure"], None]
 
 
+REDUCED_SYMMETRY_KEY = "crystalline_reduced_symmetry"
+
+
 class Structure:
     """A periodic (or molecular) atomic structure the GUI edits.
 
@@ -58,6 +61,37 @@ class Structure:
         ``Structure`` object identity — and thus its listeners — is preserved.
         """
         self._atoms = atoms.copy()
+        self._notify()
+
+    # ── a deliberately lowered symmetry ─────────────────────────────────
+    #
+    # Kept in ``atoms.info`` rather than beside it: that dict is copied by
+    # ``Atoms.copy()``, so the choice rides along in every undo snapshot and
+    # every hand-out of the structure without a single line of plumbing. A
+    # reduction is a property of *this crystal as the user has decided to treat
+    # it*, so it has to survive an edit, an undo and a redo like the atoms do.
+    @property
+    def reduced_symmetry(self) -> tuple:
+        """The point operators kept, or ``()`` for the structure's own symmetry.
+
+        Integer matrices as nested tuples, in the conventional cell's basis —
+        the form :mod:`crystalline.core.symmetry_reduction` speaks and the deck
+        builder writes.
+        """
+        return tuple(self._atoms.info.get(REDUCED_SYMMETRY_KEY, ()))
+
+    def set_reduced_symmetry(self, rotations) -> None:
+        """Declare a lower symmetry, or ``None``/``()`` to go back to the crystal's own.
+
+        Nothing moves: this changes how many atoms are *independent*, not where
+        any of them is.
+        """
+        kept = tuple(tuple(tuple(int(v) for v in row) for row in rotation)
+                     for rotation in (rotations or ()))
+        if kept:
+            self._atoms.info[REDUCED_SYMMETRY_KEY] = kept
+        else:
+            self._atoms.info.pop(REDUCED_SYMMETRY_KEY, None)
         self._notify()
 
     # ── change notification (no Qt in core) ─────────────────────────────

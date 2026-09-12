@@ -140,11 +140,26 @@ def _polymer(pbc=(True, False, False)) -> Structure:
     )
 
 
-def test_slab_uses_layer_group_1_with_in_plane_parameters():
+def test_slab_uses_its_own_layer_group_and_that_group_s_parameters():
+    """A slab's symmetry is a layer group, and the deck says which one.
+
+    It used to be written in layer group 1 with every atom listed, throwing
+    away symmetry the app had already found. This slab is p4/mmm, and a square
+    cell needs only a — not a, b and gamma.
+    """
     lines = _lines(build_input(_slab()))
     assert lines[1] == "SLAB"
-    assert lines[2] == "1"  # layer group p1
-    assert lines[3] == "4.210000 4.210000 90.000000"  # a, b, gamma
+    assert lines[2] == "61"                # p4/mmm
+    assert lines[3] == "4.210000"          # square: a alone
+    assert lines[4] == "2"                 # Mg and O: nothing to fold together
+
+
+def test_slab_falls_back_to_layer_group_1_when_symmetry_is_turned_off():
+    """The escape hatch stays: group 1 with every atom is always true."""
+    lines = _lines(build_input(_slab(), CrystalInputSpec(
+        geometry=GeometryOptions(use_symmetry=False))))
+    assert lines[2] == "1"
+    assert lines[3] == "4.210000 4.210000 90.000000"   # a, b, gamma
     assert lines[4] == "2"
 
 
@@ -602,7 +617,10 @@ def test_dispersion_interphess_and_wang():
     lines = _lines(deck)
     i = lines.index("INTERPHESS")
     assert lines[i + 1 : i + 3] == ["4 4 4", "0"]
-    assert lines[lines.index("WANG") + 1] == "2.5 0 0 0 2.5 0 0 0 2.5"
+    # Three records of three, as every working WANG deck writes it — nine on
+    # one line leaves CRYSTAL reading the following keyword as numbers.
+    at = lines.index("WANG")
+    assert lines[at + 1:at + 4] == ["2.5 0 0", "0 2.5 0", "0 0 2.5"]
 
 
 def test_wang_needs_nine_tensor_elements():
@@ -631,9 +649,12 @@ def test_dispersion_bands_counts_its_path_segments():
         ),
     )
     lines = _lines(deck)
+    # Against a real SCELPHONO dispersion deck: "12 100" then "6" then the
+    # segments — ISS and NSUB share a record, NLINE has its own.
     i = lines.index("BANDS")
-    assert lines[i + 1] == "16 30 3"  # NLINE derived from the three segments
-    assert lines[i + 2] == "0 0 0  8 0 0"
+    assert lines[i + 1] == "16 30"
+    assert lines[i + 2] == "3"  # NLINE derived from the three segments
+    assert lines[i + 3] == "0 0 0  8 0 0"
 
 
 def test_bands_without_a_path_raises():

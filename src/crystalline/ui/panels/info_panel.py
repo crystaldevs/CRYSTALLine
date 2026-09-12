@@ -62,7 +62,8 @@ class InfoPanel(QWidget):
         if structure is None or len(structure) == 0:
             self.clear()
             return
-        _fill(self._crystal_form, analyze(structure).rows())
+        _fill(self._crystal_form,
+              _with_reduction(analyze(structure).rows(), structure))
         props = output_props or {}
         _fill(self._output_form, list(props.items()))
         self._output_group.setVisible(bool(props))
@@ -70,6 +71,52 @@ class InfoPanel(QWidget):
     def clear(self) -> None:
         _fill(self._crystal_form, [("", "No structure loaded")])
         self._output_group.setVisible(False)
+
+
+def _with_reduction(rows: List[Tuple[str, str]],
+                    structure: Structure) -> List[Tuple[str, str]]:
+    """Splice the reduction in directly under the space group.
+
+    Beside it, not at the bottom of the panel: the two lines answer the same
+    question — which group is this crystal in — and the second only makes sense
+    while the first is still in the eye.
+    """
+    extra = _reduction_rows(structure)
+    if not extra:
+        return list(rows)
+    for index, (label, _value) in enumerate(rows):
+        if label.lower().startswith("space group"):
+            return list(rows[:index + 1]) + extra + list(rows[index + 1:])
+    return list(rows) + extra
+
+
+def _reduction_rows(structure: Structure) -> List[Tuple[str, str]]:
+    """A row saying the crystal is being *treated* as less symmetric than it is.
+
+    Both facts belong here, and they are different facts: the space group above
+    is the symmetry these atoms have, and this is the one they are being given.
+    No atom moves in a reduction, so without a line saying so it is an
+    invisible setting deciding what every deck contains.
+    """
+    kept = getattr(structure, "reduced_symmetry", ())
+    if not kept:
+        return []
+    try:
+        import numpy as np
+
+        from crystalline.core import symmetry_reduction as reduction
+
+        symmetry = reduction.analyse(structure)
+        if symmetry is None:
+            return [("Treated as", f"{len(kept)} point operators")]
+        current = reduction.descend(symmetry, [np.asarray(r, dtype=int) for r in kept])
+        full = symmetry.full()
+        return [
+            ("Treated as", f"{current.symbol} (No. {current.number})"),
+            ("Independent sites", f"{current.sites} (was {full.sites})"),
+        ]
+    except Exception:  # noqa: BLE001 - a row we cannot fill is not worth a crash
+        return [("Treated as", "a reduced symmetry")]
 
 
 def _form(parent: QWidget) -> QFormLayout:

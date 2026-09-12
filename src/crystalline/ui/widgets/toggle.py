@@ -22,6 +22,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QAbstractButton, QSizePolicy
 
+from crystalline.ui.safety import guard
+
 # The track, and the knob that runs along it. Sized to sit on a toolbar row
 # without setting the row's height.
 _TRACK_WIDTH = 36
@@ -51,6 +53,7 @@ class ToggleSwitch(QAbstractButton):
         self.toggled.connect(self._animate)
 
     # ── geometry ────────────────────────────────────────────────────────
+    @guard(QSize(0, 0))
     def sizeHint(self) -> QSize:
         return QSize(_TRACK_WIDTH, _TRACK_HEIGHT)
 
@@ -101,6 +104,7 @@ class ToggleSwitch(QAbstractButton):
             self._set_offset(target)
 
     # ── painting ────────────────────────────────────────────────────────
+    @guard()
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)

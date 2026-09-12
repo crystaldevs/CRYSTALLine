@@ -42,6 +42,10 @@
   Hamiltonian and exchange/correlation functional (with the exact-exchange
   fraction and dispersion correction), k-point mesh, basis-set size, SCF
   thresholds, and the computed total energy, band gap and Fermi energy.
+- **Symmetry reduction**: declare a crystal in a lower symmetry than it really
+  has, by removing point-symmetry operators. Every subgroup the remaining
+  operators generate is offered and the choice applies to the structure itself, 
+  so the Info panel and every deck written afterwards follow it.
 
 **Geometry & measurements**
 - Measure a selection: distance (2 atoms), angle (3), dihedral (4) or
@@ -86,11 +90,18 @@
   preview of the exact input before you save it.
 - Geometry is derived from the structure — space group and asymmetric unit for a
   crystal, and the right coordinate convention for slabs, polymers and molecules.
+  A slab is written in its **layer group** (one of the 80), found from the
+  structure and checked by rebuilding the slab from it before it is used, so the
+  deck carries the symmetry CRYSTAL can exploit rather than P1.
 - Choose the method (HF or DFT, one functional keyword or separate exchange and
   correlation), basis set, SCF settings and the calculation: single point,
   geometry optimisation, frequencies with IR/Raman, phonon dispersion, QHA,
   equation of state, elastic constants, CPHF, anharmonic runs and spin–orbit
   coupling.
+- **Band paths**, for electrons (`BAND` in a `.d3`) and phonons (`BANDS` inside
+  `FREQCALC`) alike: take the conventional path for the lattice, edit it segment
+  by segment, or build your own by clicking points on the Brillouin zone — a
+  slab's zone included, which is a polygon with no k_z to travel along.
 
 **Property plots** (via CRYSTALClear, shown in a dockable tabbed panel)
 - IR and Raman harmonic and anharmonic (VSCF, VCI) spectra
@@ -100,7 +111,13 @@
 - Elastic properties (Young's modulus, linear compressibility,
   shear modulus, Poisson ratio)
 - Equation of state
-- Electronic and phonon band structures and densities of states,
+- **Electronic band structures and densities of states**, from the `BAND.DAT`,
+  `DOSS.DAT`, `.BAND`, `.DOSS` and `fort.25` files a PROPERTIES run leaves
+  beside the output — found and paired automatically. Bands, DOS, or the two
+  side by side; energies relative to the Fermi level or absolute, in eV or
+  Hartree; the path's corners named rather than marked with k-distances; chosen
+  projections, spin channels, colours and line styles.
+- Phonon band structures and densities of states
 - Simulated XRD
 - Crystalline orbitals
 
@@ -179,6 +196,35 @@ the visual periodic table.
 CRYSTALLine runs on **Linux, macOS and Windows** — anywhere PySide6 and a working
 OpenGL/VTK stack are available.
 
+### If it doesn't start
+
+```sh
+crystalline --check
+```
+
+That reports the Python version, every dependency and the version that arrived,
+whether Qt can open a window, and whether a VTK render window really works —
+naming what is missing and what to do about it. It exits non-zero if anything
+essential failed, so it also works in a script.
+
+It exists because the failures arrive as somebody else's error message. Qt's
+advice on a machine with no display is to *reinstall the application*, which
+cannot help; and the installed `crystalline` command is a GUI entry point, so on
+Windows it runs without a console and a startup failure prints to nothing at
+all. Two things worth knowing when that happens:
+
+- `python -m crystalline` runs the same app from a terminal, where errors are
+  visible.
+- Errors are written to a log either way —
+  `~/Library/Logs/CRYSTALLine/errors.log` on macOS,
+  `%LOCALAPPDATA%\CRYSTALLine\Logs\errors.log` on Windows,
+  `~/.local/state/CRYSTALLine/errors.log` on Linux. `crystalline --check`
+  prints the path.
+
+On Linux a fresh install sometimes lacks the system libraries Qt and VTK need
+(`libGL`, `libxkbcommon`); `--check` says which stage failed rather than leaving
+you with a bare plugin error.
+
 ### Linux: Wayland sessions
 
 VTK draws into an X11 window, so on a Wayland session CRYSTALLine asks Qt for
@@ -213,39 +259,31 @@ sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libx
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screen2.png" alt="Raman spectrum and phonon-animation export"></td>
-    <td width="50%"><img src="docs/screen3.png" alt="Display panel, coordination polyhedra and an elastic surface"></td>
+    <td width="50%"><img src="docs/screen2.png" alt="A crystalline orbital drawn across a graphite supercell"></td>
+    <td width="50%"><img src="docs/screen3.png" alt="Polyhedra on a 3x3x3 supercell, an elastic surface and the point-symmetry panel"></td>
   </tr>
   <tr>
     <td align="center" valign="top">
-      <b>🎬 Spectra, and modes as movies</b><br>
-      <sub>A computed Raman spectrum beside the structure. Click a peak to
-      select the mode behind it, animate it, and export the result as a GIF
-      or a video.</sub>
+      <b>⚛️ Crystalline orbitals</b><br>
+      <sub>A Bloch orbital tiled across a 1×6×1 graphite supercell, its two
+      phases in red and blue.</sub>
     </td>
     <td align="center" valign="top">
-      <b>🔷 Polyhedra and elastic surfaces</b><br>
-      <sub>VESTA-style coordination polyhedra on a 2×2×2 supercell, drawn as a
-      single mesh so thousands of atoms stay interactive, with a Young's modulus
-      surface from the elastic tensor.</sub>
+      <b>🔷 Big cells, elasticity, symmetry</b><br>
+      <sub>Coordination polyhedra on a 3×3×3 supercell — 8,100 atoms, still
+      interactive — a Young's modulus surface from the elastic tensor, and every
+      point-symmetry element listed beside it.</sub>
     </td>
   </tr>
   <tr>
-    <td width="50%"><img src="docs/plot_anscan.png" alt="Anharmonic scan of a double-well mode"></td>
-    <td width="50%"><img src="docs/plot_pes.png" alt="Anharmonic potential-energy surface of two coupled modes"></td>
+    <td colspan="2"><img src="docs/screen4.png" alt="Building a .d3 properties input, with the band path picked on the Brillouin zone"></td>
   </tr>
   <tr>
-    <td align="center" valign="top">
-      <b>〰️ Anharmonic scans</b><br>
-      <sub>Scanned potential, vibrational states and
-      probability densities. Here the double-well of an imaginary mode,
-      whose two lowest states are split by tunnelling.</sub>
-    </td>
-    <td align="center" valign="top">
-      <b>🏔️ Anharmonic PES</b><br>
-      <sub>How two normal modes couple through their cubic and quartic terms,
-      as a 3D surface or a contour map, with the harmonic contribution taken out so the
-      coupling is what you see.</sub>
+    <td colspan="2" align="center" valign="top">
+      <b>🧭 Inputs, and a band path you can see</b><br>
+      <sub>Build a <code>.d12</code> or <code>.d3</code> deck from the loaded
+      structure, and pick the band path by clicking points on the Brillouin
+      zone — each leg coloured and measured in Å⁻¹.</sub>
     </td>
   </tr>
 </table>

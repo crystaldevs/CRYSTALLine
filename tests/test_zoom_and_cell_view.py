@@ -109,6 +109,7 @@ def test_the_wheel_factor_follows_the_scroll_amount():
     from the delta."""
     pytest.importorskip("PySide6")
     from crystalline.ui import viewport as vp
+    from crystalline.ui import wheel_zoom
 
     asked = []
 
@@ -136,7 +137,9 @@ def test_the_wheel_factor_follows_the_scroll_amount():
 
     assert len(asked) == 3                      # the empty scroll did nothing
     full, half, out = asked
-    assert full == pytest.approx(vp._ZOOM_PER_NOTCH)
+    # The rule itself lives in wheel_zoom now, shared with the zone view; what
+    # this test pins is that the viewport goes through it.
+    assert full == pytest.approx(wheel_zoom.ZOOM_PER_NOTCH)
     assert 1.0 < half < full                    # proportionally less, not the same
     assert out == pytest.approx(1.0 / full)     # and symmetric
 
@@ -144,6 +147,7 @@ def test_the_wheel_factor_follows_the_scroll_amount():
 def test_an_absurd_delta_cannot_teleport_the_view():
     pytest.importorskip("PySide6")
     from crystalline.ui import viewport as vp
+    from crystalline.ui import wheel_zoom
 
     asked = []
 
@@ -161,7 +165,7 @@ def test_an_absurd_delta_cannot_teleport_the_view():
 
     _StubViewport()._zoom_from_wheel(_Wheel())
 
-    assert asked[0] == pytest.approx(vp._MAX_ZOOM_PER_EVENT)
+    assert asked[0] == pytest.approx(wheel_zoom.MAX_ZOOM_PER_EVENT)
 
 
 # ── the cell-view switch ──────────────────────────────────────────────────

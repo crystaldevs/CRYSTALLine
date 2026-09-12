@@ -15,6 +15,8 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
+from crystalline.ui.safety import guard
+
 _TRACK_HEIGHT = 4
 _KNOB_RADIUS = 7
 _MIN_WIDTH = 90
@@ -46,9 +48,11 @@ class RangeSlider(QWidget):
         self.setCursor(Qt.PointingHandCursor)
 
     # ── state ───────────────────────────────────────────────────────────
+    @guard(QSize(0, 0))
     def sizeHint(self) -> QSize:
         return QSize(160, 2 * _KNOB_RADIUS + 4)
 
+    @guard(QSize(0, 0))
     def minimumSizeHint(self) -> QSize:
         return QSize(_MIN_WIDTH, 2 * _KNOB_RADIUS + 4)
 
@@ -91,6 +95,7 @@ class RangeSlider(QWidget):
         return self._minimum + min(max(fraction, 0.0), 1.0) * self._span()
 
     # ── interaction ─────────────────────────────────────────────────────
+    @guard()
     def mousePressEvent(self, event) -> None:
         x = event.position().x()
         # Grab whichever handle is nearer, so a click anywhere on the track pulls
@@ -98,10 +103,12 @@ class RangeSlider(QWidget):
         self._dragging = 1 if abs(x - self._x_of(self._low)) <= abs(x - self._x_of(self._high)) else 2
         self._drag_to(x)
 
+    @guard()
     def mouseMoveEvent(self, event) -> None:
         if self._dragging:
             self._drag_to(event.position().x())
 
+    @guard()
     def mouseReleaseEvent(self, _event) -> None:
         if self._dragging:
             self._dragging = 0
@@ -117,6 +124,7 @@ class RangeSlider(QWidget):
         self.valuesChanged.emit(self._low, self._high)
 
     # ── painting ────────────────────────────────────────────────────────
+    @guard()
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
