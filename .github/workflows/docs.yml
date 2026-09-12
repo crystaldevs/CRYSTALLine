@@ -25,6 +25,10 @@ concurrency:
 
 jobs:
   build:
+    # Only in the organisation's repository. Work is pushed to a personal fork
+    # and arrives here by pull request; a fork has no Pages site to publish to,
+    # and the run would fail there for that reason alone.
+    if: github.repository == 'crystaldevs/CRYSTALLine'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -42,6 +46,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.repository == 'crystaldevs/CRYSTALLine'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
