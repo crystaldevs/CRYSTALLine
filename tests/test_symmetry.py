@@ -126,17 +126,17 @@ def test_diamond_reports_the_site_symmetry_not_the_class():
 
     assert analysis.group == "4̄3m"
     assert not [e for e in analysis.elements if e.kind == S.POINT]
-    assert {e.label for e in analysis.elements if e.kind == S.AXIS} == {"3", "4" + "̄"}
+    assert {e.label for e in analysis.elements if e.kind == S.AXIS} == {"C₃", "S₄"}
 
 
 def test_coincident_operators_merge_into_one_element():
-    """A 4-fold axis, the 2-fold it contains and the 4̄ about it are one line."""
+    """A 4-fold axis, the 2-fold it contains and the S₄ about it are one line."""
     analysis = S.analyse(Structure.from_ase(_CRYSTALS["Fm-3m"]))
-    fourfold = [e for e in analysis.elements if e.label == "4"]
+    fourfold = [e for e in analysis.elements if e.label == "C₄"]
 
     assert len(fourfold) == 3  # a cubic cell has three, not one per operator
     for element in fourfold:
-        assert set(element.labels) == {"4", "2", "4" + "̄"}
+        assert set(element.labels) == {"C₄", "C₂", "S₄"}
 
 
 def test_axes_and_planes_are_named_by_lattice_direction():
@@ -183,7 +183,7 @@ def test_a_molecule_gets_its_point_group_about_its_own_centre():
 
     assert analysis.group == "C2v"
     assert len(analysis.elements) == 3  # the 2-fold axis and the two mirror planes
-    assert {e.label for e in analysis.elements} == {"C₂", "σ"}  # Schoenflies, like the group
+    assert {e.label for e in analysis.elements} == {"C₂", "σᵥ"}  # both planes hold the axis
     assert analysis.centre_site.endswith("Å")  # no cell, so no fractions
     # The centre sits on the molecule, not at the world origin it happens to
     # be drawn near.
@@ -202,7 +202,7 @@ def test_a_molecule_is_labelled_in_schoenflies_throughout():
     assert principal.label == "C₆"
     assert set(principal.labels) == {"C₆", "C₃", "C₂", "S₃", "S₆"}
     assert principal.noun == "6-fold rotation axis"
-    assert {e.label for e in analysis.elements if e.kind == S.PLANE} == {"σ"}
+    assert {e.label for e in analysis.elements if e.kind == S.PLANE} == {"σᵥ", "σₕ", "σd"}
     assert [e.label for e in analysis.elements if e.kind == S.POINT] == ["i"]
 
 
@@ -223,24 +223,25 @@ def test_a_rotoreflection_is_named_and_described_by_its_own_order():
 
 def test_a_crystal_keeps_hermann_mauguin_with_a_real_overbar():
     """spglib spells a bar as a leading minus ("m-3m"); crystallography puts it
-    over the digit, and the elements are labelled to match their group."""
+    over the digit. The group keeps that spelling; its operators do not — see
+    the Schoenflies tests below."""
     analysis = S.analyse(Structure.from_ase(_CRYSTALS["Fm-3m"]))
 
     assert "-" not in analysis.group
     assert analysis.group == "m3" + "̄" + "m"
-    assert {e.label for e in analysis.elements if e.kind == S.PLANE} == {"m"}
-    assert [e.label for e in analysis.elements if e.kind == S.POINT] == ["1" + "̄"]
 
 
 def test_the_symbol_stays_clear_of_its_description():
     """A combining overbar is drawn over the character after it, so a label that
     ends in one needs more than a single space before the dash."""
-    analysis = S.analyse(Structure.from_ase(_CRYSTALS["Fm-3m"]))
-    centre = next(e for e in analysis.elements if e.kind == S.POINT)
+    # No Schoenflies symbol ends in a bar, so the spacing is checked on a
+    # Hermann-Mauguin label built for the purpose.
+    barred = S.SymmetryElement(S.POINT, "1" + "̄", [0, 0, 0], "centre of inversion")
+    assert barred.summary().startswith("1" + "̄" + "\u2009 — centre of inversion")
 
-    assert centre.summary().startswith("1" + "̄" + "  — centre of inversion")
-    axis = next(e for e in analysis.elements if e.label == "4")
-    assert axis.summary().startswith("4 — 4-fold rotation axis")  # no bar, one space
+    analysis = S.analyse(Structure.from_ase(_CRYSTALS["Fm-3m"]))
+    axis = next(e for e in analysis.elements if e.label == "C₄")
+    assert axis.summary().startswith("C₄ — 4-fold rotation axis")  # no bar, one space
 
 
 def test_a_molecules_directions_are_cartesian_not_lattice_indices():
@@ -305,3 +306,60 @@ def test_segment_in_box_misses_a_line_outside_it():
     assert S.segment_in_box([9.0, 9.0, 0.0], [0.0, 0.0, 1.0], _BOX) is None
 
 
+
+
+# ── the chemist's notation ────────────────────────────────────────────────
+def test_operators_are_named_the_way_a_chemist_writes_them():
+    """Not 2, m, 1̄ and 4̄: the operators of a crystal are C₂, σ, i and S₄, as
+    they are for a molecule. The group keeps its own convention — a crystal is
+    still m3̄m — but nobody reads an operator in two notations at once."""
+    analysis = S.analyse(Structure.from_ase(_CRYSTALS["Fm-3m"]))
+    labels = {e.label for e in analysis.elements}
+
+    assert labels == {"C₄", "C₃", "C₂", "σₕ", "σd", "i"}
+    assert not labels & {"2", "3", "4", "m", "1" + "̄", "4" + "̄"}
+
+
+@pytest.mark.parametrize("name, expected", [
+    # Textbook contents of each group, mirrors included.
+    ("H2O", {"C₂": 1, "σᵥ": 2}),
+    ("NH3", {"C₃": 1, "σᵥ": 3}),
+    ("C6H6", {"C₆": 1, "C₂": 6, "σᵥ": 3, "σd": 3, "σₕ": 1, "i": 1}),
+    ("C2H6", {"C₃": 1, "C₂": 3, "σd": 3, "i": 1}),
+    ("CH4", {"S₄": 3, "C₃": 4, "σd": 6}),
+])
+def test_the_mirrors_are_told_apart(name, expected):
+    """σₕ across the principal axis, σᵥ holding it, σd bisecting the two-fold
+    axes across it. In D₆ₕ every vertical plane holds a two-fold axis, so the
+    ones through atoms are the σᵥ and the ones between them the σd."""
+    pytest.importorskip("pymatgen")
+    from ase.build import molecule
+
+    analysis = S.analyse(Structure.from_ase(molecule(name)))
+    counted = {}
+    for element in analysis.elements:
+        counted[element.label] = counted.get(element.label, 0) + 1
+
+    assert counted == expected
+
+
+def test_a_group_with_no_principal_axis_leaves_its_mirrors_unnamed():
+    """Ethylene's three two-fold axes are equivalent, so no plane is the
+    horizontal one. A name would be a guess, and σ is the honest answer."""
+    pytest.importorskip("pymatgen")
+    from ase.build import molecule
+
+    analysis = S.analyse(Structure.from_ase(molecule("C2H4")))
+
+    assert {e.label for e in analysis.elements if e.kind == S.PLANE} == {"σ"}
+
+
+def test_every_label_that_can_carry_a_subscript_does():
+    """C₂, S₄, σᵥ, σₕ — Unicode has no subscript d, so σd is written flat."""
+    pytest.importorskip("pymatgen")
+    from ase.build import molecule
+
+    for name in ("C6H6", "CH4", "H2O"):
+        for element in S.analyse(Structure.from_ase(molecule(name))).elements:
+            assert not any(ch in "0123456789" for ch in element.label), element.label
+            assert "_" not in element.label, element.label
