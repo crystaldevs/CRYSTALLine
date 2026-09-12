@@ -52,8 +52,8 @@ class Operator:
 
     ``rotation`` is the integer matrix in the conventional cell's own basis,
     which is how spglib gives it and how it must go back to spglib to be named.
-    ``label`` is the crystallographic symbol with the direction it acts along —
-    "4 ∥ [001]", "m ⊥ [110]", "1̄" — because "operator 17" is no use to anyone.
+    ``label`` is the Schoenflies symbol with the direction it acts along —
+    "C₄ ∥ [001]", "σᵥ ⊥ [110]", "i" — because "operator 17" is no use to anyone.
     """
 
     rotation: np.ndarray
@@ -154,7 +154,7 @@ def analyse(structure: Structure, symprec: float = 1e-2) -> Optional[Symmetry]:
         numbers=numbers,
         rotations=rotations,
         translations=translations,
-        operators=_label_operators(rotations, lattice),
+        operators=_label_operators(rotations, lattice, positions),
         number=int(kind["number"]) if kind else 1,
         symbol=str(kind["international_short"]) if kind else "P1",
     )
@@ -432,33 +432,46 @@ def _conventional(structure: Structure, symprec: float):
             np.asarray([site.specie.Z for site in conventional], dtype=int))
 
 
-def _label_operators(rotations: np.ndarray, lattice: np.ndarray) -> Tuple[Operator, ...]:
+def _label_operators(rotations: np.ndarray, lattice: np.ndarray,
+                     positions: np.ndarray) -> Tuple[Operator, ...]:
     """Name each distinct rotation, using the panel's own classifier.
 
     The classifier works in cartesian Å — the same frame the elements are drawn
     in — so the label beside a tick box is the label beside the axis in the 3D
-    view, and no one has to work out which is which.
+    view, and no one has to work out which is which. Schoenflies, as the panel
+    names them: C₄, σ, i, S₄.
     """
     from crystalline.core import symmetry as symmetry_module
 
     basis = np.asarray(lattice, dtype=float).T
     inverse = np.linalg.inv(basis)
-    operators: Dict[bytes, Operator] = {}
+    identities: Dict[bytes, Operator] = {}
+    elements: Dict[bytes, object] = {}
+    matrices: Dict[bytes, np.ndarray] = {}
     for rotation in rotations:
         token = _key(rotation)
-        if token in operators:
+        if token in elements or token in identities:
             continue
+        matrices[token] = np.asarray(rotation, dtype=int)
         cartesian = basis @ np.asarray(rotation, dtype=float) @ inverse
-        element = symmetry_module._classify(cartesian, np.zeros(3), schoenflies=False)
+        element = symmetry_module._classify(cartesian, np.zeros(3), schoenflies=True)
         if element is None:                      # the identity classifies as nothing
-            operators[token] = Operator(np.asarray(rotation, dtype=int), "1",
-                                        "identity", 1, True)
+            identities[token] = Operator(matrices[token], "E", "identity", 1, True)
             continue
+        elements[token] = element
+
+    # σₕ, σᵥ and σd as the panel tells them apart, which needs the whole set and
+    # the atoms: it is done here rather than operator by operator.
+    cartesian_positions = np.asarray(positions, dtype=float) @ np.asarray(lattice, dtype=float)
+    symmetry_module._name_planes(list(elements.values()), cartesian_positions)
+
+    operators: Dict[bytes, Operator] = dict(identities)
+    for token, element in elements.items():
         # _site_text is what puts "∥ [001]" on a panel row; without it every
-        # 2-fold axis of a cubic crystal is a row reading "2".
+        # 2-fold axis of a cubic crystal is a row reading "C₂".
         site = symmetry_module._site_text(element, lattice)
         operators[token] = Operator(
-            rotation=np.asarray(rotation, dtype=int),
+            rotation=matrices[token],
             label=f"{element.label} {site}".strip(),
             noun=element.noun,
             order=element.order,

@@ -544,20 +544,23 @@ def _name_planes(elements: Sequence[SymmetryElement], positions) -> None:
     planes = [e for e in elements if e.kind == PLANE and e.direction is not None]
     if not axes or not planes:
         return
-    highest = max(axis.order for axis in axes)
-    principal = [axis for axis in axes if axis.order == highest]
+    # By direction, not by element: a list of operators rather than of merged
+    # elements holds a 4-fold axis twice, as its 90° and 270° rotations, and
+    # counting those as two axes would lose the principal one.
+    directions = _axis_directions(axes)
+    highest = max(order for _d, order in directions)
+    principal = [d for d, order in directions if order == highest]
     if len(principal) != 1:
         _name_cubic_planes(elements, planes, axes)
         return
-    axis = principal[0].direction
-    perpendicular = [e for e in axes
-                     if e.order == 2 and e.direction is not None
-                     and _perpendicular(e.direction, axis)]
+    axis = principal[0]
+    perpendicular = [d for d, order in directions
+                     if order == 2 and _perpendicular(d, axis)]
     # Which of those are the primed axes: the ones through atoms. In D₆ₕ every
     # vertical plane contains a two-fold axis, so "contains one" cannot separate
     # σᵥ from σd — benzene's σᵥ hold the axes through opposite carbons, its σd
     # the ones through opposite bonds.
-    named = [e for e in perpendicular if _holds_an_atom(e.direction, positions)] or perpendicular
+    named = [d for d in perpendicular if _holds_an_atom(d, positions)] or perpendicular
 
     for plane in planes:
         normal = plane.direction
@@ -566,11 +569,24 @@ def _name_planes(elements: Sequence[SymmetryElement], positions) -> None:
         elif _perpendicular(normal, axis):
             # It contains the principal axis. Vertical if it also contains one
             # of the named two-fold axes; dihedral if it bisects them.
-            holds_twofold = any(_perpendicular(normal, e.direction) for e in named)
+            holds_twofold = any(_perpendicular(normal, d) for d in named)
             if not perpendicular or holds_twofold:
                 _rename(plane, "σᵥ", "vertical mirror plane")
             else:
                 _rename(plane, "σd", "dihedral mirror plane")
+
+
+def _axis_directions(axes) -> List[Tuple[np.ndarray, int]]:
+    """One entry per distinct axis: its direction and the highest order on it."""
+    found: List[List] = []
+    for axis in axes:
+        for entry in found:
+            if _parallel(entry[0], axis.direction):
+                entry[1] = max(entry[1], axis.order)
+                break
+        else:
+            found.append([_unit(axis.direction), axis.order])
+    return [(direction, order) for direction, order in found]
 
 
 def _name_cubic_planes(elements, planes, axes) -> None:
