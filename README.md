@@ -42,6 +42,11 @@
   Hamiltonian and exchange/correlation functional (with the exact-exchange
   fraction and dispersion correction), k-point mesh, basis-set size, SCF
   thresholds, and the computed total energy, band gap and Fermi energy.
+- **Symmetry reduction**: declare a crystal in a lower symmetry than it really
+  has, by removing point-symmetry operators. Every subgroup the remaining
+  operators generate is offered — the ones CRYSTAL cannot be told about are
+  listed but greyed — and the choice applies to the structure itself, so the
+  Info panel and every deck written afterwards follow it.
 
 **Geometry & measurements**
 - Measure a selection: distance (2 atoms), angle (3), dihedral (4) or
@@ -90,11 +95,23 @@
   preview of the exact input before you save it.
 - Geometry is derived from the structure — space group and asymmetric unit for a
   crystal, and the right coordinate convention for slabs, polymers and molecules.
+  A slab is written in its **layer group** (one of the 80), found from the
+  structure and checked by rebuilding the slab from it before it is used, so the
+  deck carries the symmetry CRYSTAL can exploit rather than P1.
 - Choose the method (HF or DFT, one functional keyword or separate exchange and
   correlation), basis set, SCF settings and the calculation: single point,
   geometry optimisation, frequencies with IR/Raman, phonon dispersion, QHA,
   equation of state, elastic constants, CPHF, anharmonic runs and spin–orbit
   coupling.
+- **Band paths**, for electrons (`BAND` in a `.d3`) and phonons (`BANDS` inside
+  `FREQCALC`) alike: take the conventional path for the lattice, edit it segment
+  by segment, or build your own by clicking points on the Brillouin zone — a
+  slab's zone included, which is a polygon with no k_z to travel along.
+- The special points are the ones CRYSTAL itself recognises (tables 14.1 and
+  14.2 of the manual), which differ from the standard tables for the
+  body-centred and monoclinic lattices. A path is written as whole numbers over
+  a shrinking factor, or refused — never rounded onto a point the crystal does
+  not have.
 
 **Property plots** (via CRYSTALClear, shown in a dockable tabbed panel)
 - IR and Raman harmonic and anharmonic (VSCF, VCI) spectra
@@ -104,7 +121,13 @@
 - Elastic properties (Young's modulus, linear compressibility,
   shear modulus, Poisson ratio)
 - Equation of state
-- Electronic and phonon band structures and densities of states,
+- **Electronic band structures and densities of states**, from the `BAND.DAT`,
+  `DOSS.DAT`, `.BAND`, `.DOSS` and `fort.25` files a PROPERTIES run leaves
+  beside the output — found and paired automatically. Bands, DOS, or the two
+  side by side; energies relative to the Fermi level or absolute, in eV or
+  Hartree; the path's corners named rather than marked with k-distances; chosen
+  projections, spin channels, colours and line styles.
+- Phonon band structures and densities of states
 - Simulated XRD
 
 ## Installation

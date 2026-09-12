@@ -460,6 +460,12 @@ def _build_plot_menu(window) -> None:
     # Raman polarisations and anharmonic levels included — behind one entry,
     # because there are far too many curves for one action each.
     plot_menu.addSeparator()
+    # The one-electron properties the same way: bands, DOS and the two side by
+    # side, with their options and a choice of energy reference, behind one
+    # entry rather than two that could only draw the defaults.
+    window._electronic_action = QAction("Electronic bands & DOS…", window)
+    window._electronic_action.triggered.connect(window._open_electronic)
+    plot_menu.addAction(window._electronic_action)
     window._spectra_action = QAction("Vibrational spectra…", window)
     window._spectra_action.triggered.connect(window._open_spectra)
     plot_menu.addAction(window._spectra_action)

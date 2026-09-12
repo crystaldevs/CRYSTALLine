@@ -67,6 +67,11 @@ class BandOptions:
     # (start, end) pairs in fractional reciprocal coordinates.
     segments: Tuple[Tuple[Tuple[float, float, float], Tuple[float, float, float]], ...] = ()
     labels: Tuple[Tuple[str, str], ...] = ()   # for the comment line only
+    # The conventional path when no segments are given. Set it to False to say
+    # a path was meant to be chosen and is missing — which is what the builder
+    # does once its tick is off, so an emptied list is refused rather than
+    # quietly filled with a walk nobody asked for.
+    conventional: bool = True
     points: int = 200        # NSUB, total k points along the whole path
     first_band: int = 1      # INZB
     last_band: Optional[int] = None  # IFNB; None -> filled in from the basis
@@ -193,6 +198,16 @@ def band_path(structure: Structure) -> Tuple[List[Tuple[str, str]], List[Tuple[t
     """
     if not structure.is_periodic:
         raise PropertiesInputError("A band structure needs a periodic structure.")
+    if int(sum(bool(p) for p in structure.pbc)) == 2:
+        labels, segments = _planar_band_path(structure)
+        try:
+            band_shrink(segments)
+        except PropertiesInputError:
+            # A slab has the same trouble as a crystal: an oblique or centred
+            # rectangular plane lattice puts points of its conventional path at
+            # coordinates that depend on the cell.
+            return _writable_points_path(structure)
+        return labels, segments
     try:
         from pymatgen.io.ase import AseAtomsAdaptor
         from pymatgen.symmetry.bandstructure import HighSymmKpath
@@ -210,12 +225,212 @@ def band_path(structure: Structure) -> Tuple[List[Tuple[str, str]], List[Tuple[t
 
     labels: List[Tuple[str, str]] = []
     segments: List[Tuple[tuple, tuple]] = []
+    # pymatgen names the corners after the standard tables; CRYSTAL's own names
+    # for them are what its input and output speak, so a corner it names is
+    # named its way.
+    named = _crystal_namer(structure)
     for walk in walks:
         for start, end in zip(walk, walk[1:]):
-            labels.append((_tidy_label(start), _tidy_label(end)))
-            segments.append((tuple(points[start]), tuple(points[end])))
+            first, second = points[start], points[end]
+            labels.append((named(first, _tidy_label(start)),
+                           named(second, _tidy_label(end))))
+            segments.append((tuple(first), tuple(second)))
     if not segments:
         raise PropertiesInputError("The high-symmetry path came back empty.")
+    try:
+        band_shrink(segments)
+    except PropertiesInputError:
+        # The standard path is not always writable. For seven of the fourteen
+        # Bravais lattices it visits points whose coordinates depend on the cell
+        # parameters — 0.411306 for a monoclinic one — and CRYSTAL reads a path
+        # as whole numbers over a shrinking factor, which cannot express them.
+        return _crystal_points_path(structure)
+    return labels, segments
+
+
+def band_path_kind(structure: Structure) -> str:
+    """Which path :func:`band_path` will give: ``"standard"`` or ``"points"``.
+
+    For the editor's note, so it never calls a path conventional when the
+    conventional one could not be written.
+    """
+    if not structure.is_periodic:
+        return "standard"
+    if int(sum(bool(p) for p in structure.pbc)) == 2:
+        try:
+            band_shrink(_planar_band_path(structure)[1])
+        except PropertiesInputError:
+            return "points"
+        except Exception:  # noqa: BLE001 - the note falls back to the usual wording
+            return "standard"
+        return "standard"
+    try:
+        from pymatgen.io.ase import AseAtomsAdaptor
+        from pymatgen.symmetry.bandstructure import HighSymmKpath
+
+        kpath = HighSymmKpath(AseAtomsAdaptor.get_structure(structure.to_ase()))
+        points = kpath.kpath["kpoints"]
+        segments = [(tuple(points[start]), tuple(points[end]))
+                    for walk in kpath.kpath["path"] for start, end in zip(walk, walk[1:])]
+        band_shrink(segments)
+    except PropertiesInputError:
+        return "points"
+    except Exception:  # noqa: BLE001 - the note falls back to the usual wording
+        return "standard"
+    return "standard"
+
+
+def _label_table(structure: Structure) -> dict:
+    """The letters to write for this structure's corners.
+
+    CRYSTAL's tables are of the 3D Bravais lattices. A slab's points are named
+    for its *plane* lattice, and those are the names the zone picker shows and
+    the app reads back, so a slab is labelled from them instead.
+    """
+    from crystalline.core import crystal_points as convention
+
+    if int(sum(bool(flag) for flag in structure.pbc)) == 2:
+        from crystalline.core.brillouin import special_points, zone_lattice
+
+        # Γ included: it is a corner of most paths, and CRYSTAL calls it G
+        # whatever the lattice.
+        return dict(special_points(zone_lattice(structure)))
+    return dict(convention.points_for(structure))
+
+
+def _writable_points_path(structure: Structure):
+    """Γ out to every labelled point of the zone that can actually be written.
+
+    For a slab, where CRYSTAL tabulates nothing: its tables are of the 3D
+    Bravais lattices, and a plane lattice's points are the ones ASE names. The
+    ones at simple fractions — the zone-boundary points every plane lattice has
+    — are kept, and those that depend on the cell's angle are dropped, because
+    a path is written as whole numbers over a shrinking factor or not at all.
+    """
+    from crystalline.core.brillouin import special_points, zone_lattice
+
+    origin = (0.0, 0.0, 0.0)
+    labels, segments = [], []
+    for label, point in special_points(zone_lattice(structure)).items():
+        if label == "G":
+            continue
+        try:
+            band_shrink([(origin, tuple(point))])
+        except PropertiesInputError:
+            continue
+        labels.append(("G", label))
+        segments.append((origin, tuple(point)))
+    if not segments:
+        raise PropertiesInputError(
+            "This lattice's conventional path visits points whose coordinates "
+            "depend on the cell parameters, which CRYSTAL cannot express as "
+            "whole numbers over a shrinking factor, and it has no labelled "
+            "point that can be. Build a path with the path builder."
+        )
+    return labels, segments
+
+
+def _crystal_points_path(structure: Structure):
+    """Γ out to each of CRYSTAL's own special points for this lattice.
+
+    The fallback for a lattice whose standard path cannot be written. Every
+    point CRYSTAL tabulates is a simple fraction, so this always writes; it
+    reaches every point the program can name; and it is the shape pymatgen
+    itself gives the lattice with the least symmetry, the triclinic star.
+
+    It is a *starting* path, not a claim that it is the conventional one — the
+    path builder is there to walk the zone any other way.
+    """
+    from crystalline.core import crystal_points as convention
+
+    table = {label: point for label, point in convention.points_for(structure).items()
+             if label != "G"}
+    if not table:
+        # No CRYSTAL table for this lattice; its own labelled points will do.
+        return _writable_points_path(structure)
+    origin = (0.0, 0.0, 0.0)
+    labels = [("G", label) for label in table]
+    segments = [(origin, tuple(point)) for point in table.values()]
+    return labels, segments
+
+
+def _crystal_namer(structure: Structure):
+    """``point, fallback -> label``, in CRYSTAL's convention where it has one."""
+    from crystalline.core import crystal_points as convention
+
+    table = convention.points_for(structure)
+    if not table:
+        return lambda _point, fallback: fallback
+    rotations = convention.reciprocal_rotations(structure)
+
+    def named(point, fallback: str) -> str:
+        for label, coords in table.items():
+            if convention.same_point(point, coords, rotations):
+                return label
+        return fallback
+
+    return named
+
+
+def _crystal_names(structure: Structure, segments) -> List[Optional[Tuple[str, str]]]:
+    """The CRYSTAL letters of each segment's ends, or ``None`` for a segment
+    with an end CRYSTAL does not name.
+
+    Only these go into a deck. A letter from another convention would be read
+    back — by CRYSTAL with ISS=0, by this app when it labels a plot — as
+    whichever point CRYSTAL gives that letter to, which for a body-centred
+    tetragonal P or a monoclinic Y is a different place in the zone.
+    """
+    from crystalline.core import crystal_points as convention
+
+    table = _label_table(structure)
+    if not table:
+        return [None] * len(segments)
+    rotations = convention.reciprocal_rotations(structure)
+
+    def label_of(point) -> Optional[str]:
+        for label, coords in table.items():
+            if convention.same_point(point, coords, rotations):
+                return label
+        return None
+
+    names: List[Optional[Tuple[str, str]]] = []
+    for start, end in segments:
+        first, second = label_of(start), label_of(end)
+        names.append((first, second) if first and second else None)
+    return names
+
+
+def _planar_band_path(structure: Structure):
+    """The conventional path of a *slab*, which has no k_z to travel along.
+
+    Read as a 3D crystal, a slab's path runs through A, L and H — points along
+    a reciprocal direction that only exists because a vacuum vector was counted
+    as a lattice one. ASE names the 2D Bravais lattice and its path when it is
+    told which directions are real.
+    """
+    atoms = structure.to_ase()
+    try:
+        path = atoms.cell.bandpath(pbc=atoms.pbc)
+        points = {_tidy_label(name): tuple(float(v) for v in point)
+                  for name, point in path.special_points.items()}
+        walks = [segment for segment in str(path.path).split(",") if segment]
+    except Exception as exc:  # noqa: BLE001 - surfaced with what to do instead
+        raise PropertiesInputError(
+            f"Could not work out the high-symmetry path for this slab ({exc}). "
+            f"Enter the path by hand."
+        ) from exc
+
+    labels: List[Tuple[str, str]] = []
+    segments: List[Tuple[tuple, tuple]] = []
+    for walk in walks:
+        names = [_tidy_label(name) for name in walk]
+        for start, end in zip(names, names[1:]):
+            if start in points and end in points:
+                labels.append((start, end))
+                segments.append((points[start], points[end]))
+    if not segments:
+        raise PropertiesInputError("This slab has no high-symmetry path to follow.")
     return labels, segments
 
 
@@ -394,6 +609,11 @@ def _band_lines(structure: Structure, opts: BandOptions) -> List[str]:
     segments = list(opts.segments)
     labels = list(opts.labels)
     if not segments:
+        if not opts.conventional:
+            raise PropertiesInputError(
+                "No band path chosen. Build one on the Brillouin zone with the "
+                "path builder, or ask for the conventional path for this lattice."
+            )
         labels, segments = band_path(structure)
     shrink = opts.shrink if opts.shrink is not None else band_shrink(segments)
     last = opts.last_band if opts.last_band is not None else _band_ceiling(structure)
@@ -410,8 +630,18 @@ def _band_lines(structure: Structure, opts: BandOptions) -> List[str]:
              f"{len(segments)} {shrink} {int(opts.points)} {int(opts.first_band)} "
              f"{int(last)} {1 if opts.store else 0} "
              f"{1 if opts.print_eigenvalues else 0}"]
-    for start, end in segments:
-        lines.append(" ".join(str(_to_integer(v, shrink)) for v in (*start, *end)))
+    # The letters after the coordinates are how CRYSTAL's own decks are written
+    # (see the BAND blocks in its tutorials): the six integers are what it
+    # reads, and the names say which corners they are — for whoever opens the
+    # deck later, and for this app, which reads them back to label the axis of
+    # a plot whose data file records only coordinates.
+    written = _crystal_names(structure, segments)
+    for index, (start, end) in enumerate(segments):
+        numbers = " ".join(str(_to_integer(v, shrink)) for v in (*start, *end))
+        pair = written[index]
+        if pair and all(name.isalnum() for name in pair):
+            numbers = f"{numbers}   {pair[0]} {pair[1]}"
+        lines.append(numbers)
     return lines
 
 

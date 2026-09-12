@@ -33,11 +33,30 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.core.brillouin import display_label, special_points, zone_lattice
-from crystalline.core.properties_input import PropertiesInputError, band_path, band_shrink
+from crystalline.core.properties_input import (
+    PropertiesInputError,
+    band_path,
+    band_path_kind,
+    band_shrink,
+)
 from crystalline.core.structure import Structure
 from crystalline.ui.safety import guard
 
 CONVENTIONAL_NOTE = "the conventional path for this lattice"
+
+# What is offered instead for the seven Bravais lattices whose conventional
+# path cannot be written: it visits points whose coordinates depend on the cell
+# parameters, and CRYSTAL reads a path as whole numbers over a shrinking factor.
+POINTS_NOTE = ("Γ out to each special point CRYSTAL names for this lattice — its "
+               "conventional path visits points that cannot be written as whole "
+               "numbers over a shrinking factor. Edit it, or build your own.")
+
+# What it says before a path exists. It starts empty on purpose: a band
+# structure is a claim about a particular walk through the zone, and the
+# conventional walk is one answer among several — for seven of the fourteen
+# Bravais lattices it is not even writable as a CRYSTAL path.
+EMPTY_NOTE = ("No path yet — build one on the zone with the path builder, add "
+              "segments by hand, or tick the conventional path.")
 
 # The shrinking-factor box shows this instead of a number when it is 0: the
 # smallest ISS that makes every coordinate on the path a whole number.
@@ -143,7 +162,10 @@ class BandPathEditor(QWidget):
         # not among them: it rescales whatever path is in force, conventional
         # or not, and is a property of how the path is *written*.
         self._editors = [self._list, self._from, self._to, add, pick] + edit_buttons
-        self.fill_conventional()
+        if conventional:
+            self.fill_conventional()
+        else:
+            self.note.setText(EMPTY_NOTE)
         self._sync_enabled()
 
     # ── what the builders read ──────────────────────────────────────────
@@ -231,7 +253,8 @@ class BandPathEditor(QWidget):
             return
         for pair, segment in zip(labels, segments):
             self._add_row(pair, segment)
-        self.note.setText(CONVENTIONAL_NOTE)
+        self.note.setText(CONVENTIONAL_NOTE if band_path_kind(self._structure) == "standard"
+                          else POINTS_NOTE)
 
     def reset(self) -> None:
         self.fill_conventional()

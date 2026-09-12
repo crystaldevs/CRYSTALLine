@@ -125,6 +125,7 @@ class ZonePickerDialog(QDialog):
         self._actors: dict = {}
         self._path_actors: list = []
         self._legend_names: list = []
+        self._flat_normal = None
         self._extent = 1.0
 
         self._resolve_lattice()
@@ -356,6 +357,7 @@ class ZonePickerDialog(QDialog):
             plotter.add_text(f"No Brillouin zone: {exc}", font_size=9)
             return
         self._extent = float(np.linalg.norm(vertices, axis=1).max()) or 1.0
+        self._flat_normal = _plane_normal(vertices) if len(faces) == 1 else None
 
         import pyvista as pv
 
@@ -363,9 +365,15 @@ class ZonePickerDialog(QDialog):
             loop = list(face) + [face[0]]
             plotter.add_mesh(pv.lines_from_points(vertices[loop]),
                              color="#7f8c9b", line_width=2, pickable=False)
-        # A translucent solid gives the zone its shape; the wireframe alone
-        # reads as a tangle from most angles.
-        if len(vertices) >= 4:
+        # A translucent body gives the zone its shape; the wireframe alone
+        # reads as a tangle from most angles. A slab's zone is a *polygon* —
+        # flat — and asking a 3D triangulation for the solid inside it returns
+        # nothing at all, so the polygon is filled directly.
+        if len(faces) == 1 and len(vertices) >= 3:
+            polygon = pv.PolyData(vertices, faces=[len(vertices), *range(len(vertices))])
+            plotter.add_mesh(polygon, color="#5b8dee", opacity=0.18,
+                             show_edges=False, pickable=False)
+        elif len(vertices) >= 4:
             hull = pv.PolyData(vertices).delaunay_3d().extract_surface()
             plotter.add_mesh(hull, color="#5b8dee", opacity=0.10,
                              show_edges=False, pickable=False)
@@ -399,6 +407,11 @@ class ZonePickerDialog(QDialog):
         else:
             plotter.camera_position = keep_camera
             plotter.renderer.ResetCameraClippingRange()
+        # Placed — say so. ``reset_camera`` leaves pyvista believing nobody has
+        # set the camera, and then the next thing added with the default
+        # arguments (a leg of the path, on every click) refits it: zoom and pan
+        # thrown away, the view recentred on the bounding box instead of Γ.
+        plotter.camera_set = True
         plotter.render()
 
     def _centre_on_gamma(self) -> None:
@@ -439,11 +452,16 @@ class ZonePickerDialog(QDialog):
         # Each axis in its chip's colour, so the button and the arrow it aims
         # down are plainly the same thing — the structure window's a/b/c chips
         # match its lattice gizmo the same way.
-        for direction, name, colour in (
+        for index, (direction, name, colour) in enumerate((
             (np.array([1.0, 0, 0]), r"$k_x$", theme.AXIS_COLOURS[0]),
             (np.array([0, 1.0, 0]), r"$k_y$", theme.AXIS_COLOURS[1]),
             (np.array([0, 0, 1.0]), r"$k_z$", theme.AXIS_COLOURS[2]),
-        ):
+        )):
+            # A slab disperses in its plane and nowhere else. Drawing the axis
+            # across it would promise a direction the bands do not have.
+            if self._flat_normal is not None and abs(
+                    float(np.dot(direction, self._flat_normal))) > 0.9:
+                continue
             import pyvista as pv
 
             tip = direction * reach
@@ -551,7 +569,8 @@ class ZonePickerDialog(QDialog):
         self._path_actors.append(
             self._view.plotter.add_mesh(pv.lines_from_points(ends),
                                         color=segment_colour(index),
-                                        line_width=_PATH_WIDTH, pickable=False)
+                                        line_width=_PATH_WIDTH, pickable=False,
+                                        reset_camera=False)
         )
 
     def _undo(self) -> None:
@@ -632,7 +651,8 @@ class ZonePickerDialog(QDialog):
             self._path_actors.append(
                 plotter.add_mesh(pv.lines_from_points(ends),
                                  color=segment_colour(index),
-                                 line_width=_PATH_WIDTH, pickable=False)
+                                 line_width=_PATH_WIDTH, pickable=False,
+                                 reset_camera=False)
             )
         self._draw_legend()
         plotter.render()
@@ -857,6 +877,17 @@ def _enable_mathtext() -> None:
 def segment_colour(index: int) -> str:
     """The colour of the ``index``-th leg of a path, in the picture and the legend."""
     return _SEGMENT_COLOURS[index % len(_SEGMENT_COLOURS)]
+
+
+def _plane_normal(vertices: np.ndarray):
+    """The normal of a flat zone, or ``None`` if it is not flat."""
+    if len(vertices) < 3:
+        return None
+    normal = np.cross(vertices[1] - vertices[0], vertices[2] - vertices[0])
+    length = float(np.linalg.norm(normal))
+    if length < 1e-12:
+        return None
+    return normal / length
 
 
 def _outward(point: np.ndarray) -> np.ndarray:

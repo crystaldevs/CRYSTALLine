@@ -690,6 +690,51 @@ class MainWindow(QMainWindow):
         self.plot_panel.add_figure(figure, title, on_pick=self._select_mode_near)
         self._reveal_plot_dock()
 
+    # ── electronic bands and DOS ────────────────────────────────────────
+    def _open_electronic(self) -> None:
+        """A band structure, a DOS or both, with every option in view.
+
+        They used to be two one-click entries drawn at CRYSTALClear's defaults —
+        an x axis of k-distances, energies only relative, no way to put the two
+        side by side. They read files of their own, from a .d3 run, so the
+        dialog looks beside the loaded output for them first.
+        """
+        from pathlib import Path
+
+        from crystalline.crystalio import plot_electronic
+        from crystalline.ui.panels.electronic_dialog import ElectronicDialog
+
+        structure = None
+        current = getattr(self, "structure", None)
+        if current is not None and len(current):
+            try:
+                # The analysis cell, so the path's corners are recognised in
+                # the same cell the band path was written for.
+                structure = self._analysis_cell()
+            except Exception:  # noqa: BLE001 - naming the corners is a nicety
+                structure = None
+        folder = str(Path(self._output_path).parent) if self._output_path else ""
+        # Files named after the run (mgo_band.BAND beside mgo.out) rank first.
+        stem = Path(self._output_path).stem if self._output_path else ""
+
+        dialog = ElectronicDialog(structure=structure, folder=folder, stem=stem,
+                                  parent=self)
+        self._restore_dialog(dialog, "electronic")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "electronic")
+        bands_path, dos_path, options = dialog.request()
+        title = dialog.plot_title()
+
+        def build():
+            return plot_electronic(bands_path, dos_path, options)
+
+        def show(figure) -> None:
+            self.plot_panel.add_figure(figure, title)
+            self._reveal_plot_dock()
+
+        self._run_busy(build, "Building the electronic structure plot…", show, "Plot failed")
+
     def _update_spectra_action(self) -> None:
         """Enable the spectra entry only for an output that has any."""
         action = getattr(self, "_spectra_action", None)

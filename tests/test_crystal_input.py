@@ -140,11 +140,26 @@ def _polymer(pbc=(True, False, False)) -> Structure:
     )
 
 
-def test_slab_uses_layer_group_1_with_in_plane_parameters():
+def test_slab_uses_its_own_layer_group_and_that_group_s_parameters():
+    """A slab's symmetry is a layer group, and the deck says which one.
+
+    It used to be written in layer group 1 with every atom listed, throwing
+    away symmetry the app had already found. This slab is p4/mmm, and a square
+    cell needs only a — not a, b and gamma.
+    """
     lines = _lines(build_input(_slab()))
     assert lines[1] == "SLAB"
-    assert lines[2] == "1"  # layer group p1
-    assert lines[3] == "4.210000 4.210000 90.000000"  # a, b, gamma
+    assert lines[2] == "61"                # p4/mmm
+    assert lines[3] == "4.210000"          # square: a alone
+    assert lines[4] == "2"                 # Mg and O: nothing to fold together
+
+
+def test_slab_falls_back_to_layer_group_1_when_symmetry_is_turned_off():
+    """The escape hatch stays: group 1 with every atom is always true."""
+    lines = _lines(build_input(_slab(), CrystalInputSpec(
+        geometry=GeometryOptions(use_symmetry=False))))
+    assert lines[2] == "1"
+    assert lines[3] == "4.210000 4.210000 90.000000"   # a, b, gamma
     assert lines[4] == "2"
 
 

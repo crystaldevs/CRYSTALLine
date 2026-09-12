@@ -105,7 +105,7 @@ class SymmetryReductionDialog(QDialog):
     # ── state ───────────────────────────────────────────────────────────
     def _start(self) -> None:
         if self._symmetry is None:
-            self._header.setText("This structure has no crystal symmetry to reduce.")
+            self._header.setText(_nothing_to_reduce(self._structure))
             self._operators.setEnabled(False)
             self._choices.setEnabled(False)
             return
@@ -236,6 +236,23 @@ class SymmetryReductionDialog(QDialog):
             return False
         structure.set_reduced_symmetry(chosen)
         return True
+
+
+def _nothing_to_reduce(structure) -> str:
+    """Say *why* there is nothing to do, which differs by dimensionality."""
+    try:
+        periodic = int(sum(bool(p) for p in structure.pbc))
+    except Exception:  # noqa: BLE001
+        periodic = 0
+    if periodic == 2:
+        return ("A slab's symmetry is a layer group, not a space group, and "
+                "reducing one is not supported yet — its deck is written in "
+                "the layer group found for it.")
+    if periodic == 1:
+        return "A polymer's symmetry is a rod group; reducing one is not supported yet."
+    if periodic == 0:
+        return "A molecule has no crystal symmetry to reduce."
+    return "No symmetry could be found for this structure."
 
 
 __all__ = ["SymmetryReductionDialog"]

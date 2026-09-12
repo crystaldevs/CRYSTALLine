@@ -23,6 +23,7 @@ from crystalline.core.properties_input import (
     build_properties_input,
 )
 from crystalline.core.structure import Structure
+from crystalline.ui.panels.band_path_editor import CONVENTIONAL_NOTE
 
 
 def _mgo() -> Structure:
@@ -76,8 +77,34 @@ def test_the_band_record_matches_the_manual():
     assert (nsub, inzb, ifnb, iplo, lpr) == ("200", "1", "26", "1", "0")
     assert len(lines[3:3 + int(nline)]) == int(nline)
     for record in lines[3:3 + int(nline)]:
-        assert len(record.split()) == 6            # two 3-vectors of integers
-        assert all(part.lstrip("-").isdigit() for part in record.split())
+        numbers = record.split()[:6]               # two 3-vectors of integers
+        assert all(part.lstrip("-").isdigit() for part in numbers)
+        # ...then the two point names, as CRYSTAL's own tutorial decks write
+        # them. The six integers are what it reads: beryllium's BAND.DAT ticks
+        # are exactly the coordinates of its labelled deck, so a record carrying
+        # names was read for its numbers.
+        names = record.split()[6:]
+        assert names == [] or (len(names) == 2 and all(n.isalnum() for n in names))
+
+
+def test_a_deck_says_which_corners_its_path_visits():
+    """Written into the deck, the names survive into the plot: a band file
+    records coordinates only, and for some paths not even those — beryllium's
+    (-2,4,3) overflows its field and comes out (*,4,3)."""
+    from crystalline.crystalio.electronic import _band_blocks
+
+    # A connected walk: a conventional path can jump (fcc runs ... L K | U X),
+    # and a deck whose corners are not one chain is not read back for labels —
+    # its records cannot be lined up with the ticks in the data file.
+    route = [("G", "X"), ("X", "W"), ("W", "L"), ("L", "G")]
+    points = {"G": (0, 0, 0), "X": (0.5, 0, 0.5),      # MgO is face-centred cubic
+              "W": (0.5, 0.25, 0.75), "L": (0.5, 0.5, 0.5)}
+    lines = _lines(PropertiesSpec(band=BandOptions(
+        enabled=True, labels=route,
+        segments=[(points[a], points[b]) for a, b in route])))
+    deck, = _band_blocks("\n".join(lines), "test.d3")
+    assert deck.labels == ("G", "X", "W", "L", "G")
+    assert len(deck.corners) == len(deck.labels)
 
 
 def test_the_path_is_whole_integers_over_the_shrinking_factor():
@@ -442,18 +469,36 @@ def _builder():
 
 
 def _editable_builder():
-    """A builder with the conventional-path tick off, ready to be edited.
+    """A builder holding the conventional walk, with the tick off to edit it.
 
-    The tick is on by default and every path editor refuses while it is set —
-    that is what it is for. A test of the editors has to untick it first,
-    exactly as a user does.
+    The editor starts empty — a path is chosen, not assumed — and every editor
+    refuses while the tick is set. Ticking it fills the list, and unticking
+    leaves those segments there to be edited, which is how someone starts from
+    the conventional walk and changes it.
     """
     dialog = _builder()
+    dialog._path_editor.conventional.setChecked(True)
     dialog._path_editor.conventional.setChecked(False)
     return dialog
 
 
-def test_the_path_starts_as_the_conventional_one_and_can_be_reset():
+def test_the_path_starts_as_the_conventional_walk():
+    """The default answer, ready to edit or to replace in the path builder."""
+    dialog = _builder()
+    assert dialog._path_editor.conventional.isChecked()
+    assert dialog._path_editor._list.count() > 1
+    assert dialog._path_editor.note.text() == CONVENTIONAL_NOTE
+
+
+def test_an_emptied_path_is_refused_rather_than_quietly_refilled():
+    """Once the tick is off the path is the user's, so an empty one is a
+    mistake to report — not licence to write the conventional walk instead."""
+    with pytest.raises(PropertiesInputError, match="No band path chosen"):
+        build_properties_input(_mgo(), PropertiesSpec(
+            band=BandOptions(enabled=True, conventional=False)))
+
+
+def test_the_path_can_be_reset_to_the_conventional_one():
     dialog = _editable_builder()
     conventional = dialog._path_editor._list.count()
     assert conventional > 1
@@ -542,7 +587,7 @@ def test_the_tick_makes_every_path_editor_refuse():
     which turned "remove until one segment is left" into an endless loop.
     """
     dialog = _builder()
-    assert dialog._path_editor.conventional.isChecked()
+    dialog._path_editor.conventional.setChecked(True)
     before = [dialog._path_editor._list.item(i).text() for i in range(dialog._path_editor._list.count())]
     dialog._path_editor._list.setCurrentRow(0)
     dialog._path_editor.remove_segment()

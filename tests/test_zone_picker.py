@@ -414,3 +414,76 @@ def test_both_views_convert_through_the_same_function():
         names = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
         names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
         assert "camera_angles" in names, f"{module} wires its chips by hand"
+
+
+# ── the camera stays where it was put ─────────────────────────────────────
+def _stub_picker(plotter):
+    """The dialog's picking state over a plain plotter — enough to click with.
+
+    The real dialog owns a GL viewport and cannot be built headless, but the
+    pick handler only needs the plotter and the bookkeeping around it.
+    """
+    from types import SimpleNamespace
+
+    from PySide6.QtWidgets import QLabel, QListWidget
+    from ase.build import bulk
+
+    import pyvista as pv
+    from crystalline.core.brillouin import reciprocal_cell, special_points, zone_lattice
+    from crystalline.core.structure import Structure
+
+    lattice = zone_lattice(Structure.from_ase(bulk("Si", "diamond", a=5.43)))
+    dialog = zone_picker.ZonePickerDialog.__new__(zone_picker.ZonePickerDialog)
+    dialog._view = SimpleNamespace(plotter=plotter)
+    dialog._points = special_points(lattice)
+    dialog._reciprocal = reciprocal_cell(lattice)
+    dialog._extent = float(np.abs(dialog._reciprocal).max())
+    dialog._picking, dialog._picked, dialog._selected = True, [], None
+    dialog._path_actors, dialog._legend_names = [], []
+    dialog._list, dialog._total = QListWidget(), QLabel()
+    dialog._actors = {}
+    for label, fractional in dialog._points.items():
+        centre = np.asarray(fractional) @ dialog._reciprocal
+        actor = plotter.add_mesh(pv.Sphere(radius=0.01, center=centre))
+        dialog._actors[label] = (actor, centre)
+    return dialog
+
+
+def test_picking_a_point_leaves_the_camera_alone():
+    """Each click after the first draws a leg of the path, and a leg added the
+    default way let pyvista refit the camera — zoom and pan thrown away, the
+    view recentred on the bounding box, on every point picked."""
+    from PySide6.QtWidgets import QApplication
+
+    import pyvista as pv
+
+    QApplication.instance() or QApplication([])
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        plotter.enable_parallel_projection()
+        dialog = _stub_picker(plotter)
+        plotter.show(auto_close=False)          # as a window that is on screen
+        plotter.reset_camera()                  # what _centre_on_gamma does
+        plotter.camera_set = False              # ...which leaves it unset
+        camera = plotter.renderer.GetActiveCamera()
+        camera.SetParallelScale(camera.GetParallelScale() * 0.4)     # zoomed in
+        camera.SetFocalPoint(0.05, 0.02, 0.0)                         # panned
+
+        def state():
+            return round(camera.GetParallelScale(), 6), tuple(
+                round(v, 6) for v in camera.GetFocalPoint())
+
+        before = state()
+        for name in ("G", "X", "W", "L"):
+            dialog._on_pick(pv.Sphere(radius=0.001, center=dialog._actors[name][1]))
+            assert state() == before, f"picking {name} moved the camera"
+        assert len(dialog._path_actors) == 3
+    finally:
+        plotter.close()
+
+
+def test_a_redraw_marks_the_camera_as_placed():
+    """So nothing added afterwards — a leg, a label — can refit it."""
+    import inspect
+
+    assert "camera_set = True" in inspect.getsource(zone_picker.ZonePickerDialog._draw)

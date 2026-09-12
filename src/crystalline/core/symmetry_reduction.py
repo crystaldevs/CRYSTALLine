@@ -404,8 +404,17 @@ def _key(rotation) -> bytes:
 
 
 def _is_periodic(structure: Structure) -> bool:
+    """Three periodic directions — a crystal, not a slab, chain or molecule.
+
+    A slab's symmetry is a *layer* group, and the space group this module would
+    find for one is an answer about a lattice it does not have: the vacuum
+    counted as a lattice vector. Worse, the deck writer ignores the result for a
+    slab, so offering the choice at all was a control that did nothing. Slabs
+    are :mod:`crystalline.core.slab_symmetry`'s business.
+    """
     try:
-        return bool(structure.is_periodic) and len(structure) > 0
+        return (bool(structure.is_periodic) and len(structure) > 0
+                and int(sum(bool(p) for p in structure.pbc)) == 3)
     except Exception:  # noqa: BLE001
         return False
 

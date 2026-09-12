@@ -664,7 +664,7 @@ def _geometry_lines(structure: Structure, opts: GeometryOptions) -> List[str]:
     if ndim == 3:
         return [opts.title, "CRYSTAL"] + _crystal_body(structure, opts)
     if ndim == 2:
-        return [opts.title, "SLAB"] + _slab_body(structure)
+        return [opts.title, "SLAB"] + _slab_body(structure, opts)
     if ndim == 1:
         return [opts.title, "POLYMER"] + _polymer_body(structure)
     return [opts.title, "MOLECULE"] + _molecule_body(structure)
@@ -710,16 +710,49 @@ def _shift(rot: np.ndarray) -> int:
     return 1 if np.allclose(rot, _AXIS_TO_LAST) else 2
 
 
-def _slab_body(structure: Structure) -> List[str]:
-    """Block-1 body for a 2D slab: layer group, in-plane cell, atoms.
+def _slab_body(structure: Structure, opts: GeometryOptions) -> List[str]:
+    """Block-1 body for a 2D slab: layer group, in-plane cell, asymmetric unit.
 
     Coordinates follow the manual's 2D convention — ``x`` and ``y`` fractional
     along the two periodic vectors, ``z`` in Ångström perpendicular to the slab.
-    Layer group 1 is written and every atom listed: reducing a slab to its
-    asymmetric unit would need the orbits of the layer group, which this builder
-    does not compute, and claiming a higher group while listing every atom would
-    make CRYSTAL regenerate duplicates.
+
+    A slab's symmetry is a *layer group*, not a space group, and the app finds
+    it already; this writes it. Where it cannot be found, or cannot be checked,
+    layer group 1 with every atom listed is the fallback — always true, just
+    more work for CRYSTAL.
     """
+    if opts.use_symmetry:
+        body = _layer_group_body(structure, opts.symprec)
+        if body is not None:
+            return body
+    return _p1_slab_body(structure)
+
+
+def _layer_group_body(structure: Structure, symprec: float):
+    """The slab in its own layer group, or ``None`` if that cannot be trusted.
+
+    ``None`` rather than a guess: a layer group number names a particular
+    arrangement of axes, and a deck written in the wrong one is a plausible
+    file describing a different surface. The group is only used once its own
+    operations have been shown to rebuild the slab from the asymmetric unit.
+    """
+    from crystalline.core import slab_symmetry
+
+    symmetry = slab_symmetry.analyse(structure, symprec)
+    if symmetry is None or not slab_symmetry.regenerates(symmetry):
+        return None
+    numbers, positions = slab_symmetry.asymmetric_unit(symmetry)
+    coordinates = slab_symmetry.deck_coordinates(symmetry, positions)
+    lines = [str(symmetry.number),
+             " ".join(f"{v:.6f}" for v in slab_symmetry.cell_record(symmetry)),
+             str(len(numbers))]
+    for z_number, row in zip(numbers, coordinates):
+        lines.append(_atom_line(int(z_number), row))
+    return lines
+
+
+def _p1_slab_body(structure: Structure) -> List[str]:
+    """Layer group 1, every atom — the always-valid fallback."""
     pbc = [bool(p) for p in structure.pbc]
     cell, positions, axes = _oriented(structure, [i for i, p in enumerate(pbc) if p], "slab")
     va, vb = cell[axes[0]], cell[axes[1]]

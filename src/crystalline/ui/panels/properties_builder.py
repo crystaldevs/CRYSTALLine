@@ -332,6 +332,7 @@ class PropertiesBuilderDialog(QDialog):
                 # derives that one from the lattice itself, so passing the
                 # list's copy would freeze the path against a structure that
                 # may since have changed.
+                conventional=self._path_editor.is_conventional(),
                 segments=() if self._path_editor.is_conventional()
                 else tuple(self._path_editor.segments()),
                 labels=() if self._path_editor.is_conventional()

@@ -12,12 +12,15 @@ from __future__ import annotations
 import math
 from typing import Callable, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
+    QColorDialog,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QSlider,
     QToolButton,
@@ -139,6 +142,46 @@ class _Section:
             widget = self.grid.itemAt(index).widget()
             if widget is not None:
                 widget.setEnabled(enabled)
+
+
+class ColourButton(QPushButton):
+    """A colour swatch that opens the picker — the Display panel's disc, reusable.
+
+    Dialogs remember it like any other setting: :mod:`dialog_state` stores
+    whatever :meth:`colour` returns and hands it back to :meth:`setColour`.
+    """
+
+    colourChanged = Signal(str)
+
+    def __init__(self, colour: str, title: str = "Choose colour",
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._colour = QColor(colour).name()
+        self._title = title
+        self.clicked.connect(self._choose)
+        self._paint()
+
+    def colour(self) -> str:
+        return self._colour
+
+    def setColour(self, colour: str) -> None:  # noqa: N802 - Qt spelling
+        chosen = QColor(colour)
+        if not chosen.isValid() or chosen.name() == self._colour:
+            return
+        self._colour = chosen.name()
+        self._paint()
+        self.colourChanged.emit(self._colour)
+
+    def _choose(self) -> None:
+        chosen = QColorDialog.getColor(QColor(self._colour), self, self._title)
+        if chosen.isValid():
+            self.setColour(chosen.name())
+
+    def _paint(self) -> None:
+        # One look for every swatch in the app, painted where it was designed.
+        from crystalline.ui.panels.display_settings import DisplayPanel
+
+        DisplayPanel._paint_swatch(self, self._colour)
 
 
 def _left(widget: QWidget) -> QWidget:

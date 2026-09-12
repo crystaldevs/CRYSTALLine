@@ -12,6 +12,7 @@ changing. Only the settings widgets are touched:
 
 * spin boxes  → their value,
 * check boxes → their checked state,
+* colour swatches (anything with ``colour()``/``setColour()``) → the colour,
 * combo boxes → the *data* (or text) of the current item, never its index, since
   what a file offers can differ between runs and index 2 of one output is not
   index 2 of the next.
@@ -26,7 +27,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtWidgets import QAbstractButton, QAbstractSpinBox, QComboBox
+from PySide6.QtWidgets import QAbstractButton, QAbstractSpinBox, QComboBox, QWidget
 
 # The value carried for a combo whose items have no user data attached.
 _BY_TEXT = "__text__"
@@ -36,7 +37,9 @@ def capture(dialog) -> dict:
     """The settings currently shown in ``dialog``, ready to hand back to :func:`restore`."""
     state: dict = {}
     for name, widget in vars(dialog).items():
-        if isinstance(widget, QComboBox):
+        if _is_swatch(widget):
+            state[name] = ("colour", widget.colour())
+        elif isinstance(widget, QComboBox):
             data = widget.currentData()
             state[name] = (_BY_TEXT, widget.currentText()) if data is None else ("data", data)
         elif isinstance(widget, QAbstractSpinBox):
@@ -61,7 +64,9 @@ def restore(dialog, state: Optional[dict]) -> None:
             continue
         try:
             kind, value = entry
-            if kind == "value" and isinstance(widget, QAbstractSpinBox):
+            if kind == "colour" and _is_swatch(widget):
+                widget.setColour(value)
+            elif kind == "value" and isinstance(widget, QAbstractSpinBox):
                 widget.setValue(value)
             elif kind == "checked" and isinstance(widget, QAbstractButton):
                 widget.setChecked(bool(value))
@@ -73,6 +78,11 @@ def restore(dialog, state: Optional[dict]) -> None:
                     widget.setCurrentIndex(index)
         except Exception:  # noqa: BLE001 - a remembered value must never block a dialog
             continue
+
+
+def _is_swatch(widget) -> bool:
+    return (isinstance(widget, QWidget) and callable(getattr(widget, "colour", None))
+            and callable(getattr(widget, "setColour", None)))
 
 
 __all__ = ["capture", "restore"]
