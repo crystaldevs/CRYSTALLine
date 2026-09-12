@@ -3,9 +3,15 @@
 </p>
 
 <p align="center">
-  A desktop app for building, editing and visualising <b>CRYSTAL</b> structures
-  and their <b>phonon modes</b> — built on
-  <a href="https://github.com/crystaldevs/CRYSTALClear">CRYSTALClear</a>.
+  A program to build, display and manipulate the structures used by the
+  <b>CRYSTAL</b> quantum-chemistry code, to animate the vibrational modes
+  computed from them, and to plot the properties a calculation returns.
+</p>
+
+<p align="center">
+  <a href="https://crystaldevs.github.io/CRYSTALLine/"><b>Documentation</b></a> ·
+  <a href="https://pypi.org/project/CRYSTALLine/">PyPI</a> ·
+  <a href="https://github.com/crystaldevs/CRYSTALLine/issues">Issues</a>
 </p>
 
 <p align="center">
@@ -16,295 +22,41 @@
   <img src="https://img.shields.io/badge/license-GPLv3-green" alt="GPLv3 license">
 </p>
 
-## Table of Contents 📑
-
-- [Features](#features)
-- [Installation](#installation)
-- [Screenshots](#screenshots)
-- [License](#license)
-- [Acknowledgements](#acknowledgements)
-- [Contact](#contact)
-
-## Features 
-
-**Structure viewer**
-- Interactive 3D view (PyVista/VTK): ball-and-stick atoms, bonds, hydrogen
-  bonds (dashed D–H···A interactions), and optional coordination polyhedra
-  (VESTA-style).
-- One-click view alignment down the **a**, **b** or **c** axis.
-- A rich **Display** panel: atom size/opacity, per-element colours,
-  bond radius/tolerance, hydrogen bonds, cell, axes, polyhedra, measurement
-  colours, background colour, projection, an orientation marker and element labels.
-- Crystallographic **Info** panel, dimensionality-aware: space group (3D) or
-  layer group (2D slabs), point group, lattice parameters, cell volume/area,
-  density and formula — recomputed live as you edit.
-- The same panel summarises the CRYSTAL run itself: code version, task,
-  Hamiltonian and exchange/correlation functional (with the exact-exchange
-  fraction and dispersion correction), k-point mesh, basis-set size, SCF
-  thresholds, and the computed total energy, band gap and Fermi energy.
-- **Symmetry reduction**: declare a crystal in a lower symmetry than it really
-  has, by removing point-symmetry operators. Every subgroup the remaining
-  operators generate is offered and the choice applies to the structure itself, 
-  so the Info panel and every deck written afterwards follow it.
-
-**Geometry & measurements**
-- Measure a selection: distance (2 atoms), angle (3), dihedral (4) or
-  a least-squares plane (3+); mark single-atom points.
-- Overlay measurements in 3D and colour them per item or by type default.
-
-**Phonons**
-- Loads vibrational modes automatically when the CRYSTAL output has them.
-- Filter the mode list to the IR- and/or Raman-active modes when the output
-  reports the selection rules.
-- Animate any mode in place — bonds, polyhedra and hydrogen bonds follow the
-  motion; the amplitude is the peak displacement of the most-displaced atom,
-  so one setting works for a molecule and for a large cell alike, and playback
-  speed is adjustable. Export the animation as GIF or a numbered frame sequence
-  with no extra packages, or as MP4 / MOV / WebM with
-  `pip install imageio-ffmpeg` (also `pip install CRYSTALLine[video]`) —
-  configurable resolution, frame count and frame rate.
-- Modes away from Γ: a `DISPERSI` run's q-points appear in a selector, and
-  each one animates as the travelling wave it is — every drawn cell carries its
-  own phase, through the conventional cell, supercell tiling and boundary
-  completion alike. One click tiles the cell to a whole period of the wave.
-
-**Editing**
-- Select atoms (click / Ctrl-click), drag them in 3D (periodic images move
-  together), drag a whole selection as one piece, or nudge with the arrow keys.
-- Add, delete, duplicate, translate and re-element atoms — with a
-  visual periodic-table, element picker — and full undo / redo.
-- Cell tools: conventional cell, supercells, boundary completion and editable
-  lattice parameters.
-
-**Import / export**
-- Open CRYSTAL `.out` / `.gui` / `.34` files and `.cif` structures.
-- Import atoms from `.xyz` / `.pdb` / `.cif` into the current structure.
-- Or drop any of them on the window: a structure file opens, an `.xyz`/`.pdb`
-  is imported into the structure already loaded.
-- Save the structure as `.gui` or `.cif` (symmetry-reduced).
-- Export the 3D view as an image (PNG/JPEG/TIFF/SVG/PDF/EPS) with resolution and
-  transparency options.
-
-**Input builder**
-- Write a ready-to-run CRYSTAL input deck for the current structure, with a live
-  preview of the exact input before you save it.
-- Geometry is derived from the structure — space group and asymmetric unit for a
-  crystal, and the right coordinate convention for slabs, polymers and molecules.
-  A slab is written in its **layer group** (one of the 80), found from the
-  structure and checked by rebuilding the slab from it before it is used, so the
-  deck carries the symmetry CRYSTAL can exploit rather than P1.
-- Choose the method (HF or DFT, one functional keyword or separate exchange and
-  correlation), basis set, SCF settings and the calculation: single point,
-  geometry optimisation, frequencies with IR/Raman, phonon dispersion, QHA,
-  equation of state, elastic constants, CPHF, anharmonic runs and spin–orbit
-  coupling.
-- **Band paths**, for electrons (`BAND` in a `.d3`) and phonons (`BANDS` inside
-  `FREQCALC`) alike: take the conventional path for the lattice, edit it segment
-  by segment, or build your own by clicking points on the Brillouin zone — a
-  slab's zone included, which is a polygon with no k_z to travel along.
-
-**Property plots** (via CRYSTALClear, shown in a dockable tabbed panel)
-- IR and Raman harmonic and anharmonic (VSCF, VCI) spectra
-- Anharmonic PES (1D, 2D)
-- VCI states representation (heatmap, Sankey plot)
-- Double-well potential energies, wavefunctions and probability densities
-- Elastic properties (Young's modulus, linear compressibility,
-  shear modulus, Poisson ratio)
-- Equation of state
-- **Electronic band structures and densities of states**, from the `BAND.DAT`,
-  `DOSS.DAT`, `.BAND`, `.DOSS` and `fort.25` files a PROPERTIES run leaves
-  beside the output — found and paired automatically. Bands, DOS, or the two
-  side by side; energies relative to the Fermi level or absolute, in eV or
-  Hartree; the path's corners named rather than marked with k-distances; chosen
-  projections, spin channels, colours and line styles.
-- Phonon band structures and densities of states
-- Simulated XRD
-- Crystalline orbitals
+CRYSTALLine is in beta. Errors are to be expected, and bug reports, suggestions,
+comments and requests for new features are all welcome.
 
 ## Installation
 
-Public releases of the code are distributed through Pypi.
-
-### Requirements
-
-**Python 3.11 or newer is strongly suggested.**
-
-The following will be installed if not already present:
-
-- PySide6-Essentials >= 6.5 
-- pyvista >= 0.43
-- pyvistaqt >= 0.11.4
-- numpy >= 1.23
-- ase >= 3.23
-- pymatgen >= 2023.11.10
-- CRYSTALClear >= 0.2.16
-- scipy >= 1.9, vtk >= 9.1, matplotlib >= 3.6, spglib >= 2.5, Pillow >= 9.0
-
-### Steps
-
-Install into an environment of its own rather than your system Python. Either kind of
-environment works; the only real difference is that conda can *supply* the
-Python version, where a venv uses whichever `python` you already have.
-
-**conda**
+Python 3.11 or newer, in an environment of its own:
 
 ```sh
-conda create --name crystal python=3.12
-conda activate crystal
-```
-
-**venv** — needs no extra tooling, but `python` must already be 3.11 or newer
-(check with `python -V`)
-
-```sh
-python -m venv ~/.venvs/crystal
-source ~/.venvs/crystal/bin/activate
-```
-
-On Windows the last line is `~\.venvs\crystal\Scripts\activate`.
-
-Any Python from 3.11 up will do, 3.14 included; 3.12 is what the project is
-released on.
-
-Then, either way:
-
-```sh
+conda create --name crystal python=3.12 && conda activate crystal
 pip install CRYSTALLine
-```
-
-## Usage
-
-```sh
 crystalline
 ```
 
-Use **File → Open** to load a CRYSTAL `.out`/`.gui`/`.34` file or a `.cif` —
-or just drop one on the window, which says what it is about to do before you
-let go. If a CRYSTAL output contains a vibrational calculation, the phonon modes are loaded
-too — pick one in the **Phonons** panel and press **Play**. If the run sampled
-more than Γ (`DISPERSI`), choose the q-point above the mode list and press
-**Tile** to repeat the cell over one period of that wave — the same button turns
-into **Untile** and puts the cell back. Otherwise the
-geometry is shown on its own. Tweak the look from the **Display** panel, measure
-geometry from the **Geometry** panel, and build property plots from the **Plot**
-menu.
+If it does not start, `crystalline --check` reports what is missing. See the
+[installation page](https://crystaldevs.github.io/CRYSTALLine/install.html).
 
-Enable **Edit → Editing mode** (`Ctrl+E`) to edit atoms: click to select, drag or
-**arrow-key** the selection to move it, `Del` to delete, and pick elements from
-the visual periodic table.
+## What it does
 
-CRYSTALLine runs on **Linux, macOS and Windows** — anywhere PySide6 and a working
-OpenGL/VTK stack are available.
+- Displays crystals, slabs, polymers and molecules in an interactive 3D view,
+  with their crystallography beside them — space group or layer group, lattice
+  parameters, density — recomputed as the structure is edited.
+- Reads the vibrational modes from a CRYSTAL output and animates them, at Γ and
+  at the q points of a dispersion calculation, with export to GIF, MP4 and more.
+- Edits structures: atoms, elements, cells, supercells, and the symmetry itself.
+- Writes CRYSTAL (`.d12`) and properties (`.d3`) input decks from the structure
+  on screen, with the band path chosen on the Brillouin zone.
+- Plots what comes back: electronic bands and densities of states, IR and Raman
+  spectra, elastic properties, equations of state, phonon bands, XRD.
 
-### If it doesn't start
-
-```sh
-crystalline --check
-```
-
-That reports the Python version, every dependency and the version that arrived,
-whether Qt can open a window, and whether a VTK render window really works —
-naming what is missing and what to do about it. It exits non-zero if anything
-essential failed, so it also works in a script.
-
-It exists because the failures arrive as somebody else's error message. Qt's
-advice on a machine with no display is to *reinstall the application*, which
-cannot help; and the installed `crystalline` command is a GUI entry point, so on
-Windows it runs without a console and a startup failure prints to nothing at
-all. Two things worth knowing when that happens:
-
-- `python -m crystalline` runs the same app from a terminal, where errors are
-  visible.
-- Errors are written to a log either way —
-  `~/Library/Logs/CRYSTALLine/errors.log` on macOS,
-  `%LOCALAPPDATA%\CRYSTALLine\Logs\errors.log` on Windows,
-  `~/.local/state/CRYSTALLine/errors.log` on Linux. `crystalline --check`
-  prints the path.
-
-On Linux a fresh install sometimes lacks the system libraries Qt and VTK need
-(`libGL`, `libxkbcommon`); `--check` says which stage failed rather than leaving
-you with a bare plugin error.
-
-### Linux: Wayland sessions
-
-VTK draws into an X11 window, so on a Wayland session CRYSTALLine asks Qt for
-the X11 (`xcb`) plugin automatically and runs through XWayland. If you have
-forced `QT_QPA_PLATFORM=wayland` yourself, startup fails with
-`BadWindow (invalid Window parameter)` — unset it, or run:
-
-```sh
-QT_QPA_PLATFORM=xcb crystalline
-```
-
-On Ubuntu 24.04 the `xcb` plugin also needs system libraries that aren't pulled
-in by pip:
-
-```sh
-sudo apt install libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libxkbcommon-x11-0
-```
-
-## Screenshots
+The [documentation](https://crystaldevs.github.io/CRYSTALLine/) describes each
+of these in turn.
 
 <p align="center">
   <img src="docs/screen1.png" alt="The CRYSTALLine main window" width="900">
 </p>
-
-<p align="center">
-  <b>Everything in one window.</b><br>
-  Crystallography, the interactive 3D view and every vibrational mode,
-  recomputed live as you edit.
-</p>
-
-<br>
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screen2.png" alt="A crystalline orbital drawn across a graphite supercell"></td>
-    <td width="50%"><img src="docs/screen3.png" alt="Polyhedra on a 3x3x3 supercell, an elastic surface and the point-symmetry panel"></td>
-  </tr>
-  <tr>
-    <td align="center" valign="top">
-      <b>⚛️ Crystalline orbitals</b><br>
-      <sub>A Bloch orbital tiled across a 1×6×1 graphite supercell, its two
-      phases in red and blue.</sub>
-    </td>
-    <td align="center" valign="top">
-      <b>🔷 Big cells, elasticity, symmetry</b><br>
-      <sub>Coordination polyhedra on a 3×3×3 supercell — 8,100 atoms, still
-      interactive — a Young's modulus surface from the elastic tensor, and every
-      point-symmetry element listed beside it.</sub>
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2"><img src="docs/screen4.png" alt="Building a .d3 properties input, with the band path picked on the Brillouin zone"></td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center" valign="top">
-      <b>🧭 Inputs, and a band path you can see</b><br>
-      <sub>Build a <code>.d12</code> or <code>.d3</code> deck from the loaded
-      structure, and pick the band path by clicking points on the Brillouin
-      zone — each leg coloured and measured in Å⁻¹.</sub>
-    </td>
-  </tr>
-</table>
-
-## Architecture
-
-The package is deliberately layered so the domain logic stays independent of the
-Qt UI — and therefore unit-testable without a display:
-
-```
-src/crystalline/
-├── core/        domain model — Structure, phonons, cells, bonds, undo (no Qt)
-├── crystalio/   thin adapter over CRYSTALClear (load/save, property plots)
-├── viz/         PyVista/VTK rendering, phonon animation, image/movie export (no Qt)
-├── ui/          PySide6 widgets: 3D viewport, dockable panels, main window
-└── resources/   bundled assets (logo)
-```
-
-Only `ui/` (and the viewport that embeds the VTK interactor) imports Qt. Adding a
-new property (a new plot, panel, …) is a matter of dropping a widget into
-`ui/panels/` and wiring its signals in `MainWindow`.
 
 ## License
 
@@ -313,10 +65,11 @@ new property (a new plot, panel, …) is a matter of dropping a widget into
 ## Acknowledgements
 
 Built on the [CRYSTALClear](https://github.com/crystaldevs/CRYSTALClear) I/O and
-plotting framework for the [CRYSTAL](https://www.crystal.unito.it/) quantum
-chemistry code.
+plotting framework for the [CRYSTAL](https://www.crystal.unito.it/) code, and
+following in the tradition of [MOLDRAW](https://www.moldraw.unito.it/), written
+by Prof. Piero Ugliengo.
 
-This software was developed with the assistance of
+Developed with the assistance of
 [Claude](https://www.anthropic.com/claude) (Anthropic), using
 [Claude Code](https://www.claude.com/product/claude-code).
 

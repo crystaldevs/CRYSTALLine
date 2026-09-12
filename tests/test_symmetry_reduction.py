@@ -51,13 +51,23 @@ def test_a_molecule_has_no_crystal_symmetry_to_reduce():
 
 
 def test_every_operator_is_named_with_the_direction_it_acts_along():
-    """"2" is four different operators in a cubic crystal; "2 ∥ [110]" is one."""
+    """"C₂" is four different operators in a cubic crystal; "C₂ ∥ [110]" is one."""
     symmetry = reduction.analyse(_mgo())
     labels = [op.label for op in symmetry.operators]
     assert len(labels) == 48
-    assert "1̄" in labels
-    axes = [label for label in labels if label.startswith("2 ")]
+    assert "i" in labels
+    axes = [label for label in labels if label.startswith("C₂ ")]
     assert len(axes) > 1 and all("∥" in label for label in axes)
+
+
+def test_the_operators_are_named_in_schoenflies():
+    """The dialog lists what the point-symmetry panel lists, in the notation a
+    chemist reads: E, C₄, S₆, σₕ, i — not 1, 4, 3̄, m, 1̄."""
+    symmetry = reduction.analyse(_mgo())
+    symbols = {op.label.split()[0] for op in symmetry.operators}
+
+    assert symbols == {"E", "C₄", "C₃", "C₂", "S₄", "S₆", "σₕ", "σd", "i"}
+    assert not symbols & {"1", "2", "3", "4", "m", "1̄", "3̄", "4̄"}
 
 
 # ── the group theory, against the tables ──────────────────────────────────
@@ -96,7 +106,7 @@ def test_what_was_removed_is_reported_without_repeating_itself():
     symmetry = reduction.analyse(_mgo())
     inversion = _operator(symmetry, -np.eye(3, dtype=int))
     option = reduction.subgroups_without(symmetry, [inversion.rotation])[0]
-    assert "1̄" in option.dropped
+    assert "i" in option.dropped
     assert len(option.dropped) == len(set(option.dropped))
     assert any("×" in entry for entry in option.dropped), "repeats should be counted"
 
