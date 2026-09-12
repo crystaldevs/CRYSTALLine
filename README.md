@@ -44,9 +44,8 @@
   thresholds, and the computed total energy, band gap and Fermi energy.
 - **Symmetry reduction**: declare a crystal in a lower symmetry than it really
   has, by removing point-symmetry operators. Every subgroup the remaining
-  operators generate is offered — the ones CRYSTAL cannot be told about are
-  listed but greyed — and the choice applies to the structure itself, so the
-  Info panel and every deck written afterwards follow it.
+  operators generate is offered and the choice applies to the structure itself, 
+  so the Info panel and every deck written afterwards follow it.
 
 **Geometry & measurements**
 - Measure a selection: distance (2 atoms), angle (3), dihedral (4) or
@@ -107,11 +106,6 @@
   `FREQCALC`) alike: take the conventional path for the lattice, edit it segment
   by segment, or build your own by clicking points on the Brillouin zone — a
   slab's zone included, which is a polygon with no k_z to travel along.
-- The special points are the ones CRYSTAL itself recognises (tables 14.1 and
-  14.2 of the manual), which differ from the standard tables for the
-  body-centred and monoclinic lattices. A path is written as whole numbers over
-  a shrinking factor, or refused — never rounded onto a point the crystal does
-  not have.
 
 **Property plots** (via CRYSTALClear, shown in a dockable tabbed panel)
 - IR and Raman harmonic and anharmonic (VSCF, VCI) spectra
