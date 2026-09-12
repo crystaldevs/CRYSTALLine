@@ -11,4 +11,4 @@ Only ``ui`` (and ``viz``'s Qt-embedding helpers) import Qt, so ``core`` and
 ``io`` remain unit-testable without a display server.
 """
 
-__version__ = "2.0.1"
+__version__ = "0.2.1"
