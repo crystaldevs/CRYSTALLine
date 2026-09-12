@@ -29,10 +29,10 @@
 
 **Structure viewer**
 - Interactive 3D view (PyVista/VTK): ball-and-stick atoms, bonds, hydrogen
-  bonds (dashed D–H···A interactions), optional coordination polyhedra
-  (VESTA-style), the unit-cell wireframe and an a/b/c gizmo.
+  bonds (dashed D–H···A interactions), and optional coordination polyhedra
+  (VESTA-style).
 - One-click view alignment down the **a**, **b** or **c** axis.
-- A rich, dockable **Display** panel: atom size/opacity, per-element colours,
+- A rich **Display** panel: atom size/opacity, per-element colours,
   bond radius/tolerance, hydrogen bonds, cell, axes, polyhedra, measurement
   colours, background colour, projection, an orientation marker and element labels.
 - Crystallographic **Info** panel, dimensionality-aware: space group (3D) or
@@ -67,10 +67,6 @@
   each one animates as the travelling wave it is — every drawn cell carries its
   own phase, through the conventional cell, supercell tiling and boundary
   completion alike. One click tiles the cell to a whole period of the wave.
-- For a still image of such a mode, the displacement arrows can be scaled by
-  how far each atom moves and coloured by the phase of the cell it sits in —
-  cycling once per wavelength, which is what a snapshot of a travelling wave
-  has to show, its amplitude being identical in every cell.
 
 **Editing**
 - Select atoms (click / Ctrl-click), drag them in 3D (periodic images move
@@ -123,6 +119,7 @@
   projections, spin channels, colours and line styles.
 - Phonon band structures and densities of states
 - Simulated XRD
+- Crystalline orbitals
 
 ## Installation
 
@@ -130,9 +127,7 @@ Public releases of the code are distributed through Pypi.
 
 ### Requirements
 
-**Python 3.11 or newer.** The floor is set by the dependencies rather than by
-CRYSTALLine's own code: pymatgen requires 3.11+, and PySide6, pyvista and ase all
-require 3.10+.
+**Python 3.11 or newer is strongly suggested.**
 
 The following will be installed if not already present:
 
