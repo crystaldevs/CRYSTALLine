@@ -1,0 +1,56 @@
+name: Docs
+
+# The site is rebuilt from main and published to GitHub Pages. Pages must be
+# set to "GitHub Actions" as its source once, in Settings > Pages; nothing here
+# can turn that on.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "src/crystalline/__init__.py"
+      - "requirements-docs.txt"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time, and never cancel one half-done.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # Only in the organisation's repository. Work is pushed to a personal fork
+    # and arrives here by pull request; a fork has no Pages site to publish to,
+    # and the run would fail there for that reason alone.
+    if: github.repository == 'crystaldevs/CRYSTALLine'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-docs.txt
+      # -W: a broken reference or a page missing from the toctree fails the
+      # build here rather than shipping a dead end. -E: no stale cache.
+      - run: sphinx-build -b html -E -W docs site
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    if: github.repository == 'crystaldevs/CRYSTALLine'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

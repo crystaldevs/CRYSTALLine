@@ -139,11 +139,15 @@ def analyse(structure: Structure, symprec: float = 1e-2) -> SymmetryAnalysis:
         return SymmetryAnalysis()
 
     centre, kept = _centre_and_operators(operations, cell, np.asarray(atoms.get_positions()))
-    schoenflies = cell is None  # a molecule is named C2v, not mm2; so are its elements
-    elements = [element for element in (_classify(r, centre, schoenflies) for r, _ in kept)
+    # Schoenflies throughout — C₂, σ, i, S₄ — which is how a chemist names an
+    # operator, whatever the group it belongs to is called. The group keeps its
+    # own convention: a crystal is still P4/mmm, not D₄ₕ.
+    elements = [element for element in (_classify(r, centre, True) for r, _ in kept)
                 if element is not None]
+    merged = _merge(elements, cell)
+    _name_planes(merged, np.asarray(atoms.get_positions()) - centre)
     return SymmetryAnalysis(
-        elements=_merge(elements, cell),
+        elements=merged,
         group=naming(kept),
         centre=centre,
         centre_site=describe_point(structure, centre),
@@ -517,6 +521,115 @@ def _merge(elements: Sequence[SymmetryElement], cell) -> List[SymmetryElement]:
     for element in ordered:
         element.site = _site_text(element, cell)
     return ordered
+
+
+def _name_planes(elements: Sequence[SymmetryElement], positions) -> None:
+    """Tell the mirrors apart: σₕ, σᵥ and σd, as a chemist writes them.
+
+    A plane perpendicular to the principal axis is horizontal; one containing it
+    is vertical, unless the group has two-fold axes perpendicular to the
+    principal one and the plane bisects them rather than containing one, which
+    makes it dihedral.
+
+    Only done where there is a single principal axis — the C_nv, D_nh and D_nd
+    groups this distinction was invented for. A cubic group has several axes of
+    the highest order and no agreed answer from this rule, and an orthorhombic
+    one has three equivalent two-fold axes and so no principal one at all; their
+    planes stay plain σ rather than being given a name that would be a guess.
+
+    ``σ_d`` is written ``σd``: Unicode has a subscript h and a subscript v, and
+    no subscript d.
+    """
+    axes = [e for e in elements if e.kind == AXIS and e.proper and e.order >= 2]
+    planes = [e for e in elements if e.kind == PLANE and e.direction is not None]
+    if not axes or not planes:
+        return
+    highest = max(axis.order for axis in axes)
+    principal = [axis for axis in axes if axis.order == highest]
+    if len(principal) != 1:
+        _name_cubic_planes(elements, planes, axes)
+        return
+    axis = principal[0].direction
+    perpendicular = [e for e in axes
+                     if e.order == 2 and e.direction is not None
+                     and _perpendicular(e.direction, axis)]
+    # Which of those are the primed axes: the ones through atoms. In D₆ₕ every
+    # vertical plane contains a two-fold axis, so "contains one" cannot separate
+    # σᵥ from σd — benzene's σᵥ hold the axes through opposite carbons, its σd
+    # the ones through opposite bonds.
+    named = [e for e in perpendicular if _holds_an_atom(e.direction, positions)] or perpendicular
+
+    for plane in planes:
+        normal = plane.direction
+        if _parallel(normal, axis):
+            _rename(plane, "σₕ", "horizontal mirror plane")
+        elif _perpendicular(normal, axis):
+            # It contains the principal axis. Vertical if it also contains one
+            # of the named two-fold axes; dihedral if it bisects them.
+            holds_twofold = any(_perpendicular(normal, e.direction) for e in named)
+            if not perpendicular or holds_twofold:
+                _rename(plane, "σᵥ", "vertical mirror plane")
+            else:
+                _rename(plane, "σd", "dihedral mirror plane")
+
+
+def _name_cubic_planes(elements, planes, axes) -> None:
+    """The same names in a cubic group, where no single axis is the principal one.
+
+    Convention takes the four-fold axes as the reference: in O_h the three
+    planes across them are horizontal and the six between them dihedral. T_d has
+    no four-fold rotation — its 4̄ axes are S₄ — and all six of its planes are
+    dihedral. Where there is no four-fold axis of either kind (T, and the
+    orthorhombic groups, which never reach this function) the planes keep the
+    plain σ.
+    """
+    fourfold = [e for e in axes if e.order == 4]
+    if fourfold:
+        for plane in planes:
+            if any(_parallel(plane.direction, e.direction) for e in fourfold):
+                _rename(plane, "σₕ", "horizontal mirror plane")
+            else:
+                _rename(plane, "σd", "dihedral mirror plane")
+        return
+    improper = [e for e in elements
+                if e.kind == AXIS and not e.proper and e.order == 4 and e.direction is not None]
+    if improper:
+        for plane in planes:
+            _rename(plane, "σd", "dihedral mirror plane")
+
+
+def _holds_an_atom(direction, positions) -> bool:
+    """Does an atom lie on this axis, away from the centre it passes through?"""
+    direction = _unit(direction)
+    for position in np.asarray(positions, dtype=float):
+        distance = float(np.linalg.norm(position))
+        if distance < 1e-6:
+            continue                       # an atom at the centre is on every axis
+        if abs(abs(float(position @ direction)) - distance) < 1e-4:
+            return True
+    return False
+
+
+def _rename(element: SymmetryElement, label: str, noun: str) -> None:
+    """Give an element a more specific name, in its own list of labels too."""
+    element.labels = tuple(label if s == element.label else s for s in element.labels)
+    element.label = label
+    element.noun = noun
+
+
+def _parallel(one, other) -> bool:
+    one, other = _unit(one), _unit(other)
+    return abs(abs(float(one @ other)) - 1.0) < 1e-6
+
+
+def _perpendicular(one, other) -> bool:
+    return abs(float(_unit(one) @ _unit(other))) < 1e-6
+
+
+def _unit(vector) -> np.ndarray:
+    vector = np.asarray(vector, dtype=float)
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm else vector
 
 
 def _labels(primary: SymmetryElement, other: SymmetryElement) -> Tuple[str, ...]:

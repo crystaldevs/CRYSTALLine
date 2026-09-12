@@ -64,6 +64,14 @@ dependencies = [
     "Pillow>=9.0",       # GIF and frame-sequence animation export
 ]
 
+# PyPI shows these beside the description; without them the project page is a
+# dead end, which is where most people meet it.
+[project.urls]
+Homepage = "https://crystaldevs.github.io/CRYSTALLine/"
+Documentation = "https://crystaldevs.github.io/CRYSTALLine/"
+Repository = "https://github.com/crystaldevs/CRYSTALLine"
+Issues = "https://github.com/crystaldevs/CRYSTALLine/issues"
+
 [project.optional-dependencies]
 dev = ["pytest>=7", "pytest-qt>=4"]
 # Exporting a phonon animation as MP4/MOV/WebM needs an ffmpeg encoder, which
