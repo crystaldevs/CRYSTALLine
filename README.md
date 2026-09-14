@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://crystaldevs.github.io/CRYSTALLine/"><b>Documentation</b></a> ·
+  <a href="https://crystaldevs.github.io/CRYSTALLine/"><b>Documentation</b></a>
 </p>
 
 <p align="center">
