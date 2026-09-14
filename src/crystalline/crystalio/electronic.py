@@ -174,44 +174,78 @@ def suggest_window(energies) -> Tuple[float, float]:
 # ── finding the files ─────────────────────────────────────────────────────
 BAND_FILE = "band"
 DOS_FILE = "dos"
-_CANDIDATE_SUFFIXES = (".dat", ".band", ".doss", ".f25", ".25")
+# The extensions band and DOS data come with: CRYSTAL's BAND.DAT, DOSS.DAT and
+# fort.25, and the .BAND, .DOSS and .f25 they are saved as.
+_DATA_EXTENSIONS = (".dat", ".band", ".doss", ".f25", ".25")
+
+
+def _head(path, lines: int = 6) -> List[str]:
+    """The first few lines of a file, or nothing if it cannot be read."""
+    try:
+        with open(path, "r", errors="ignore") as handle:
+            return [handle.readline(400) for _ in range(lines)]
+    except OSError:
+        return []
 
 
 def file_kind(path) -> Optional[str]:
     """``"band"``, ``"dos"`` or ``None``, from what the file says it is.
 
-    Names are no guide — ``BAND.DAT``, ``mgo_band.BAND``, ``si_band.f25`` and
-    ``fort.25`` are all band structures, and a ``fort.25`` could as well be a
-    charge-density map. The first line is: the text formats open with
-    ``# NKPT`` (bands) or ``# NEPTS`` (DOS), a fort.25 with ``-%-0BAND`` or
-    ``-%-0DOSS``. COOP and COHP share the DOS header, and are told by name.
+    Never from its name. ``BAND.DAT``, ``mgo_band.BAND``, ``si_band.f25`` and
+    ``fort.25`` are all band structures, a ``fort.25`` could as well be a
+    charge-density map, and any of them can be renamed to anything. The first
+    line says which: the text formats open with ``# NKPT`` (bands) or
+    ``# NEPTS`` (DOS), a fort.25 with ``-%-0BAND`` or ``-%-0DOSS``.
+
+    COOP and COHP files open with the same ``# NEPTS`` as a DOS. What tells
+    them apart is the y-axis label a few lines down — "DENSITY OF STATES" in a
+    DOSS.DAT (manual, Appendix D) — so a ``# NEPTS`` file whose label says
+    anything else is not taken for a density of states.
     """
-    p = Path(path)
-    name = p.name.lower()
-    if not name.endswith(_CANDIDATE_SUFFIXES) or "coop" in name or "cohp" in name:
+    head = _head(path)
+    if not head:
         return None
-    try:
-        with open(p, "r", errors="ignore") as handle:
-            first = handle.readline(200).strip()
-    except OSError:
-        return None
+    first = head[0].strip()
     if first.startswith("-%-"):
         tag = first[4:8].upper()
         return BAND_FILE if tag == "BAND" else DOS_FILE if tag == "DOSS" else None
-    if first.startswith("# NKPT"):
+    if re.match(r"# NKPT\s+\d+", first):
         return BAND_FILE
-    if first.startswith("# NEPTS"):
+    if re.match(r"# NEPTS\s+\d+", first):
+        for line in head[1:]:
+            text = line.strip().upper()
+            if text.startswith("@ YAXIS LABEL"):
+                return DOS_FILE if "DENSITY OF STATES" in text else None
         return DOS_FILE
     return None
 
 
-def find_files(folder, stem: str = "") -> Tuple[List[str], List[str]]:
+def _is_fort25(path) -> bool:
+    head = _head(path, 1)
+    return bool(head) and head[0].lstrip().startswith("-%-")
+
+
+def find_files(folder, stem: str = "", efermi: Optional[float] = None
+               ) -> Tuple[List[str], List[str]]:
     """Band and DOS files in ``folder``, best first.
 
-    Best is a text file over a fort.25 (a fort.25 drops the shrinking factor
-    under its tick labels, so its corners cannot be named), then one named
-    after the run (``stem``, from ``mgo.out``), then the newest — ``BAND.DAT``
-    is overwritten by every run, and the one just made is the one wanted.
+    Files are picked out by extension and identified by their first line —
+    never by the rest of the name. Best is a text file over a fort.25 — told
+    apart by that first line: a fort.25 drops the shrinking factor under its tick labels, so its
+    corners cannot be named — then the newest, since ``BAND.DAT`` is
+    overwritten by every run and the one just made is the one wanted.
+
+    First of all, though, the files of the calculation that is open: a folder
+    shared by several systems would otherwise offer whichever ran last. Which
+    run a file came from is read from the file, not from its name — the Fermi
+    level it records — and files are ordered by how close that is to
+    ``efermi`` (eV, from the output). By closeness rather than by equality: an
+    insulator's files carry the SCF's level to the last digit, but a metal's
+    DOS is computed on a finer NEWK mesh that moves it — beryllium's by a tenth
+    of an eV — and would otherwise match nothing.
+
+    ``stem`` is accepted and ignored: files used to be preferred when named
+    after the run, and a name says nothing about which run a file came from.
     """
     found = {BAND_FILE: [], DOS_FILE: []}
     try:
@@ -219,27 +253,39 @@ def find_files(folder, stem: str = "") -> Tuple[List[str], List[str]]:
     except OSError:
         return [], []
     for path in entries:
-        if path.is_file():
+        if path.is_file() and path.suffix.lower() in _DATA_EXTENSIONS:
             kind = file_kind(path)
             if kind is not None:
                 found[kind].append(path)
-    stem = stem.lower()
 
-    def rank(path: Path):
-        name = path.name.lower()
-        try:
-            age = -path.stat().st_mtime
-        except OSError:
-            age = 0.0
-        return (name.endswith((".f25", ".25")), not (stem and name.startswith(stem)),
-                age, name)
+    def ranker(reader):
+        def rank(path: Path):
+            try:
+                age = -path.stat().st_mtime
+            except OSError:
+                age = 0.0
+            distance = 0.0
+            if efermi is not None:
+                level = _efermi_of(reader, str(path))
+                distance = float("inf") if level is None else abs(level - float(efermi))
+                # Levels this close are one SCF's; within that, the usual order.
+                distance = 0.0 if distance <= _SAME_FERMI else distance
+            return (distance, _is_fort25(path), age, str(path))
+        return rank
 
-    return ([str(p) for p in sorted(found[BAND_FILE], key=rank)],
-            [str(p) for p in sorted(found[DOS_FILE], key=rank)])
+    return ([str(p) for p in sorted(found[BAND_FILE], key=ranker(_read_bands))],
+            [str(p) for p in sorted(found[DOS_FILE], key=ranker(_read_dos))])
+
+
+# Two Fermi levels this close (eV) are the same SCF's: the output prints four
+# decimals, the data files five in hartree.
+_SAME_FERMI = 2e-3
+
 
 
 def pair_files(bands: Sequence[str], doss: Sequence[str],
-               tolerance: float = 1e-3) -> Tuple[Optional[str], Optional[str]]:
+               tolerance: float = 1e-3, own_run: bool = False
+               ) -> Tuple[Optional[str], Optional[str]]:
     """The best band file, and a DOS from the same calculation.
 
     Ranked separately, the newest band structure and the newest DOS can come
@@ -248,13 +294,22 @@ def pair_files(bands: Sequence[str], doss: Sequence[str],
     their Fermi levels. The Fermi level each file carries identifies the SCF it
     was computed from, so the first pair that agrees wins, in the band files'
     order. With no pair agreeing, the best of each.
+
+    ``own_run`` keeps the search with the best band file's own calculation —
+    band files recording its Fermi level, and no others — for when the lists
+    were ranked by the open output. Otherwise a metal, whose DOS run moves the
+    Fermi level with its finer mesh and so pairs with none of its band files,
+    fell through to the first pair of another system that happened to agree.
     """
     if not bands or not doss:
         return (bands[0] if bands else None, doss[0] if doss else None)
     levels = [(path, _efermi_of(_read_dos, path)) for path in doss]
+    first = _efermi_of(_read_bands, bands[0])
     for band in bands:
         level = _efermi_of(_read_bands, band)
         if level is None:
+            continue
+        if own_run and (first is None or abs(level - first) > tolerance):
             continue
         for path, other in levels:
             if other is not None and abs(level - other) <= tolerance:
@@ -346,12 +401,39 @@ def read_band_decks(folder) -> List[BandDeck]:
     except OSError:
         return decks
     for path in entries:
-        if path.is_file() and path.suffix.lower() in (".d3", ".inp"):
+        if (path.is_file() and path.suffix.lower() in _DECK_EXTENSIONS
+                and _is_properties_deck(path)):
             try:
                 decks.extend(_band_blocks(path.read_text(errors="ignore"), str(path)))
             except OSError:
                 continue
     return decks
+
+
+_DECK_EXTENSIONS = (".d3", ".inp")
+
+# A properties deck is a few dozen lines; an output, a wavefunction or a density
+# matrix is megabytes. Nothing larger is opened to be looked at.
+_DECK_LIMIT = 1 << 20
+
+
+def _is_properties_deck(path) -> bool:
+    """Whether ``path`` holds a PROPERTIES input, judged by its content.
+
+    Not by a ``.d3`` suffix: a deck is plain text that opens on a keyword line —
+    ``NEWK``, ``BAND``, ``ECH3`` — and closes with ``END``. A CRYSTAL output
+    opens with its banner instead, and never passes for one.
+    """
+    try:
+        if Path(path).stat().st_size > _DECK_LIMIT:
+            return False
+        text = Path(path).read_text(errors="ignore")
+    except OSError:
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines or not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", lines[0]):
+        return False
+    return any(line.upper() == "END" for line in lines)
 
 
 def _band_blocks(text: str, path: str) -> List[BandDeck]:

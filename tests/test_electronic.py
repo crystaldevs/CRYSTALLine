@@ -258,9 +258,12 @@ def test_beryllium_is_shown_without_its_1s_band():
     ("si_band.f25", "-%-0BAND    8   20 0.00000E+00", "band"),
     ("fort.25", "-%-0DOSS    1  202 0.00000E+00", "dos"),
     ("mgo_echg.f25", "-%-0MAPN  100  100 0.11111E+00", None),
-    ("COOP.DAT", "# NEPTS   202 NPROJ     2 NSPIN     1", None),
     ("PPAN.DAT", "# Mulliken Populations:", None),
-    ("mgo.d12", "# NKPT", None),
+    ("BAND.DAT", "# NKPT", None),                   # the marker, but not the record
+    # Stems say nothing: these are what their first line says they are.
+    ("DOSS.DAT", "# NKPT    61 NBND     8 NSPIN     1", "band"),
+    ("mgo_band.BAND", "# NEPTS   202 NPROJ     3 NSPIN     1", "dos"),
+    ("mgo_doss.f25", "-%-0BAND    8   20 0.00000E+00", "band"),
 ])
 def test_a_file_is_known_by_what_it_says_it_is(tmp_path, name, first_line, kind):
     path = tmp_path / name
@@ -268,19 +271,46 @@ def test_a_file_is_known_by_what_it_says_it_is(tmp_path, name, first_line, kind)
     assert el.file_kind(path) == kind
 
 
-def test_text_files_rank_above_fort25_then_the_runs_own_then_the_newest(tmp_path):
-    for name, header, age in (("si_band.f25", "-%-0BAND", 0),
-                              ("BAND.DAT", "# NKPT", 50),
-                              ("si_band.BAND", "# NKPT", 100),
-                              ("si_old.BAND", "# NKPT", 200),
-                              ("other.BAND", "# NKPT", 0)):
+def test_text_files_rank_above_fort25_then_the_newest(tmp_path):
+    """A file named after the run is not preferred any more: names are not
+    evidence. And a fort.25 is known by its first line, not by a .f25 suffix."""
+    for name, header, age in (("si_band.f25", "-%-0BAND    8   20 0.0", 0),
+                              ("BAND.DAT", "# NKPT   120 NBND 8", 50),
+                              ("si_band.BAND", "# NKPT   120 NBND 8", 100),
+                              ("si_old.BAND", "# NKPT   120 NBND 8", 200),
+                              ("other.BAND", "# NKPT   120 NBND 8", 0),
+                              ("looks_like_text.BAND", "-%-0BAND    8   20 0.0", 10),
+                              ("notes.txt", "# NKPT   120 NBND 8", 0)):
         path = tmp_path / name
         path.write_text(header + "\n")
         os.utime(path, (1e9 - age, 1e9 - age))
     bands, doss = el.find_files(tmp_path, stem="si")
     assert [os.path.basename(p) for p in bands] == [
-        "si_band.BAND", "si_old.BAND", "other.BAND", "BAND.DAT", "si_band.f25"]
+        "other.BAND", "BAND.DAT", "si_band.BAND", "si_old.BAND",
+        "si_band.f25", "looks_like_text.BAND"]
     assert doss == []
+
+
+def test_a_coop_file_is_told_from_a_dos_by_its_axis_label_not_its_name(tmp_path):
+    """Both open with # NEPTS; a DOSS.DAT's y axis is "DENSITY OF STATES"."""
+    header = "# NEPTS   202 NPROJ     2 NSPIN     1\n#\n@ XAXIS LABEL \"E-EFERMI (HARTREE)\"\n"
+    (tmp_path / "DOSS.DAT").write_text(header + '@ YAXIS LABEL "COOP"\n')
+    (tmp_path / "COOP.DAT").write_text(
+        header + '@ YAXIS LABEL "DENSITY OF STATES (STATES/HARTREE/CELL)"\n')
+
+    assert el.file_kind(tmp_path / "DOSS.DAT") is None
+    assert el.file_kind(tmp_path / "COOP.DAT") == "dos"
+
+
+def test_a_properties_deck_is_found_by_extension_and_content_whatever_its_stem(tmp_path):
+    deck = "NEWK\n8 8\n1 0\nBAND\nPATH\n2 8 100 1 10 1 0\n0 0 0 4 0 4\n4 0 4 4 2 5\nEND\n"
+    (tmp_path / "renamed_anything.d3").write_text(deck)
+    (tmp_path / "notes.txt").write_text(deck)                              # not a deck extension
+    (tmp_path / "mgo.d3").write_text(" " * 20 + "CRYSTAL23\n BAND\nEND\n")   # an output's banner
+
+    decks = el.read_band_decks(tmp_path)
+
+    assert {os.path.basename(d.path) for d in decks} == {"renamed_anything.d3"}
 
 
 @pytest.mark.skipif(not os.path.isdir(_MGO), reason="no MgO properties folder")
@@ -833,3 +863,24 @@ def test_one_menu_entry_opens_the_dialog():
     assert not {"electron_band", "electron_dos"} & keys
     source = inspect.getsource(MainWindow._open_electronic)
     assert "ElectronicDialog" in source and "plot_electronic" in source
+
+
+def test_the_open_runs_files_come_first_by_their_fermi_level_not_their_names(tmp_path):
+    """A folder shared by several systems. Which run a file came from is read
+    from the Fermi level it records, never from being named after the output."""
+    source = "/Users/davidemitoli/QMMC2026/OneElectronProperties/output/mgo_band_dat.BAND"
+    if not os.path.isfile(source):
+        pytest.skip("no MgO band file to build the fixture from")
+    text = open(source).read()
+    assert "# EFERMI (HARTREE)   -0.12156" in text
+
+    ours = tmp_path / "urea_band.BAND"            # named after another run …
+    ours.write_text(text)
+    other = tmp_path / "mgo_band.BAND"            # … and this one after ours
+    other.write_text(text.replace("# EFERMI (HARTREE)   -0.12156", "# EFERMI (HARTREE)   -0.38437"))
+    os.utime(ours, (1e9 - 100, 1e9 - 100))
+    os.utime(other, (1e9, 1e9))                   # and the newer
+
+    bands, _doss = el.find_files(tmp_path, efermi=-0.12156 * 27.211386245988)
+
+    assert os.path.basename(bands[0]) == "urea_band.BAND"

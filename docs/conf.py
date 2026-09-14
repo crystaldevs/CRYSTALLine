@@ -79,9 +79,9 @@ html_theme_options = {
 }
 
 html_context = {
-    # Dark by default. The theme reads this from the context, not from
+    # Light by default. The theme reads this from the context, not from
     # html_theme_options, where it is rejected as an unknown option.
-    "default_mode": "dark",
+    "default_mode": "light",
     "github_user": "crystaldevs",
     "github_repo": "CRYSTALLine",
     "github_version": "main",

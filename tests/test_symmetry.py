@@ -363,3 +363,22 @@ def test_every_label_that_can_carry_a_subscript_does():
         for element in S.analyse(Structure.from_ase(molecule(name))).elements:
             assert not any(ch in "0123456789" for ch in element.label), element.label
             assert "_" not in element.label, element.label
+
+
+def test_a_label_becomes_html_where_unicode_runs_out():
+    """Unicode has a subscript for every digit, and for h and v, so the labels
+    themselves are plain strings. It has none for d, so σd is the one symbol
+    that needs markup — and a widget that draws rich text gets all of them that
+    way, or the rows look uneven."""
+    assert S.rich("σd ⊥ (101)") == "σ<sub>d</sub> ⊥ (101)"
+    assert S.rich("C₄ ∥ [010]") == "C<sub>4</sub> ∥ [010]"
+    assert S.rich("σₕ") == "σ<sub>h</sub>"
+    assert S.rich("σᵥ") == "σ<sub>v</sub>"
+    assert S.rich("S₆") == "S<sub>6</sub>"
+    assert S.rich("i") == "i"
+
+
+def test_markup_in_a_label_cannot_reach_the_widget_as_markup():
+    """The text is drawn as HTML, so anything that looks like a tag has to be
+    escaped on the way in."""
+    assert S.rich("<b>2") == "&lt;b&gt;2"

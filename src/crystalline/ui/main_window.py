@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
         # The orbital currently shown, if any: what it takes to rebuild it when
         # the displayed cell changes (a supercell is how you see more of one).
         self._orbital: Optional[dict] = None
+        # Whether a scalar field (density, spin density, potential) is drawn.
+        self._density_shown = False
         # Workers in flight. Held because a dropped one is collected mid-run and
         # takes its QThread down with it.
         self._workers: list = []
@@ -556,7 +558,12 @@ class MainWindow(QMainWindow):
         if kind.source == "output" and self._output_path:
             path = self._output_path
         else:
-            path, _ = QFileDialog.getOpenFileName(self, kind.caption, "", kind.file_filter)
+            # Start in the folder of the loaded output: a properties run leaves
+            # its data files beside the output it was run from, so that is where
+            # the file being asked for almost always is.
+            start = os.path.dirname(self._output_path) if self._output_path else ""
+            path, _ = QFileDialog.getOpenFileName(
+                self, kind.caption, start, kind.file_filter)
             if not path:
                 return
         # Some of these take seconds — an elastic surface is evaluated over a
@@ -717,8 +724,14 @@ class MainWindow(QMainWindow):
         # Files named after the run (mgo_band.BAND beside mgo.out) rank first.
         stem = Path(self._output_path).stem if self._output_path else ""
 
+        # The run's own files are told apart by the Fermi level they record,
+        # not by being named after the output.
+        try:
+            efermi = float(getattr(self, "_output_props", {}).get("Fermi energy (eV)"))
+        except (TypeError, ValueError):
+            efermi = None
         dialog = ElectronicDialog(structure=structure, folder=folder, stem=stem,
-                                  parent=self)
+                                  parent=self, efermi=efermi)
         self._restore_dialog(dialog, "electronic")
         if dialog.exec() != QDialog.Accepted:
             return
@@ -1170,6 +1183,85 @@ class MainWindow(QMainWindow):
         self.phonon_panel.clear()
         self._apply_cell_view()
         self._update_view_actions()
+
+    def _open_density(self) -> None:
+        """Draw a charge density, a spin density or a potential from an ECH3 run.
+
+        The grids sit beside the SCF output — ``DENS_CUBE.DAT``, ``POT_CUBE.DAT``,
+        ``fort.31`` — so the dialog looks there first, as the orbital and band
+        entries do. What comes back is CRYSTAL's own field on CRYSTAL's own
+        grid: it is drawn over the structure as it is, with no resampling, so
+        what is on screen is what the run computed.
+        """
+        from pathlib import Path
+
+        from crystalline.crystalio import density
+        from crystalline.ui.panels.density_dialog import DensityDialog
+
+        folder = str(Path(self._output_path).parent) if self._output_path else ""
+        stem = Path(self._output_path).stem if self._output_path else ""
+        miller_cell = self._conventional_cell()
+        source = getattr(self, "_source", None)
+        cell = (np.asarray(source.cell, dtype=float)
+                if source is not None and len(source) and source.is_periodic else None)
+        dialog = DensityDialog(folder=folder, stem=stem, parent=self,
+                               miller_cell=miller_cell, cell=cell)
+        self._restore_dialog(dialog, "density")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "density")
+
+        field, options = dialog.request()
+        if field is None:
+            return
+        try:
+            self.viewport.renderer.set_density(field, options, miller_cell=miller_cell)
+            if options.view == density.SLICE:
+                # A plane is read face-on; seen edge-on it is a line.
+                self.viewport.renderer.face_density_plane()
+        except Exception as exc:  # noqa: BLE001 - surface any drawing failure
+            QMessageBox.critical(
+                self, "Field unavailable", f"Could not draw the field:\n{exc}"
+            )
+            return
+        self._density_shown = True
+        self._update_density_actions()
+        if options.view == density.SLICE:
+            told = f"{field.name} · ({' '.join(str(v) for v in options.miller)}) plane"
+        else:
+            told = f"{field.name} · isovalue {options.isovalue:.4g} {field.unit}"
+        self.statusBar().showMessage(told, 6000)
+
+    def _conventional_cell(self):
+        """The conventional cell of the loaded structure, or ``None``.
+
+        Miller indices are quoted in it. Taken from the structure as loaded,
+        not from the view: a supercell or a primitive view must not change what
+        (001) means. It is the same construction the conventional view is built
+        with, so the plane lands in the frame the atoms are drawn in. Best
+        effort: without it the renderer falls back to the displayed cell.
+        """
+        structure = getattr(self, "_source", None)
+        if structure is None or not len(structure) or not structure.is_periodic:
+            return None
+        try:
+            from crystalline.core.cells import to_conventional
+
+            return np.asarray(to_conventional(structure).cell, dtype=float)
+        except Exception:  # noqa: BLE001 - symmetry analysis is a nicety here
+            return None
+
+    def _clear_density(self) -> None:
+        """Take a shown field off the view."""
+        self.viewport.renderer.set_density(None)
+        self._density_shown = False
+        self._update_density_actions()
+
+    def _update_density_actions(self) -> None:
+        """Enable the Clear entry only while something is drawn."""
+        clear = getattr(self, "_clear_density_action", None)
+        if clear is not None:
+            clear.setEnabled(bool(getattr(self, "_density_shown", False)))
 
     def _clear_orbital(self) -> None:
         """Take a shown orbital off the view."""
@@ -1893,6 +1985,10 @@ class MainWindow(QMainWindow):
         # structure drew the *previous* file's orbital over it — lobes from one
         # crystal on the atoms of another.
         self._clear_orbital()
+        # The same for a charge density or a potential, which a rebuild redraws
+        # just as faithfully — and a slice's cutaway with it, hiding half of the
+        # new structure behind a plane of the old one.
+        self._clear_density()
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = self._load_adps(path)

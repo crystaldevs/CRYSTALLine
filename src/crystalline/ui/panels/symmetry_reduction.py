@@ -30,8 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crystalline.core import symmetry as symmetry_module
 from crystalline.core import symmetry_reduction as reduction
 from crystalline.core.structure import Structure
+from crystalline.ui.panels.controls import RichTextDelegate
 from crystalline.ui.safety import guard
 
 
@@ -69,6 +71,10 @@ class SymmetryReductionDialog(QDialog):
         left = QVBoxLayout()
         left.addWidget(QLabel("Point operators"))
         self._operators = QListWidget()
+        # The symbols carry subscripts, and one of them (σd) has no Unicode
+        # subscript to be written with; the rows are HTML.
+        self._operators.setItemDelegate(
+            RichTextDelegate(self._operators, symmetry_module.rich))
         self._operators.setToolTip(
             "Ticked operators are the symmetry the crystal is being given. "
             "Untick one to ask what is left without it."
@@ -80,6 +86,8 @@ class SymmetryReductionDialog(QDialog):
         right = QVBoxLayout()
         right.addWidget(QLabel("What that leaves"))
         self._choices = QListWidget()
+        self._choices.setItemDelegate(
+            RichTextDelegate(self._choices, symmetry_module.rich))
         self._choices.setToolTip(
             "Each is a real subgroup. A greyed one cannot be written: its "
             "standard setting is not the cell this crystal is held in."
@@ -171,7 +179,8 @@ class SymmetryReductionDialog(QDialog):
             self._symmetry, [rotation], within=self._current.rotations)
         self._choices.clear()
         if not self._options:
-            self._choices.addItem(f"Nothing can be left without {label}.")
+            self._choices.addItem(
+                f"Nothing can be left without {label}.")
             self._fill_operators()
             return
         for option in self._options:

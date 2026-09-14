@@ -52,8 +52,9 @@ from crystalline.crystalio import electronic as el
 from crystalline.ui.panels.controls import ColourButton, Section, range_row, slider_row
 from crystalline.ui.safety import guard
 
-_BAND_FILTER = "Band structures (BAND.DAT *.BAND *.f25 fort.25);;All files (*)"
-_DOS_FILTER = "Densities of states (DOSS.DAT *.DOSS *.f25 fort.25);;All files (*)"
+# By extension only: BAND.DAT and fort.25 are names, and names are rewritten.
+_BAND_FILTER = "Band structures (*.BAND *.DAT *.f25 *.25);;All files (*)"
+_DOS_FILTER = "Densities of states (*.DOSS *.DAT *.f25 *.25);;All files (*)"
 _HARTREE_EV = 27.211386245988
 _KINDS = (("band", "Band file", "BAND.DAT, .BAND or fort.25"),
           ("dos", "DOS file", "DOSS.DAT, .DOSS or fort.25"))
@@ -67,8 +68,11 @@ class ElectronicDialog(QDialog):
     last_folder = ""
 
     def __init__(self, structure=None, folder: str = "", stem: str = "",
-                 parent: Optional[QWidget] = None) -> None:
+                 parent: Optional[QWidget] = None, efermi: Optional[float] = None) -> None:
+        """``efermi`` is the open output's Fermi level (eV): files recording the
+        same one are that calculation's, and are offered first."""
         super().__init__(parent)
+        self._output_efermi = efermi
         self.setWindowTitle("Electronic bands & DOS")
         self.resize(960, 600)
         self._structure = structure
@@ -270,10 +274,11 @@ class ElectronicDialog(QDialog):
         """List the band and DOS files in ``folder``, and load the best of each."""
         if not folder:
             return False
-        bands, doss = el.find_files(folder, self._stem)
+        bands, doss = el.find_files(folder, efermi=self._output_efermi)
         # A band structure and a DOS from the same calculation, not merely the
         # best-ranked of each — see pair_files.
-        chosen = dict(zip(("band", "dos"), el.pair_files(bands, doss)))
+        chosen = dict(zip(("band", "dos"),
+                          el.pair_files(bands, doss, own_run=self._output_efermi is not None)))
         for kind, paths in (("band", bands), ("dos", doss)):
             combo = self._files[kind]
             combo.blockSignals(True)

@@ -274,3 +274,46 @@ def test_labels_add_one_more_actor_for_the_text(qapp):
     renderer.set_symmetry_elements(elements, labels=True)
 
     assert len(renderer._symmetry_actors) == plain + 1
+
+
+def test_a_row_is_tall_enough_for_its_subscripts(qapp):
+    """The rows are drawn as rich text, and a subscript sits below the line.
+
+    A QTextDocument also keeps a margin of its own unless told otherwise, and
+    a row sized for a plain line has no room for either: the descenders of
+    every entry were cut off.
+    """
+    from PySide6.QtGui import QTextDocument
+    from PySide6.QtWidgets import QStyleOptionViewItem
+
+    panel = SymmetryPanel(_cubic())
+    panel._show.setChecked(True)
+    tree = panel._tree
+    delegate = tree.itemDelegate()
+    axes = tree.topLevelItem(0)
+    index = tree.indexFromItem(axes.child(0))
+
+    option = QStyleOptionViewItem()
+    option.initFrom(tree)
+    document = QTextDocument()
+    document.setDocumentMargin(0)
+    document.setDefaultFont(option.font)
+    document.setHtml(S.rich(axes.child(0).text(0)))
+
+    assert delegate.sizeHint(option, index).height() >= document.size().height()
+
+
+def test_a_row_too_narrow_for_its_text_is_elided(qapp):
+    """Rather than cut mid-word, as clipping did."""
+    from PySide6.QtGui import QFontMetrics
+
+    panel = SymmetryPanel(_cubic())
+    panel._show.setChecked(True)
+    tree = panel._tree
+    label = tree.topLevelItem(0).child(0).text(0)
+
+    metrics = QFontMetrics(tree.font())
+    short = metrics.elidedText(label, Qt.ElideRight, metrics.horizontalAdvance(label) // 2)
+
+    assert short.endswith("…")
+    assert S.rich(short).endswith("…")  # and the markup survives the ellipsis

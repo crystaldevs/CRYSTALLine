@@ -21,11 +21,13 @@ structure is edited.
 — rotation axes, mirror planes and inversion centres — and draws them in the
 view.
 
-The operators are named in the Schoenflies notation used in chemistry: C₂, C₃,
-C₄ and C₆ for the rotation axes, S₄ and S₆ for the rotoreflection axes, σ for a
+The operators are named in the Schoenflies notation used in chemistry:
+C<sub>2</sub>, C<sub>3</sub>, C<sub>4</sub> and C<sub>6</sub> for the rotation
+axes, S<sub>4</sub> and S<sub>6</sub> for the rotoreflection axes, σ for a
 mirror plane and i for a centre of inversion. The mirrors are distinguished
-where the group allows it: σₕ perpendicular to the principal axis, σᵥ containing
-it, and σd bisecting the two-fold axes across it. A group with no single
+where the group allows it: σ<sub>h</sub> perpendicular to the principal axis,
+σ<sub>v</sub> containing it, and σ<sub>d</sub> bisecting the two-fold axes
+across it. A group with no single
 principal axis — the orthorhombic ones, whose three two-fold axes are
 equivalent — keeps the plain σ.
 

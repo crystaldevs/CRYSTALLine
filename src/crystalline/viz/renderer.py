@@ -293,6 +293,17 @@ class StructureRenderer:
         # cleared without disturbing the rest of the scene.
         self._orbital_actors: list = []
         self._orbital_field = None
+        # A scalar field read from a CRYSTAL run — the charge density, the spin
+        # density, the potential. Kept the same way, and separate from the
+        # orbital: the two can be on screen together.
+        self._density_actors: list = []
+        self._density_view = None
+        self._density_miller_cell = None
+        self._slice_frame = None       # (centre, normal, in-plane up) of a drawn slice
+        self._slice_extent = None      # (point, u, w, u range, w range) of its rectangle
+        self._surface_cache = None     # (key, pieces) of the last contoured field
+        self._density_bar = None       # title of the field's colour bar, if one is shown
+        self._cutaway = None
 
     # ── public API ──────────────────────────────────────────────────────
     @property
@@ -640,6 +651,8 @@ class StructureRenderer:
         self._orbital_actors = []     # likewise: _draw_orbital re-adds them below
         self._annotation_actors = []  # plotter.clear() dropped them; _draw_annotations re-adds
         self._symmetry_actors = []    # likewise: _draw_symmetry_elements re-adds them
+        self._density_actors = []     # and _draw_density, last of all
+        self._density_bar = None      # plotter.clear() took the colour bar too
         self._highlight_actors = {}
         if self._structure is None or len(self._structure) == 0:
             self._restore_camera(saved_camera)
@@ -673,6 +686,10 @@ class StructureRenderer:
         self._draw_orbital()      # and so does a shown orbital
         self._draw_annotations()  # measurements survive a rebuild (plotter.clear())
         self._draw_symmetry_elements()  # and so do the shown symmetry elements
+        # A drawn field used to vanish on any rebuild — a display setting, an
+        # edit — while its actors were still counted as shown. It goes last so
+        # a slice's cutaway reaches every actor the rebuild has just made.
+        self._draw_density()
         self._restore_camera(saved_camera)
         self.plotter.render()
 
@@ -1268,6 +1285,376 @@ class StructureRenderer:
         actor.SetPickable(False)
         self._orbital_actors.append(actor)
 
+    # ── a scalar field from a run (charge density, spin density, potential) ──
+    def set_density(self, field, options=None, miller_cell=None) -> None:
+        """Draw a :class:`~crystalline.crystalio.density.ScalarField` (``None`` clears).
+
+        Unlike an orbital, which this app evaluates on a grid of its own
+        choosing, a field comes off a CRYSTAL run on *CRYSTAL's* grid: the steps
+        run along the primitive lattice vectors, so for anything but an
+        orthogonal cell the sampled box is sheared. That rules out the uniform
+        ``ImageData`` the orbital uses — its cells are axis-aligned boxes — and
+        calls for a structured grid, whose points are given one by one.
+
+        A density is lattice-periodic, so the drawn surface is the same in every
+        cell: it is built once and copied, rather than contoured again.
+
+        ``miller_cell`` is the cell a slice's Miller indices are quoted in —
+        the conventional one. Without it the displayed cell is used.
+        """
+        from crystalline.crystalio import density as density_module
+
+        self._density_view = None if field is None else (
+            field, options or density_module.DensityOptions()
+        )
+        self._density_miller_cell = None if miller_cell is None else np.asarray(
+            miller_cell, dtype=float)
+        self._surface_cache = None     # a new field, or new options: contour afresh
+        self._clear_density()
+        self._draw_density()
+        self.plotter.render()
+
+    def _clear_density(self) -> None:
+        for actor in self._density_actors:
+            self.plotter.remove_actor(actor, render=False)
+        self._density_actors = []
+        if self._density_bar is not None:
+            try:
+                self.plotter.remove_scalar_bar(self._density_bar, render=False)
+            except Exception:  # noqa: BLE001 - already gone with a cleared plotter
+                pass
+            self._density_bar = None
+
+    def _draw_density(self) -> None:
+        """(Re)draw the stored field, and the cutaway that goes with a slice.
+
+        Never raises into a redraw.
+        """
+        from crystalline.crystalio import density as density_module
+
+        if self._density_view is None:
+            self._apply_cutaway(None)
+            return
+        field, options = self._density_view
+        cell = density_module.lattice_of(field, self._cell_or_none())
+        if options.view == density_module.SLICE:
+            try:
+                mesh = self._miller_slice(field, options, cell)
+            except Exception:  # noqa: BLE001 - e.g. (000); nothing to draw
+                self._apply_cutaway(None)
+                return
+            self._add_slice_mesh(mesh, field, options)
+            if options.cutaway:
+                self._mark_atoms_in_plane()
+            self._apply_cutaway(self._slice_frame if options.cutaway else None)
+            return
+        self._apply_cutaway(None)
+        try:
+            surfaces = self._surface_pieces(field, options, cell)
+        except Exception:  # noqa: BLE001 - a level with no surface is not an error
+            return
+        for colour, pieces, limits in surfaces:
+            self._add_density_mesh(pieces, colour, limits, field, options, cell)
+
+    def _surface_pieces(self, field, options, cell):
+        """The field's surfaces in the home cell, split into pieces — cached.
+
+        This is all the expensive part — contouring, splitting, deciding which
+        cell each piece belongs to — and none of it depends on which atoms are
+        on screen. Switching between the conventional and the primitive cell,
+        or anything else that rebuilds the scene, used to redo it every time
+        and took seconds for MgO; now it is done once per field and isovalue,
+        and a rebuild only places the pieces.
+        """
+        key = (id(field), float(options.isovalue), id(options.colour_by),
+               bool(options.clip_to_cell), np.round(np.asarray(cell, dtype=float), 6).tobytes())
+        cached = self._surface_cache
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        # Contoured on a grid continued periodically past the cell's faces, so
+        # that a surface around an atom on a face or a corner comes out whole.
+        padded = _padded_field(field, cell, _SURFACE_PAD)
+        grid = _structured_grid(padded)
+        surfaces = []
+        if grid is not None:
+            for mesh, colour in _density_surfaces(grid, padded, options):
+                pieces = _home_pieces(mesh, padded, cell, field.origin, options.clip_to_cell)
+                if not pieces:
+                    continue
+                limits = None
+                if pieces[0].values is not None:
+                    values = np.concatenate([piece.values for piece in pieces])
+                    signed = field.signed or (options.colour_by is not None
+                                              and options.colour_by.signed)
+                    limits = _colour_limits(values, symmetric=signed)
+                surfaces.append((colour, pieces, limits))
+        self._surface_cache = (key, surfaces)
+        return surfaces
+
+    # ── lattice planes ──────────────────────────────────────────────────
+    def _miller_slice(self, field, options, lattice):
+        """The plane ``(hkl)`` as a flat, rectangular mesh coloured by the field.
+
+        VTK's own cut of the grid can only ever be a piece of the one sampled
+        cell — a ragged polygon for any plane not parallel to a cell face. The
+        field is periodic, so the plane is laid out as a rectangle spanning
+        everything on screen and the field is read at each of its points by
+        periodic interpolation instead.
+        """
+        from crystalline.crystalio import density as density_module
+
+        reference = self._density_miller_cell
+        if reference is None:
+            reference = self._cell_or_none()
+        if reference is None:
+            reference = lattice
+        point, normal, _spacing = density_module.miller_plane(
+            reference, options.miller, options.offset)
+
+        # Two directions in the plane, the first along whichever cell edge lies
+        # closest to it, so that a (001) map is drawn square to its a axis.
+        edges = np.asarray(reference, dtype=float)
+        along = edges[int(np.argmin(np.abs(edges @ normal) / np.linalg.norm(edges, axis=1)))]
+        u = along - (along @ normal) * normal
+        u = u / np.linalg.norm(u)
+        w = np.cross(normal, u)
+
+        corners = self._scene_corners(lattice, field)
+        su = (corners - point) @ u
+        sw = (corners - point) @ w
+        # Wide enough to hide the atoms behind it: a corner atom's lower half
+        # otherwise shows past the edge of the map as a crescent.
+        pad = 0.2 + (float(self._radii.max()) if len(self._radii) else 0.3)
+        u_low, u_high = float(su.min()) - pad, float(su.max()) + pad
+        w_low, w_high = float(sw.min()) - pad, float(sw.max()) + pad
+
+        step = max(float(np.linalg.norm(field.steps, axis=1).min()), 0.02)
+        nu = int(min(max(np.ceil((u_high - u_low) / step) + 1, 2), _MAX_SLICE_POINTS))
+        nw = int(min(max(np.ceil((w_high - w_low) / step) + 1, 2), _MAX_SLICE_POINTS))
+        a, b = np.meshgrid(np.linspace(u_low, u_high, nu), np.linspace(w_low, w_high, nw),
+                           indexing="ij")
+        points = point + a[..., None] * u + b[..., None] * w      # (nu, nw, 3)
+
+        flat = points.reshape(-1, 3)
+        if options.colour_by is not None:
+            values = density_module.sample_periodic(options.colour_by, flat)
+        else:
+            values = density_module.sample_periodic(field, flat, lattice)
+            if options.logarithmic and not field.signed:
+                positive = values[values > 0]
+                floor = float(positive.min()) if positive.size else 1e-8
+                values = np.log10(np.clip(values, floor, None))
+
+        mesh = pv.StructuredGrid(points[..., 0][..., None], points[..., 1][..., None],
+                                 points[..., 2][..., None])
+        mesh.point_data["value"] = values.reshape(nu, nw).ravel(order="F")
+        centre = point + 0.5 * (u_low + u_high) * u + 0.5 * (w_low + w_high) * w
+        self._slice_frame = (centre, normal, u)
+        self._slice_extent = (point, u, w, (u_low, u_high), (w_low, w_high))
+        return mesh
+
+    def _scene_corners(self, lattice, field) -> np.ndarray:
+        """Points bounding what is on screen: the atoms and the cell's corners."""
+        points = []
+        if len(self._positions):
+            points.append(np.asarray(self._positions, dtype=float))
+        cell = self._cell_or_none()
+        box = cell if cell is not None else lattice
+        origin = np.zeros(3) if cell is not None else field.origin
+        corners = np.array([origin + i * box[0] + j * box[1] + k * box[2]
+                            for i in (0, 1) for j in (0, 1) for k in (0, 1)])
+        points.append(corners)
+        return np.vstack(points)
+
+    def _add_slice_mesh(self, mesh, field, options) -> None:
+        values = np.asarray(mesh.point_data["value"], dtype=float)
+        signed = field.signed if options.colour_by is None else options.colour_by.signed
+        actor = self.plotter.add_mesh(
+            mesh, scalars="value", cmap=options.cmap,
+            clim=_colour_limits(values, symmetric=signed),
+            opacity=options.opacity, show_scalar_bar=False, render=False,
+            # A map is read for its colours: lighting would shade one side of
+            # the plane darker than the other and change what it says.
+            lighting=False,
+        )
+        actor.SetPickable(False)
+        self._density_actors.append(actor)
+        self._add_colour_bar(actor, field, options)
+
+    def _apply_cutaway(self, frame) -> None:
+        """Cut away whatever lies in front of a slice, or restore it (``None``).
+
+        Done with clipping planes on the mappers rather than by removing atoms:
+        nothing about the structure changes — picking, labels, animation and
+        the undo history all still see every atom — only what is drawn does.
+
+        The cut sits a hair *behind* the plane, so that the atoms lying in it go
+        too: kept whole, as domes, they covered the map exactly where it is
+        densest — an Mg²⁺ drawn at its usual size hides most of rocksalt's
+        (001) layer. They are marked by small dots instead; see
+        :meth:`_mark_atoms_in_plane`.
+        """
+        from vtkmodules.vtkCommonDataModel import vtkPlane
+
+        if frame is None and self._cutaway is None:
+            return      # nothing was cut, so there is nothing to put back
+        self._cutaway = frame
+        density = {id(actor) for actor in self._density_actors}
+        margin = -_CUTAWAY_BEHIND
+        for actor in list(self.plotter.renderer.actors.values()):
+            if id(actor) in density:
+                continue
+            mapper = actor.GetMapper() if hasattr(actor, "GetMapper") else None
+            if mapper is None or not hasattr(mapper, "AddClippingPlane"):
+                continue
+            mapper.RemoveAllClippingPlanes()
+            if frame is None:
+                continue
+            centre, normal, _up = frame
+            plane = vtkPlane()
+            # VTK keeps what lies on the side the normal points to, so the plane
+            # faces back into the crystal: everything beyond it goes.
+            plane.SetOrigin(*(centre + margin * normal))
+            plane.SetNormal(*(-normal))
+            mapper.AddClippingPlane(plane)
+
+    def _mark_atoms_in_plane(self) -> None:
+        """Small dots, in each element's colour, wherever an atom lies on the map.
+
+        The map says what the density does; the dots say which nuclei it is
+        doing it around. A dot for every atom of the crystal on the map, not
+        only for the atoms drawn: a map spans more than the cell box, and a peak
+        with a dot next to a peak without one reads as two different things.
+        A third of the atom's drawn size, so relative sizes still read and the
+        map around each dot stays visible.
+        """
+        extent = getattr(self, "_slice_extent", None)
+        structure = self._structure
+        if extent is None or structure is None or len(structure) == 0:
+            return
+        point, u, w, (u_low, u_high), (w_low, w_high) = extent
+        normal = np.cross(u, w)
+        positions = np.asarray(structure.positions, dtype=float)
+        numbers = np.asarray(structure.numbers, dtype=int)
+        cell = self._cell_or_none()
+        offsets = [np.zeros(3)]
+        if cell is not None:
+            corners = np.array([point + a * u + b * w
+                                for a in (u_low, u_high) for b in (w_low, w_high)])
+            try:
+                fractional = corners @ np.linalg.inv(cell)
+            except np.linalg.LinAlgError:
+                fractional = None
+            if fractional is not None:
+                low = np.floor(fractional.min(axis=0)).astype(int) - 1
+                high = np.ceil(fractional.max(axis=0)).astype(int) + 1
+                periodic = np.asarray(structure.pbc, dtype=bool)
+                low[~periodic], high[~periodic] = 0, 0
+                if int(np.prod(high - low + 1)) <= 4096:
+                    offsets = [i * cell[0] + j * cell[1] + k * cell[2]
+                               for i in range(low[0], high[0] + 1)
+                               for j in range(low[1], high[1] + 1)
+                               for k in range(low[2], high[2] + 1)]
+        images = (positions[None, :, :] + np.asarray(offsets)[:, None, :]).reshape(-1, 3)
+        kinds = np.tile(numbers, len(offsets))
+        distance = (images - point) @ normal
+        along, across = (images - point) @ u, (images - point) @ w
+        keep = ((np.abs(distance) < _IN_PLANE)
+                & (along >= u_low) & (along <= u_high)
+                & (across >= w_low) & (across <= w_high))
+        if not keep.any():
+            return
+        # A boundary-completed structure already holds some images twice.
+        spots, index = np.unique(np.round(images[keep] - np.outer(distance[keep], normal), 3),
+                                 axis=0, return_index=True)
+        kinds = kinds[keep][index]
+        radii = _sphere_radius(kinds, self._settings.atom_scale)
+        cloud = pv.PolyData(spots + _CUTAWAY_BEHIND * normal)
+        cloud.point_data["radius"] = _IN_PLANE_MARKER * radii
+        cloud.point_data["rgb"] = self._rgb_for(kinds)
+        dots = cloud.glyph(geom=pv.Sphere(radius=1.0, theta_resolution=24,
+                                          phi_resolution=16),
+                           scale="radius", orient=False)
+        actor = self.plotter.add_mesh(dots, scalars="rgb", rgb=True, smooth_shading=True,
+                                      show_scalar_bar=False, render=False)
+        actor.SetPickable(False)
+        self._density_actors.append(actor)
+
+    def face_density_plane(self) -> None:
+        """Turn the camera to look straight at the drawn slice, from the cut side."""
+        frame = getattr(self, "_slice_frame", None)
+        if frame is None or self._density_view is None:
+            return
+        centre, normal, up = frame
+        try:
+            distance = float(self.plotter.camera.GetDistance()) or 20.0
+        except Exception:  # noqa: BLE001
+            distance = 20.0
+        self.plotter.camera_position = [tuple(centre + distance * normal), tuple(centre),
+                                        tuple(up)]
+        self.plotter.reset_camera()
+        self.plotter.render()
+
+    def _add_density_mesh(self, pieces, colour, limits, field, options, cell) -> None:
+        """The home cell's pieces, copied onto the cells the atoms on screen occupy.
+
+        The field is sampled over one cell, but the atoms are not always in that
+        cell: an output file writes each atom in whichever periodic image it
+        came out in, and a supercell spreads them over many. Beryllium is the
+        plain case — its two atoms come out one ``b`` and one ``a + c`` from the
+        grid's own copies of them, so a field drawn over the home cell alone
+        sits a whole translation away from them.
+
+        The field is lattice-periodic, so those cells hold the same pieces. A
+        copy is kept only where an atom on screen lies against it, and the kept
+        copies go into one mesh, built once.
+        """
+        offsets = _density_images(field, cell, self._positions)
+        mesh = _assemble_pieces(pieces, offsets, self._positions)
+        if mesh is None:
+            return
+        scalars = "value" if limits is not None else None
+        actor = self.plotter.add_mesh(
+            mesh,
+            color=None if scalars else colour,
+            scalars=scalars, cmap=options.cmap if scalars else None, clim=limits,
+            opacity=options.opacity, smooth_shading=True,
+            show_scalar_bar=False, render=False,
+        )
+        actor.SetPickable(False)   # only atoms are pick targets
+        self._density_actors.append(actor)
+        if scalars is not None:
+            self._add_colour_bar(actor, field, options)
+
+    def _add_colour_bar(self, actor, field, options) -> None:
+        """A vertical colour bar at the right edge, keying ``actor``'s colours.
+
+        Written in the same Unicode font as the symmetry labels: VTK's built-in
+        fonts stop at Latin-1, and a bar headed "log  (e/bohr)" with its ρ and
+        subscript dropped would say nothing. The text takes whichever of black
+        or white reads on the chosen background.
+        """
+        from crystalline.crystalio import density as density_module
+
+        if not options.colour_bar or self._density_bar is not None:
+            return
+        title = density_module.bar_title(field, options)
+        colour = _readable_on(self._settings.background_color)
+        try:
+            bar = self.plotter.add_scalar_bar(
+                title=title, mapper=actor.mapper, vertical=True, n_labels=5, fmt="%.3g",
+                position_x=0.86, position_y=0.18, width=0.07, height=0.64,
+                title_font_size=14, label_font_size=12, color=colour, render=False,
+            )
+        except Exception:  # noqa: BLE001 - a bar is a nicety; never break the drawing
+            return
+        font = _unicode_font()
+        if font is not None:
+            for text in (bar.GetTitleTextProperty(), bar.GetLabelTextProperty()):
+                text.SetFontFamily(vtk.VTK_FONT_FILE)
+                text.SetFontFile(font)
+        self._density_bar = title
+
     def _scene_bounds(self, margin: float = 0.0) -> Optional[tuple]:
         """The drawn extent as ``(xmin, xmax, …)``, padded by ``margin`` Angstrom.
 
@@ -1784,6 +2171,350 @@ def _axis_label_actor(text: str, position: np.ndarray, color: str):
     return caption
 
 
+def _structured_grid(field):
+    """A field as a ``pv.StructuredGrid``, points given one by one.
+
+    ``ImageData`` would be cheaper, but it can only hold an axis-aligned box of
+    uniform spacing, and CRYSTAL's grid runs along the lattice vectors.
+    """
+    try:
+        # VTK wants the first index varying fastest. A Fortran-order reshape
+        # cannot be used here: it would fold the trailing xyz axis into the
+        # ordering too, scrambling the points.
+        points = field.points().transpose(2, 1, 0, 3).reshape(-1, 3)
+        grid = pv.StructuredGrid()
+        grid.points = points
+        grid.dimensions = field.shape
+        grid.point_data["value"] = np.asarray(field.values, dtype=float).ravel(order="F")
+    except Exception:  # noqa: BLE001 - a field we cannot lay out is not drawn
+        return None
+    return grid
+
+
+# How far past each face of the cell the grid is continued before contouring,
+# in Angstrom: more than the radius of any surface worth drawing around an atom.
+_SURFACE_PAD = 3.0
+
+
+def _padded_field(field, lattice, pad: float):
+    """The field continued periodically ``pad`` Angstrom past every face.
+
+    Contoured over the one sampled cell, a surface around an atom that sits on
+    a face is cut in two by the grid's edge, and one on a corner into eight.
+    Reassembling those pieces from copies of the cell works only if every
+    neighbour of that corner happens to be copied — and in MgO's primitive
+    cell, where every Mg sits on a corner, some were and some were not, so
+    equivalent atoms came out with a whole shell, part of one, or none.
+    Continued past the faces, the grid holds each of those surfaces whole.
+    """
+    from dataclasses import replace
+
+    lattice = np.asarray(lattice, dtype=float)
+    counts = np.array(field.shape)
+    inclusive = np.allclose(lattice, field.steps * (counts - 1)[:, None], atol=1e-6)
+    core = field.values[:-1, :-1, :-1] if inclusive else field.values
+    period = np.array(core.shape)
+    lengths = np.linalg.norm(field.steps, axis=1)
+    layers = np.minimum(np.ceil(pad / np.maximum(lengths, 1e-9)).astype(int), period // 2)
+    # One more layer at the far end, so the padded grid closes on itself as the
+    # original did: it runs from -layers to period + layers inclusive.
+    values = np.pad(core, [(int(n), int(n) + 1) for n in layers], mode="wrap")
+    origin = field.origin - layers @ field.steps
+    return replace(field, values=values, origin=origin)
+
+
+class _Piece:
+    """One connected piece of a surface, as plain arrays.
+
+    Kept as numpy rather than as a VTK mesh because placing pieces is what a
+    rebuild does, and doing it on VTK meshes — one threshold filter per piece to
+    split them, one merge per copy to join them — was where the seconds went.
+    """
+
+    __slots__ = ("points", "triangles", "values", "centre", "radius")
+
+    def __init__(self, points, triangles, values):
+        self.points = points
+        self.triangles = triangles
+        self.values = values
+        self.centre = points.mean(axis=0)
+        self.radius = float(np.linalg.norm(points - self.centre, axis=1).max())
+
+
+def _mesh_pieces(mesh):
+    """Split a triangle mesh into its connected pieces.
+
+    A sparse connected-components pass over the triangles' edges: the same
+    answer as VTK's ``split_bodies``, which runs a threshold filter per piece
+    and costs a noticeable fraction of a second on a surface with many.
+    """
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    if mesh is None or mesh.n_points == 0:
+        return []
+    mesh = mesh.triangulate()
+    faces = np.asarray(mesh.faces)
+    if faces.size == 0:
+        return []
+    triangles = faces.reshape(-1, 4)[:, 1:]
+    points = np.asarray(mesh.points, dtype=float)
+    values = (np.asarray(mesh.point_data["value"], dtype=float)
+              if "value" in mesh.point_data else None)
+    n = len(points)
+    rows = np.concatenate([triangles[:, 0], triangles[:, 1], triangles[:, 2]])
+    cols = np.concatenate([triangles[:, 1], triangles[:, 2], triangles[:, 0]])
+    graph = coo_matrix((np.ones(len(rows), dtype=np.int8), (rows, cols)), shape=(n, n))
+    count, labels = connected_components(graph, directed=False)
+    face_label = labels[triangles[:, 0]]
+    order = np.argsort(face_label, kind="stable")
+    bounds = np.searchsorted(face_label[order], np.arange(count + 1))
+    pieces = []
+    for label in range(count):
+        chosen = triangles[order[bounds[label]:bounds[label + 1]]]
+        if len(chosen) == 0:
+            continue
+        used, local = np.unique(chosen, return_inverse=True)
+        pieces.append(_Piece(points[used], local.reshape(-1, 3),
+                             None if values is None else values[used]))
+    return pieces
+
+
+def _piece_mesh(piece):
+    mesh = pv.PolyData.from_regular_faces(piece.points, piece.triangles)
+    if piece.values is not None:
+        mesh.point_data["value"] = piece.values
+    return mesh
+
+
+def _home_pieces(mesh, field, lattice, origin, clip_to_cell=False):
+    """The pieces of a surface belonging to the home cell, each exactly once.
+
+    Contoured on a padded grid, a surface appears once for each copy of its atom
+    that the padding reaches: MgO's corner Mg is there eight times. Copied into
+    the neighbouring cells, those copies landed on one another and were welded
+    into one mesh with the same shell in it two to five times over — which,
+    drawn translucent, made equivalent atoms come out darker or lighter than
+    each other. So every piece is given to exactly one cell, and the cells are
+    then tiled edge to edge:
+
+    * a closed piece — one that does not reach the padding's edge — belongs to
+      the cell its centre lies in, and is kept only if that is this one;
+    * a small piece that does reach the edge is a scrap of a surface whose atom
+      lies outside, whole in that atom's own cell, and is dropped;
+    * a large one is a continuous sheet of density at a low isovalue, and is cut
+      to this cell so that the copies meet at its faces instead of overlapping.
+    """
+    lattice = np.asarray(lattice, dtype=float)
+    origin = np.asarray(origin, dtype=float)      # the home cell's, not the padding's
+    to_index = np.linalg.inv(field.steps)
+    to_cell = np.linalg.inv(lattice)
+    last = np.array(field.shape, dtype=float) - 1.0
+    kept = []
+    for piece in _mesh_pieces(mesh):
+        index = (piece.points - field.origin) @ to_index
+        edge = bool(np.any(index < 0.5) or np.any(index > last - 0.5))
+        if not edge:
+            home = np.floor((piece.centre - origin) @ to_cell + _ON_FACE)
+            if np.all(home == 0):
+                kept.append(piece)
+            continue
+        if float(np.ptp(piece.points, axis=0).max()) < _SURFACE_PAD:
+            continue
+        kept.extend(_clipped(piece, lattice, origin))
+    if clip_to_cell:
+        kept = [part for piece in kept for part in _clipped(piece, lattice, origin)]
+    return kept
+
+
+def _clipped(piece, lattice, origin):
+    """``piece`` cut to the cell at ``origin``, as pieces again."""
+    moved = _piece_mesh(piece).translate(-origin, inplace=False)
+    clipped = _clip_to_cell(moved, lattice)
+    if clipped is None or clipped.n_points == 0:
+        return []
+    clipped = clipped.extract_surface().translate(origin, inplace=False)
+    return _mesh_pieces(clipped)
+
+
+def _assemble_pieces(pieces, offsets, positions, cutoff: float = None):
+    """One mesh of every piece copied to every offset that an atom lies against.
+
+    A crystal's density fills space, but a view holds only the atoms someone
+    asked for, and density around the others reads as the field being in the
+    wrong place — so a copy is kept when a drawn atom comes within ``cutoff``
+    of it. A k-d tree over the atoms answers that for each copy without the
+    full distance matrix, and the kept copies are concatenated as arrays and
+    turned into a mesh once, rather than merged one at a time.
+    """
+    from scipy.spatial import cKDTree
+
+    cutoff = _NEAR_ATOM if cutoff is None else cutoff
+    positions = np.asarray(positions, dtype=float) if positions is not None else np.empty((0, 3))
+    tree = cKDTree(positions) if len(positions) else None
+    points, triangles, values = [], [], []
+    count = 0
+    for offset in offsets:
+        offset = np.asarray(offset, dtype=float)
+        for piece in pieces:
+            if tree is not None:
+                reach = tree.query_ball_point(piece.centre + offset, piece.radius + cutoff)
+                if not reach:
+                    continue
+                gaps, _ = cKDTree(positions[reach]).query(
+                    piece.points + offset, k=1, distance_upper_bound=cutoff)
+                if not np.isfinite(gaps).any():
+                    continue
+            points.append(piece.points + offset)
+            triangles.append(piece.triangles + count)
+            if piece.values is not None:
+                values.append(piece.values)
+            count += len(piece.points)
+    if not points:
+        return None
+    mesh = pv.PolyData.from_regular_faces(np.vstack(points), np.vstack(triangles))
+    if values and len(values) == len(points):
+        mesh.point_data["value"] = np.concatenate(values)
+    return mesh
+
+
+# A centre this close to a cell face, as a fraction of the cell, counts as on
+# it. A mesh's centroid wobbles by a hundredth of an Angstrom about the nucleus,
+# and a surface must not fall between two cells because of that.
+_ON_FACE = 1e-3
+
+
+def _density_surfaces(grid, field, options):
+    """Surfaces of constant value: one for a density, two for a signed field.
+
+    Left where the field puts them; the caller repeats and clips them.
+    """
+    level = abs(float(options.isovalue))
+    if level <= 0.0:
+        return []
+    levels = [(-level, options.negative), (level, options.positive)] if field.signed \
+        else [(level, options.positive)]
+    out = []
+    for value, colour in levels:
+        surface = grid.contour([value], scalars="value")
+        if surface is None or surface.n_points == 0:
+            continue          # this level is not crossed anywhere in the cell
+        surface.point_data.clear()
+        if options.colour_by is not None:
+            surface = _paint(surface, options.colour_by)
+        out.append((surface, colour))
+    return out
+
+
+# How close a piece of surface has to come to an atom on screen to be drawn.
+# A surface around an atom passes within a fraction of an Angstrom of it; one
+# around an atom that is not drawn is a bond length away.
+_NEAR_ATOM = 1.0
+
+
+def _colour_limits(values, symmetric: bool):
+    """The colour range for a painted mesh, set by its bulk rather than its extremes.
+
+    A slice through MgO runs from 10⁻² e/bohr³ in the interstices to 10³ on the
+    nuclei; even on a logarithmic scale the few points at the nuclei took the
+    top of the map to themselves and left the rest of the plane one shade of
+    blue. The 2nd and 98th percentiles bound the part worth telling apart, and
+    the handful of points beyond them take the end colours. A signed field is
+    kept centred on zero, so that white still means zero.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size == 0:
+        return None
+    if symmetric:
+        extreme = float(np.percentile(np.abs(values), 98))
+        extreme = extreme if extreme > 0 else float(np.abs(values).max()) or 1.0
+        return (-extreme, extreme)
+    low, high = (float(v) for v in np.percentile(values, [2, 98]))
+    if high <= low:
+        low, high = float(values.min()), float(values.max())
+    if high <= low:
+        high = low + 1.0
+    return (low, high)
+
+
+def _paint(mesh, other):
+    """Replace a mesh's scalars with a second field's values at its vertices.
+
+    This is the electrostatic potential painted onto a density surface: the
+    surface says where the molecule ends, the colour says what a charge would
+    feel there. Read periodically, since a surface copied into a neighbouring
+    cell lies outside the grid the potential was sampled on.
+    """
+    from crystalline.crystalio import density as density_module
+
+    mesh.point_data["value"] = density_module.sample_periodic(other, np.asarray(mesh.points))
+    return mesh
+
+
+def _density_images(field, cell, positions):
+    """The cells to copy the field into: the home cell, plus those the atoms need.
+
+    An atom drawn outside the sampled cell needs its own copy of the field, or
+    it is shown bare while its density sits a lattice translation away. But
+    "outside" covers two different things, and only one of them wants a copy:
+
+    * A **supercell** — which is how more of the field is shown: it follows the
+      atoms, and there is no separate count of cells to set — or a structure
+      whose atoms were written in another image
+      — beryllium's two atoms come out one ``b`` and one ``a + c`` away, a
+      third of a cell clear of the home one. Nothing in the home cell's field
+      reaches them.
+    * The **stragglers of a boundary-completed view**, where a molecule cut by
+      the cell edge is redrawn whole and a few of its atoms poke just past the
+      face. The home cell's own surface already reaches those: they are a
+      hundredth of a cell out, not a third.
+
+    Every cell holding a drawn atom is copied into. That over-reaches — a cell
+    entered by one straggler brings a whole cell of density with it, most of it
+    around atoms nobody drew — which is why the copies are then cut back to the
+    atoms by :func:`_near_atoms`.
+    """
+    wanted = {(0, 0, 0)}
+    cell = np.asarray(cell, dtype=float)
+    if positions is not None and len(positions):
+        try:
+            inverse = np.linalg.inv(cell)
+        except np.linalg.LinAlgError:
+            inverse = None
+        if inverse is not None:
+            fractional = (np.asarray(positions, dtype=float) - field.origin) @ inverse
+            # Each surface belongs to the cell its centre is in, and an atom on
+            # a face could be given to either side of it: ask for both.
+            corners = set()
+            for shift in itertools.product((-_ON_FACE, 0.0, _ON_FACE), repeat=3):
+                for corner in np.floor(fractional + np.array(shift)).astype(int):
+                    corners.add(tuple(int(v) for v in corner))
+            wanted |= corners
+    if len(wanted) > _MAX_DENSITY_IMAGES:
+        return [np.zeros(3)]
+    ordered = sorted(wanted, key=lambda t: (t != (0, 0, 0), t))
+    return [i * cell[0] + j * cell[1] + k * cell[2] for i, j, k in ordered]
+
+
+# A slice's resolution along each side; past this a map is finer than the grid
+# it is read from and only costs time.
+_MAX_SLICE_POINTS = 400
+
+# How far behind a slice the cutaway sits, in Angstrom: enough that nothing
+# lying exactly in the plane pokes through it, not enough to be seen.
+_CUTAWAY_BEHIND = 0.02
+# An atom this close to a slice counts as lying in it, and is marked there.
+_IN_PLANE = 0.15
+# A mark's size, as a fraction of the atom's drawn radius.
+_IN_PLANE_MARKER = 0.35
+
+# How many cells the field is copied into at most. A supercell is how more of
+# it is shown, so this has to cover the supercells people build; pieces are
+# placed as arrays and a k-d tree, so a thousand cells is still quick.
+_MAX_DENSITY_IMAGES = 1000
+
+
 def _clip_to_cell(surface, cell):
     """Cut an isosurface back to the cell it belongs to.
 
@@ -2017,6 +2748,18 @@ def _use_unicode_font(actor) -> None:
         text.SetFontFile(font)
     except Exception:  # noqa: BLE001 - purely cosmetic; never break a redraw
         pass
+
+
+def _readable_on(background) -> str:
+    """Black or white, whichever reads on ``background``."""
+    try:
+        from matplotlib.colors import to_rgb
+
+        red, green, blue = to_rgb(background)
+    except Exception:  # noqa: BLE001 - an unreadable colour: assume a light one
+        return "black"
+    luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    return "black" if luminance > 0.5 else "white"
 
 
 def _label_spots(points: np.ndarray, centre: np.ndarray) -> np.ndarray:
