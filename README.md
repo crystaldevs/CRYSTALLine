@@ -10,8 +10,6 @@
 
 <p align="center">
   <a href="https://crystaldevs.github.io/CRYSTALLine/"><b>Documentation</b></a> ·
-  <a href="https://pypi.org/project/CRYSTALLine/">PyPI</a> ·
-  <a href="https://github.com/crystaldevs/CRYSTALLine/issues">Issues</a>
 </p>
 
 <p align="center">
