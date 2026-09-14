@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "CRYSTALLine"
-version = "0.2.1"
+version = "0.2.2"
 description = "A desktop GUI for building/editing CRYSTAL structures and visualising vibrational modes, built on CRYSTALClear."
 readme = "README.md"
 # pymatgen requires 3.11+ as of its 2025 releases, and PySide6/pyvista/ase all
