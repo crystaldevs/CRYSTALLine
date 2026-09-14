@@ -42,6 +42,32 @@ class Connectivity:
     polyhedra: List[Tuple[int, np.ndarray, np.ndarray]] = field(default_factory=list)
 
 
+# Below this Pauling electronegativity an element does not act as a ligand: the
+# metals and metalloids (Ti 1.54, Si 1.90) are never the vertices of another
+# cation's polyhedron, while O, N, F, Cl, S, C and H (2.20) can be.
+LIGAND_ELECTRONEGATIVITY = 2.0
+
+
+def is_ligand(centre_x, neighbour_x) -> bool:
+    """Whether a neighbour is a vertex of the centre's coordination polyhedron.
+
+    It has to be more electronegative than the centre *and* able to act as an
+    anion at all. The first test alone is not enough: in SrTiO3, Ti (1.54) is
+    more electronegative than Sr (0.95), and the 8 Ti around each Sr became
+    vertices of its polyhedron, which swelled from the 12-oxygen cuboctahedron
+    to a 20-vertex solid swallowing the titanium.
+    """
+    if centre_x is None or neighbour_x is None:
+        return False
+    try:
+        centre_x, neighbour_x = float(centre_x), float(neighbour_x)
+    except (TypeError, ValueError):
+        return False
+    if np.isnan(centre_x) or np.isnan(neighbour_x):
+        return False
+    return neighbour_x > centre_x and neighbour_x >= LIGAND_ELECTRONEGATIVITY
+
+
 def connectivity(structure: Structure, min_vertices: int = 4) -> Optional[Connectivity]:
     """Return :class:`Connectivity` via CrystalNN, or ``None`` if not applicable.
 
@@ -82,14 +108,16 @@ def connectivity(structure: Structure, min_vertices: int = 4) -> Optional[Connec
                     continue
                 seen.add(key)
                 segments.append(np.array([site.coords, coord], dtype=float))
-            # a coordination polyhedron only for cation centres (the centre is
-            # less electronegative than its ligands) with enough vertices
-            if len(ligands) >= min_vertices:
-                neighbour_x = [electroneg[info["site_index"]] for info in infos]
-                if electroneg[i] is not None and all(x is not None for x in neighbour_x):
-                    if electroneg[i] < np.mean(neighbour_x):
-                        centre = np.asarray(site.coords, dtype=float)
-                        polyhedra.append((int(site.specie.Z), centre, ligands))
+            # A coordination polyhedron is a cation's anions: its vertices are
+            # the neighbours that are ligands *of this centre* — see
+            # :func:`is_ligand`. Taking every neighbour whenever their mean was
+            # more electronegative let a cation's cation neighbours in as
+            # vertices, so long as enough anions outvoted them.
+            keep = [k for k, info in enumerate(infos)
+                    if is_ligand(electroneg[i], electroneg[info["site_index"]])]
+            if len(keep) >= min_vertices:
+                centre = np.asarray(site.coords, dtype=float)
+                polyhedra.append((int(site.specie.Z), centre, ligands[keep]))
     except Exception:  # noqa: BLE001 - CrystalNN can choke on odd cells
         return None
 
@@ -262,5 +290,7 @@ __all__ = [
     "Connectivity",
     "connectivity",
     "replicate_polyhedra",
+    "is_ligand",
+    "LIGAND_ELECTRONEGATIVITY",
     "hydrogen_bonds_from_positions",
 ]

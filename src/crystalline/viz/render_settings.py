@@ -23,16 +23,21 @@ class RenderSettings:
     # absent here keep their default Jmol colour.
     atom_colors: Tuple[Tuple[int, str], ...] = field(default_factory=tuple)
 
-    # bonds — a single fixed colour (see renderer._BOND_COLOR); no per-bond colouring
+    # bonds — one colour for every bond; no per-bond colouring
     show_bonds: bool = True
     bond_radius: float = 0.06    # Angstrom
     bond_tolerance: float = 1.15  # bonded if dist < tolerance * (r_i + r_j)
+    bond_color: str = "#888888"
 
     # hydrogen bonds — dashed D–H···A contacts, drawn by default
     show_hydrogen_bonds: bool = True
+    hydrogen_bond_color: str = "#4aa3df"
+    hydrogen_bond_width: float = 2.0   # screen pixels
 
     # cell / gizmo
     show_cell: bool = True
+    cell_color: str = "#3355aa"
+    cell_line_width: float = 2.0       # screen pixels
     show_lattice_vectors: bool = True
 
     # phonon displacement arrows: the selected mode's eigenvector drawn on the
@@ -76,12 +81,16 @@ class RenderSettings:
     # atom labels (element symbols drawn at each atom, capped for large cells)
     show_atom_labels: bool = False
     atom_label_size: int = 16  # point size of the element-symbol labels
+    # "" follows the background — black on a light one, white on a dark one. A
+    # fixed near-black was unreadable on the dark ground the app switches to.
+    atom_label_color: str = ""
 
     # coordination polyhedra (VESTA-style), off until asked for: they hide the
     # atoms they enclose, and a first look at a structure is usually the atoms
     show_polyhedra: bool = False
     polyhedra_opacity: float = 0.3  # translucent enough to see the atoms inside
     polyhedra_min_vertices: int = 4  # only draw around atoms with >= this many bonds
+    polyhedra_edge_width: float = 1.5  # screen pixels; 0 draws no outline
 
     # geometry-measurement overlays (Geometry panel): dot markers, distance/angle
     # paths, and least-squares plane patches — each independently coloured.

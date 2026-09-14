@@ -179,3 +179,45 @@ def test_replicate_survives_a_degenerate_cell():
     analysed = [(11, np.zeros(3), ligands)]
     out = replicate_polyhedra(analysed, np.zeros((3, 3)), np.zeros((1, 3)), np.array([11]))
     assert len(out) == 1  # no lattice to image with: returned as analysed
+
+
+# ── which neighbours are a polyhedron's vertices ─────────────────────────
+def _srtio3():
+    from ase.spacegroup import crystal
+
+    return Structure.from_ase(crystal(["Sr", "Ti", "O"], [(0, 0, 0), (.5, .5, .5), (.5, .5, 0)],
+                                      spacegroup=221, cellpar=[3.905] * 3 + [90] * 3))
+
+
+def test_a_cation_is_never_a_vertex_of_another_cations_polyhedron():
+    """Ti (1.54) is more electronegative than Sr (0.95), and being more
+    electronegative than the centre was the whole test: SrTiO3's Sr swallowed
+    its 8 Ti neighbours and became a 20-vertex solid."""
+    from crystalline.core.bonds import is_ligand
+
+    assert not is_ligand(0.95, 1.54)          # Ti around Sr
+    assert is_ligand(0.95, 3.44)              # O around Sr
+    assert is_ligand(1.31, 2.20)              # H around Mg, as in a hydride
+    assert not is_ligand(3.44, 1.31)          # Mg around O: O is not a centre
+    assert not is_ligand(None, 3.44)
+    assert not is_ligand(float("nan"), 3.44)
+
+
+def test_srtio3_has_its_cuboctahedra_and_octahedra():
+    pytest.importorskip("pymatgen")
+    conn = connectivity(_srtio3())
+    assert conn is not None
+
+    counts = {int(z): len(ligands) for z, _centre, ligands in conn.polyhedra}
+
+    assert counts == {38: 12, 22: 6}
+
+
+def test_the_distance_fallback_draws_the_same_polyhedra_as_crystalnn():
+    """The two paths used different ligand rules, so the picture depended on
+    which of them a structure's size happened to select."""
+    from crystalline.viz.renderer import _fallback_polyhedra
+
+    found = _fallback_polyhedra(_srtio3().to_ase(), 1.1, 4)
+
+    assert {int(z): len(ligands) for z, _centre, ligands in found} == {38: 12, 22: 6}
