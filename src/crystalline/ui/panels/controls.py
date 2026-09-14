@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QStyledItemDelegate,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -182,6 +183,93 @@ class ColourButton(QPushButton):
         from crystalline.ui.panels.display_settings import DisplayPanel
 
         DisplayPanel._paint_swatch(self, self._colour)
+
+
+class RichTextDelegate(QStyledItemDelegate):
+    """Draw item text as rich text, so that a subscript is drawn as one.
+
+    Qt's item views take plain strings. Most of the symbols this app shows can
+    be written with the Unicode subscripts — C₂, S₄, σₕ — but σd cannot, since
+    Unicode has no subscript d, and a row reading "σd" beside a row reading
+    "σₕ" looks like a mistake. The rows are given HTML instead, and this draws
+    it: the style paints the row itself (selection, checkbox, focus) and only
+    the text is replaced.
+    """
+
+    def __init__(self, parent=None, markup=None) -> None:
+        """``markup`` turns the item's plain text into HTML.
+
+        The items keep plain text — that is what a tooltip, a copy and a test
+        see — and the markup is applied here, at the moment of drawing.
+        """
+        super().__init__(parent)
+        self._markup = markup or (lambda text: text)
+
+    def paint(self, painter, option, index) -> None:
+        from PySide6.QtGui import QAbstractTextDocumentLayout, QFontMetrics
+        from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
+
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        style = styled.widget.style() if styled.widget else QApplication.style()
+        area = style.subElementRect(QStyle.SE_ItemViewItemText, styled, styled.widget)
+
+        # Elide rather than clip: a row too narrow for its text ends in an
+        # ellipsis, as it would in any other list.
+        text = styled.text
+        metrics = QFontMetrics(styled.font)
+        if metrics.horizontalAdvance(text) > area.width():
+            text = metrics.elidedText(text, Qt.ElideRight, area.width())
+
+        document = self._document(styled.font, text)
+        styled.text = ""                      # the style draws everything but this
+        style.drawControl(QStyle.CE_ItemViewItem, styled, painter, styled.widget)
+
+        context = QAbstractTextDocumentLayout.PaintContext()
+        if styled.state & QStyle.State_Selected:
+            context.palette.setColor(
+                context.palette.ColorRole.Text,
+                styled.palette.color(styled.palette.ColorGroup.Normal,
+                                     styled.palette.ColorRole.HighlightedText),
+            )
+        painter.save()
+        painter.setClipRect(area)
+        # Centre the line in its row rather than hanging it from the top: a
+        # subscript makes the document a little taller than a plain line, and
+        # the excess would otherwise fall out of the bottom of the row.
+        spare = max(0.0, (area.height() - document.size().height()) / 2)
+        painter.translate(area.left(), area.top() + spare)
+        document.documentLayout().draw(painter, context)
+        painter.restore()
+
+    def sizeHint(self, option, index):  # noqa: N802 - Qt's name
+        from PySide6.QtCore import QSize
+        from PySide6.QtWidgets import QStyleOptionViewItem
+
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        document = self._document(styled.font, styled.text)
+        size = super().sizeHint(option, index)
+        # The row must hold the marked-up line, which a subscript makes taller
+        # than the plain one the style measured.
+        return QSize(
+            int(document.idealWidth()) + 8,
+            max(size.height(), int(document.size().height()) + 2),
+        )
+
+    def _document(self, font, text):
+        """The row's text as a laid-out document, with no margin of its own.
+
+        A QTextDocument keeps a 4 px margin unless told otherwise, which would
+        push the line down inside the row and let its own bottom be cut off.
+        """
+        from PySide6.QtGui import QTextDocument
+
+        document = QTextDocument()
+        document.setDocumentMargin(0)
+        document.setDefaultFont(font)
+        document.setHtml(self._markup(text))
+        return document
 
 
 def _left(widget: QWidget) -> QWidget:

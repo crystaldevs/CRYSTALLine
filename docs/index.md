@@ -66,6 +66,10 @@ interactive view in the centre, the vibrational modes on the right.
 6. **Property plots.** Electronic band structures and densities of states, IR
    and Raman spectra (harmonic and anharmonic), elastic properties, equations of
    state, phonon bands and densities of states, and simulated XRD patterns.
+7. **Densities in space.** Crystalline orbitals, the charge and spin densities
+   and the electrostatic potential are drawn over the structure itself, as
+   isosurfaces or as slices through the cell, on the grid CRYSTAL computed them
+   on.
 
 ## Where to start
 

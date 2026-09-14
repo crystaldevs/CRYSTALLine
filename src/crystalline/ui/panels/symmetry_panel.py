@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 import numpy as np
 
 from crystalline.core import symmetry as symmetry_mod
+from crystalline.ui.panels.controls import RichTextDelegate
 from crystalline.ui.safety import guard
 from crystalline.core.structure import Structure
 
@@ -87,6 +88,8 @@ class SymmetryPanel(QWidget):
         self._symprec.setSingleStep(0.005)
         self._symprec.setValue(0.01)
         self._symprec.setSuffix(" Å")
+        # Qt sizes a spin box for its digits; the suffix was cut off.
+        self._symprec.setMinimumWidth(120)
         self._symprec.setToolTip(
             "How far an atom may sit from its symmetric position and still count.\n"
             "Loosen it to recognise a nearly-symmetric geometry (a relaxed cell),\n"
@@ -124,6 +127,9 @@ class SymmetryPanel(QWidget):
         layout.addWidget(self._reduced_note)
 
         self._tree = QTreeWidget()
+        # Rows carry subscripts — C₂, S₄, σₕ — and σd has no Unicode subscript
+        # to be written with, so they are drawn as rich text.
+        self._tree.setItemDelegate(RichTextDelegate(self._tree, symmetry_mod.rich))
         self._tree.setHeaderHidden(True)
         self._tree.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._tree.setToolTip("Tick an element to draw it in the 3D view")

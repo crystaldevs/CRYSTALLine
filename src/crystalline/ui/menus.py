@@ -507,6 +507,20 @@ def _build_plot_menu(window) -> None:
     window._clear_orbital_action.triggered.connect(window._clear_orbital)
     plot_menu.addAction(window._clear_orbital_action)
 
+    window._density_action = QAction("Electron density & potential…", window)
+    window._density_action.setToolTip(
+        "Draw a charge density, a spin density or an electrostatic potential "
+        "from a PROPERTIES run with ECH3 or POT3"
+    )
+    window._density_action.triggered.connect(window._open_density)
+    plot_menu.addAction(window._density_action)
+
+    window._clear_density_action = QAction("Clear field", window)
+    # Nothing is drawn yet; the window re-enables it when a field goes on.
+    window._clear_density_action.setEnabled(False)
+    window._clear_density_action.triggered.connect(window._clear_density)
+    plot_menu.addAction(window._clear_density_action)
+
     # Typography applies to every figure, not to one kind, so it sits on its own
     # at the foot of the menu rather than inside any of the plot entries.
     plot_menu.addSeparator()

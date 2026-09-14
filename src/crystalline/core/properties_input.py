@@ -27,6 +27,8 @@ from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Optional, Sequence, Tuple
 
+import numpy as np
+
 from crystalline.core.structure import Structure
 
 # The largest shrinking factor a band path may be expressed over. Denominators
@@ -122,11 +124,21 @@ class Grid3DOptions:
     Both take the number of points along the first lattice vector and space the
     others to match; ``tolerance`` is POT3's penetration tolerance (ITOL) and is
     ignored by ECH3.
+
+    A slab, a polymer or a molecule has directions the lattice does not bound,
+    and the manual requires the deck to say how far to sample along each of
+    them — a record CRYSTAL reads whether or not it is there, so leaving it out
+    does not give a smaller grid, it feeds the *next* keyword's line to ECH3.
+    Either the extent of the atomic coordinates is scaled (``scale``, the
+    manual's SCALE) or an explicit interval is given in bohr (``bounds``, its
+    RANGE). ``bounds`` wins when both are set; both are ignored for a bulk.
     """
 
     enabled: bool = False
     points: int = 100         # NP
     tolerance: int = 5        # ITOL, POT3 only — the manual's suggested value
+    scale: float = 3.0        # SCALE: multiples of the atoms' own extent
+    bounds: Optional[Tuple[float, float]] = None   # RANGE: (min, max) in bohr
 
 
 @dataclass
@@ -514,25 +526,45 @@ def build_properties_input(
         lines += ["LOCALI", "END"]
     if spec.orbitals.enabled:
         lines += _orbitals_lines(structure, spec.orbitals)
-    if spec.charge_density.enabled:
-        lines += _grid_lines("ECH3", spec.charge_density, tolerance=False)
-    if spec.potential.enabled:
-        lines += _grid_lines("POT3", spec.potential, tolerance=True)
-    if spec.emd.enabled:
-        lines += _emd_lines(spec.emd)
-    if spec.xrd.enabled:
-        lines += _xrd_lines(spec.xrd)
-    if spec.pato:
+    # PATO replaces the density matrix for everything written after it, until
+    # PSCF restores the SCF one (manual §14.13 and PSCF). With a grid asked for,
+    # it goes directly before the grids — so ECH3 and POT3 sample the density of
+    # non-interacting atoms, the reference a deformation density is taken
+    # against — and PSCF follows them, so the properties after the grids are
+    # still computed from the SCF density rather than silently from the atoms.
+    grids = spec.charge_density.enabled or spec.potential.enabled
+    pato_first = spec.pato and grids
+    if pato_first:
         lines += ["PATO", "0 0"]
+    if spec.charge_density.enabled:
+        lines += _grid_lines("ECH3", spec.charge_density, False, structure)
+    if spec.potential.enabled:
+        lines += _grid_lines("POT3", spec.potential, True, structure)
+    after: List[str] = []
+    if spec.emd.enabled:
+        after += _emd_lines(spec.emd)
+    if spec.xrd.enabled:
+        after += _xrd_lines(spec.xrd)
+    if spec.pato and not grids:
+        after += ["PATO", "0 0"]
     if spec.ppan:
-        lines.append("PPAN")
-    lines += [line.strip() for line in spec.extra_keywords.splitlines() if line.strip()]
+        after.append("PPAN")
+    after += [line.strip() for line in spec.extra_keywords.splitlines() if line.strip()]
+    if pato_first and after:
+        lines.append("PSCF")
+    lines += after
     lines.append("END")
     return "\n".join(lines) + "\n"
 
 
-def _grid_lines(keyword: str, opts: Grid3DOptions, tolerance: bool) -> List[str]:
-    """ECH3/POT3: the keyword, the point count, and POT3's tolerance."""
+def _grid_lines(keyword: str, opts: Grid3DOptions, tolerance: bool,
+                structure: Structure) -> List[str]:
+    """ECH3/POT3: the keyword, the point count, POT3's tolerance, the extents.
+
+    The grid is laid over the primitive cell, so a bulk needs nothing further.
+    Every direction the lattice does not bound needs one, and the manual asks
+    for them in one record per bound, lowest first.
+    """
     if opts.points < 2:
         raise PropertiesInputError(
             f"{keyword} needs at least 2 points along the first lattice vector."
@@ -540,7 +572,34 @@ def _grid_lines(keyword: str, opts: Grid3DOptions, tolerance: bool) -> List[str]
     lines = [keyword, str(int(opts.points))]
     if tolerance:
         lines.append(str(int(opts.tolerance)))
-    return lines
+    return lines + _extent_lines(keyword, opts, _unbounded_directions(structure))
+
+
+def _unbounded_directions(structure: Structure) -> int:
+    """How many directions the lattice does not bound: 0 bulk, 1 slab, 3 molecule."""
+    return 3 - int(np.count_nonzero(np.asarray(structure.pbc)))
+
+
+def _extent_lines(keyword: str, opts: Grid3DOptions, free: int) -> List[str]:
+    """The SCALE or RANGE record ECH3/POT3 needs for a non-periodic direction."""
+    if free <= 0:
+        return []
+    if opts.bounds is not None:
+        low, high = (float(v) for v in opts.bounds)
+        if high <= low:
+            raise PropertiesInputError(
+                f"{keyword}'s range is empty: its lower bound must be below its "
+                "upper one."
+            )
+        return ["RANGE",
+                " ".join(f"{low:.6g}" for _ in range(free)),
+                " ".join(f"{high:.6g}" for _ in range(free))]
+    if opts.scale <= 0.0:
+        raise PropertiesInputError(
+            f"{keyword}'s scale must be positive — it multiplies the extent of "
+            "the atomic coordinates."
+        )
+    return ["SCALE", " ".join(f"{float(opts.scale):.6g}" for _ in range(free))]
 
 
 def _coop_lines(opts: CoopOptions) -> List[str]:

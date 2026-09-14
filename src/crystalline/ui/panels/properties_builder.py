@@ -18,6 +18,7 @@ from typing import Optional
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -187,6 +188,54 @@ class PropertiesBuilderDialog(QDialog):
         layout.addStretch(1)
         return _scrollable(layout)
 
+    # ── the grid's extent along directions the lattice does not bound ────
+    def _extent_box(self) -> QWidget:
+        """How far ECH3 and POT3 sample along a slab's or a molecule's open axes.
+
+        One group for both, because the two keywords define the same grid: a
+        deck asking for the charge density and the potential over two different
+        boxes could not paint one onto the other. Hidden for a bulk, where the
+        cell bounds every direction and the record must not be written at all.
+        """
+        box = QGroupBox("Grid extent along the open directions")
+        form = QFormLayout(box)
+        self._extent_mode = QComboBox()
+        self._extent_mode.addItem("Scale the atoms' own extent", "scale")
+        self._extent_mode.addItem("Explicit range", "range")
+        self._extent_scale = _float_spin(3.0, decimals=2)
+        self._extent_scale.setMinimum(0.1)
+        self._extent_low = _float_spin(-4.0, decimals=2)
+        self._extent_high = _float_spin(12.0, decimals=2)
+        form.addRow("Extent", self._extent_mode)
+        form.addRow("Scale", self._extent_scale)
+        form.addRow("Range (bohr)", _bohr_range_row(self._extent_low, self._extent_high))
+        note = _muted()
+        note.setText(
+            "A slab, a polymer or a molecule has directions the cell does not "
+            "bound, and ECH3 and POT3 need to be told how far to sample along "
+            "each of them."
+        )
+        form.addRow(note)
+
+        def _sync() -> None:
+            explicit = self._extent_mode.currentData() == "range"
+            form.labelForField(self._extent_scale).setVisible(not explicit)
+            self._extent_scale.setVisible(not explicit)
+            holder = self._extent_low.parentWidget()
+            form.labelForField(holder).setVisible(explicit)
+            holder.setVisible(explicit)
+
+        self._extent_mode.currentIndexChanged.connect(lambda _i: _sync())
+        _sync()
+        self._extents_box = box
+        return box
+
+    def _extents(self) -> dict:
+        """The extent arguments for a :class:`Grid3DOptions`."""
+        if self._extent_mode.currentData() == "range":
+            return {"bounds": (self._extent_low.value(), self._extent_high.value())}
+        return {"scale": self._extent_scale.value()}
+
     def _tab_density(self) -> QWidget:
         layout = _column()
 
@@ -206,6 +255,12 @@ class PropertiesBuilderDialog(QDialog):
         form.addRow("Tolerance (ITOL)", self._pot3_tol)
         layout.addWidget(potential)
         self._potential = potential
+
+        extents = self._extent_box()
+        layout.addWidget(extents)
+        # After it is in the layout: a widget shown while it is still parentless
+        # is shown as a window, and reparenting it then hides it again.
+        extents.setVisible(any(not periodic for periodic in self._structure.pbc))
 
         emd = _checkable("EMDL — electron momentum density")
         form = QFormLayout(emd)
@@ -273,7 +328,10 @@ class PropertiesBuilderDialog(QDialog):
         self._pato = QCheckBox("PATO — density of non-interacting atoms")
         self._pato.setToolTip(
             "Replaces the density matrix with a superposition of atomic "
-            "densities, so a following property is the promolecule reference."
+            "densities. With ECH3 or POT3 it is written before them, so the grids "
+            "hold the density of non-interacting atoms — the reference for a "
+            "deformation density — and PSCF restores the SCF density for "
+            "whatever follows."
         )
         layout.addWidget(self._pato)
 
@@ -356,10 +414,11 @@ class PropertiesBuilderDialog(QDialog):
                 wannier=self._orb_wannier.isChecked(),
             ),
             charge_density=Grid3DOptions(
-                enabled=self._density.isChecked(), points=self._ech3_points.value()),
+                enabled=self._density.isChecked(), points=self._ech3_points.value(),
+                **self._extents()),
             potential=Grid3DOptions(
                 enabled=self._potential.isChecked(), points=self._pot3_points.value(),
-                tolerance=self._pot3_tol.value()),
+                tolerance=self._pot3_tol.value(), **self._extents()),
             coop=CoopOptions(
                 enabled=self._coop.isChecked(),
                 hamiltonian=self._coop_hamiltonian.isChecked(),
@@ -449,6 +508,20 @@ def _muted() -> QLabel:
     label.setWordWrap(True)
     label.setStyleSheet("color: palette(mid);")
     return label
+
+
+def _bohr_range_row(low: QDoubleSpinBox, high: QDoubleSpinBox) -> QWidget:
+    """``low`` to ``high``, in bohr — the unit ECH3 and POT3 read extents in."""
+    row = QHBoxLayout()
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(low)
+    row.addWidget(QLabel("to"))
+    row.addWidget(high)
+    row.addWidget(QLabel("bohr"))
+    row.addStretch(1)
+    holder = QWidget()
+    holder.setLayout(row)
+    return holder
 
 
 def _range_row(low: QDoubleSpinBox, high: QDoubleSpinBox) -> QWidget:

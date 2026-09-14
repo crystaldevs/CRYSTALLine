@@ -431,7 +431,35 @@ def _classify(
     return SymmetryElement(AXIS, label, centre, noun, direction, order, False)
 
 
+def rich(text: str) -> str:
+    """A label as HTML, with real subscripts: ``C₂`` -> ``C<sub>2</sub>``.
+
+    Unicode carries a subscript for every digit, and for h and v, which is why
+    the labels themselves can be plain strings — they read correctly in a deck,
+    in a file name and in a terminal. It carries none for d, so σd is the one
+    symbol that cannot be written that way, and a widget that can draw rich text
+    is given this instead.
+    """
+    from html import escape
+
+    out: List[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] in _PLAIN_OF:
+            run = ""
+            while index < len(text) and text[index] in _PLAIN_OF:
+                run += _PLAIN_OF[text[index]]
+                index += 1
+            out.append(f"<sub>{run}</sub>")
+            continue
+        out.append(escape(text[index]))
+        index += 1
+    return "".join(out).replace("σd", "σ<sub>d</sub>")
+
+
 _SUBSCRIPTS = "₀₁₂₃₄₅₆₇₈₉"
+# The subscripts that exist, read back: what rich() turns into <sub>…</sub>.
+_PLAIN_OF = {**{sub: str(n) for n, sub in enumerate("₀₁₂₃₄₅₆₇₈₉")}, "ₕ": "h", "ᵥ": "v"}
 
 
 def _subscript(number: int) -> str:

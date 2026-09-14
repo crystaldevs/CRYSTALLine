@@ -605,3 +605,139 @@ def test_an_edited_path_survives_a_refresh():
     shortened = dialog._path_editor._list.count()
     dialog._refresh()
     assert dialog._path_editor._list.count() == shortened
+
+
+# ── ECH3 / POT3 extents (manual §14.8, §14.14) ────────────────────────────
+def _slab() -> Structure:
+    """A two-layer MgO (001) slab: periodic in x and y, open along z."""
+    from ase.build import surface
+
+    return Structure.from_ase(surface(bulk("MgO", "rocksalt", a=4.21), (0, 0, 1), 2))
+
+
+def test_a_bulk_needs_no_extents_for_ech3():
+    """The grid is laid over the primitive cell, which bounds every direction."""
+    lines = _lines(PropertiesSpec(charge_density=Grid3DOptions(enabled=True, points=80)))
+    start = lines.index("ECH3")
+
+    assert lines[start + 1] == "80"
+    assert lines[start + 2] not in ("SCALE", "RANGE")
+
+
+def test_a_slab_says_how_far_to_sample_along_its_open_direction():
+    """Without this record CRYSTAL reads the *next* keyword's line as the
+    extent, so the deck is not merely imprecise — it is misparsed."""
+    lines = _lines(PropertiesSpec(charge_density=Grid3DOptions(enabled=True, points=80)),
+                   _slab())
+    start = lines.index("ECH3")
+
+    assert lines[start + 1] == "80"
+    assert lines[start + 2] == "SCALE"
+    assert lines[start + 3] == "3"          # one value: z alone is unbounded
+
+
+def test_a_molecule_gets_one_extent_for_each_of_its_three_directions():
+    from ase.build import molecule
+
+    water = Structure.from_ase(molecule("H2O"))
+    lines = build_properties_input(water, PropertiesSpec(
+        charge_density=Grid3DOptions(enabled=True, points=60))).splitlines()
+    start = lines.index("ECH3")
+
+    assert lines[start + 2] == "SCALE"
+    assert lines[start + 3].split() == ["3", "3", "3"]
+
+
+def test_an_explicit_range_is_written_as_two_records_lowest_first():
+    lines = _lines(PropertiesSpec(charge_density=Grid3DOptions(
+        enabled=True, points=80, bounds=(-4.0, 12.0))), _slab())
+    start = lines.index("ECH3")
+
+    assert lines[start + 2] == "RANGE"
+    assert lines[start + 3] == "-4"
+    assert lines[start + 4] == "12"
+
+
+def test_pot3_keeps_its_tolerance_before_the_extents():
+    """ITOL is record 2 of POT3; the extents follow it (manual §14.14)."""
+    lines = _lines(PropertiesSpec(potential=Grid3DOptions(
+        enabled=True, points=50, tolerance=7)), _slab())
+    start = lines.index("POT3")
+
+    assert lines[start + 1:start + 4] == ["50", "7", "SCALE"]
+
+
+def test_an_empty_range_is_refused_rather_than_written():
+    with pytest.raises(PropertiesInputError, match="range is empty"):
+        _lines(PropertiesSpec(charge_density=Grid3DOptions(
+            enabled=True, bounds=(5.0, 5.0))), _slab())
+
+
+def test_the_extent_controls_appear_only_when_a_direction_is_unbounded():
+    """A bulk must not be given the record at all — it is read as data."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    QApplication.instance() or QApplication([])
+    assert PropertiesBuilderDialog(_mgo())._extents_box.isHidden()
+    assert not PropertiesBuilderDialog(_slab())._extents_box.isHidden()
+
+
+def test_the_chosen_extent_reaches_both_ech3_and_pot3():
+    """The two keywords define the same grid, so they take the same box: a
+    potential sampled over a different box could not be painted onto a density."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui.panels.properties_builder import PropertiesBuilderDialog
+
+    QApplication.instance() or QApplication([])
+    dialog = PropertiesBuilderDialog(_slab())
+    dialog._density.setChecked(True)
+    dialog._potential.setChecked(True)
+    dialog._extent_mode.setCurrentIndex(dialog._extent_mode.findData("range"))
+    dialog._extent_low.setValue(-6.0)
+    dialog._extent_high.setValue(14.0)
+
+    spec = dialog.spec()
+
+    assert spec.charge_density.bounds == (-6.0, 14.0)
+    assert spec.potential.bounds == (-6.0, 14.0)
+
+
+# ── PATO with the grids ──────────────────────────────────────────────────
+def test_pato_comes_before_the_grids_so_they_hold_the_atoms_density():
+    """PATO replaces the density matrix for what follows it: written after
+    ECH3, the grid was the SCF density and PATO changed nothing drawn."""
+    lines = _lines(PropertiesSpec(pato=True,
+                                  charge_density=Grid3DOptions(enabled=True, points=60),
+                                  potential=Grid3DOptions(enabled=True, points=60)))
+
+    assert lines.index("PATO") < lines.index("ECH3") < lines.index("POT3")
+    assert lines[lines.index("PATO") + 1] == "0 0"
+
+
+def test_the_scf_density_is_restored_for_what_follows_the_grids():
+    """Otherwise the Mulliken populations and the XRD spectrum written after
+    the grids would quietly be those of non-interacting atoms."""
+    lines = _lines(PropertiesSpec(pato=True, ppan=True,
+                                  charge_density=Grid3DOptions(enabled=True, points=60),
+                                  xrd=XrdOptions(enabled=True)))
+
+    assert lines.index("ECH3") < lines.index("PSCF") < lines.index("XRDSPEC")
+    assert lines.index("PSCF") < lines.index("PPAN")
+
+
+def test_nothing_after_the_grids_needs_no_pscf():
+    lines = _lines(PropertiesSpec(pato=True,
+                                  charge_density=Grid3DOptions(enabled=True, points=60)))
+
+    assert "PSCF" not in lines
+    assert lines[-1] == "END"
+
+
+def test_without_a_grid_pato_keeps_its_place():
+    lines = _lines(PropertiesSpec(pato=True, ppan=True))
+
+    assert "PSCF" not in lines
+    assert lines.index("PATO") < lines.index("PPAN")
