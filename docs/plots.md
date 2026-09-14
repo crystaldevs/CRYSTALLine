@@ -143,88 +143,36 @@ keyword and draws the orbital in the 3D view rather than in the plot panel;
 
 ## Electron density and electrostatic potential
 
-**Plot → Electron density & potential…** draws the 3D grids written by a
-properties run with `ECH3` or `POT3`. Like an orbital, the field is drawn in
-the 3D view rather than in the plot panel; **Clear field** removes it.
+**Plot → Electron density & potential…** draws the grids written by `ECH3` and
+`POT3` over the structure, in the 3D view; **Clear field** removes them.
 
-**The files.** `DENS_CUBE.DAT` (charge density), `SPIN_CUBE.DAT` (spin
-density), `POT_CUBE.DAT` (electrostatic potential) and `fort.31`, which holds
-the same numbers in the DLV format. They are picked out by extension and
-recognised by what they contain, never by the rest of their name — CRYSTAL
-writes the property on a cube's first line, and that is what is read, so renamed
-files such as `mgo_pot3.cube` are recognised all the same. They are looked for in the folder of the open output —
-see [working in the calculation's
-folder](first-steps.md#working-in-the-calculations-folder). A run that wrote
-both a density and a potential opens with the density chosen and the potential
-ready as the second field.
+::::{grid} 1 1 2 2
+:gutter: 3
 
-**What is drawn.** CRYSTAL samples the property over the primitive cell, with
-the grid running along the lattice vectors — so in a hexagonal or a triclinic
-cell the grid is not a box, and it is drawn as the sheared grid it is, with no
-resampling in between. Values are left in the atomic units the files are
-written in: electrons per bohr³ for a density, hartree per electron for a
+:::{grid-item}
+```{image} dialog-density.png
+:alt: The electron density and potential dialog
+:class: crystal-framed
+```
+:::
+
+:::{grid-item}
+```{image} plot-density.png
+:alt: The charge density of urea coloured by its electrostatic potential
+:class: crystal-framed
+```
++++
+Urea: the charge density at 0.058 e/bohr³, coloured by the electrostatic
 potential.
+:::
 
-**Isosurface** draws a surface of constant value. The slider opens on the level
-that wraps the densest fifth of the cell, which comes out of the drawn atoms
-whatever the system is: the hexagonal shells of beryllium, the oxide ion
-dwarfing its cation in MgO, silicon's bonds, a molecular envelope around each
-urea. A field that takes both signs — a spin density, a potential, a difference
-— is drawn as two surfaces, one per sign.
+::::
 
-**Clip to the cell** cuts the surfaces at the faces of the outlined cell;
-left off, they are drawn whole around every atom on screen.
-
-The field is lattice-periodic, so it is drawn in every cell the atoms on screen
-occupy, and only the parts of it that an atom lies against are kept. A crystal's
-density fills space, but a view holds only the atoms that were asked for, and
-density around the others reads as the field being in the wrong place.
-
-**Lattice plane (hkl)** draws the field on a plane named by its Miller indices,
-which refer to the conventional cell — MgO's (001) is the familiar layer of
-alternating Mg and O. **Position** moves the plane along its normal as a fraction
-of the interplanar spacing d(hkl): 0 passes through the cell origin, and the
-dialog shows d and the plane's distance from the origin. The plane is laid out
-as a rectangle over everything on screen and coloured by the field, on a
-logarithmic scale by default: a density runs over four orders of magnitude
-between a void and a nucleus, and on a linear scale everything but the cores is
-one colour. The colour range is set by the bulk of the plane rather than by the
-few points on the nuclei.
-
-With **Cut away the crystal in front of the plane**, the atoms, bonds and cell
-edges on the near side are not drawn, and the camera turns to face the plane, so
-that it is not buried inside the crystal. Atoms lying in the plane are marked by
-small dots in their element colours — every atom of the crystal on the plane, not
-only the ones drawn. The cutaway only changes what is drawn: the structure
-itself, and what can be selected or measured, are untouched. To cut away the
-other side, change the sign of the indices.
-
-**Show a colour bar** keys the colour map with a bar at the right of the view,
-headed with the quantity and its unit — and with log₁₀ when a plane is coloured
-on the logarithmic scale, since its numbers are then exponents. It is offered for
-a plane and for a surface coloured by a second field; a plain surface has a
-single colour and nothing to key.
-
-**A second field** gives the two pictures that need two grids:
-
-- *Colour the surface by a second field* paints the electrostatic potential
-  onto the density surface — the surface says where the electrons end, the
-  colour what a charge would feel there.
-- *Subtract a second field* draws the difference of two grids: a deformation
-  density, or one calculation against another. For a deformation density, run
-  the properties deck twice — once as it is, once with **PATO** ticked — and
-  subtract the second density from the first. Both runs write
-  `DENS_CUBE.DAT`, so rename one of them in between; the property each cube
-  holds is read from its content, not its name. The
-  difference takes both signs, so it is drawn with two surfaces.
-
-  Both need the two runs to share a grid — the same cell, the same number of
-  points and the same extents — and the dialog says so when they do not.
-
-The field follows the atoms on screen: it is drawn around every atom, in
-whichever periodic image the atom lies, and pieces of it around atoms that are
-not drawn are left out. To see more of it, build a supercell.
-
-The grids come from a `.d3` deck with `ECH3` or `POT3`, which the [properties
-input builder](inputs.md#charge-density-and-electrostatic-potential-on-a-grid)
-writes.
+The CUBE files and `fort.31` are found in the folder of the open output and
+recognised by their content, with the grids of the open structure offered
+first. A field is drawn either as an **isosurface**, which opens at a level that
+clears the drawn atoms, or on a **lattice plane** given by its Miller indices in
+the conventional cell; the crystal in front of the plane is cut away and the
+atoms lying in it are marked. A colour bar can be added.
+A **second field** either colours the surface — the potential on the density,
+as above — or is subtracted from the first. 

@@ -30,8 +30,13 @@ _TWEAKED = RenderSettings(
     show_bonds=False,
     bond_radius=0.2,
     bond_tolerance=1.4,
+    bond_color="#abcdef",
     show_hydrogen_bonds=False,
+    hydrogen_bond_color="#fedcba",
+    hydrogen_bond_width=3.5,
     show_cell=False,
+    cell_color="#aa00aa",
+    cell_line_width=4.0,
     show_lattice_vectors=False,
     show_adp_ellipsoids=True,
     adp_probability=0.9,
@@ -42,9 +47,11 @@ _TWEAKED = RenderSettings(
     mode_arrow_color="#00ff00",
     show_atom_labels=True,
     atom_label_size=22,
+    atom_label_color="#0000ff",
     show_polyhedra=False,
     polyhedra_opacity=0.8,
     polyhedra_min_vertices=6,
+    polyhedra_edge_width=3.0,
     measure_point_color="#111111",
     measure_line_color="#222222",
     measure_plane_color="#333333",
@@ -253,9 +260,8 @@ def test_checkboxes_carry_their_own_text(qapp):
 
     panel = ds.DisplayPanel(RenderSettings(), lambda s: None)
 
-    assert panel._show_bonds.text() == "Show bonds"
-    assert panel._show_hbonds.text() == "Show hydrogen bonds"
-    assert panel._show_cell.text() == "Cell edges"
+    assert panel._show_hbonds.text() == "Hydrogen bonds"
+    assert panel._show_labels.text() == "Element labels"
 
 
 def test_the_panel_never_scrolls_sideways(qapp):
@@ -293,32 +299,141 @@ def test_a_section_title_is_shown_as_written(qapp):
 
     # A QToolButton renders "&&" as one "&" and a lone "&" as an underline.
     shown = [button.text().replace("&&", "&") for button in headers]
-    assert "CELL & AXES" in shown
+    assert "MEASUREMENTS & SYMMETRY" in shown
     assert not any(header.count("&") != header.count("&&") * 2
                    for header in (b.text() for b in headers))
 
 
 def test_sections_fold_and_unfold(qapp):
-    """The Display panel has eleven sections; everything the renderer can be told,
-    all at once, is a wall rather than a panel."""
+    """Every section starts folded: the panel opens as a short list of the things
+    in the view, each a click away from its settings. Three open sections used
+    to make it a wall of controls before anything had been asked for."""
     from PySide6.QtWidgets import QToolButton
 
     from crystalline.ui.panels.display_settings import DisplayPanel
 
     panel = DisplayPanel(RenderSettings(), lambda s: None)
     headers = {
-        button.text(): button for button in panel.findChildren(QToolButton)
+        button.text().replace("&&", "&"): button for button in panel.findChildren(QToolButton)
         if button.property("role") == "section"
     }
 
-    # the ones a session usually needs are open; the rest start folded
-    assert headers["ATOMS"].isChecked()
-    assert headers["BONDS"].isChecked()
-    assert not headers["POINT SYMMETRY"].isChecked()
-    assert not headers["SCENE"].isChecked()
+    assert headers and not any(button.isChecked() for button in headers.values())
+    assert list(headers) == ["ATOMS", "BONDS", "UNIT CELL", "COORDINATION POLYHEDRA",
+                             "THERMAL ELLIPSOIDS", "PHONON ARROWS",
+                             "MEASUREMENTS & SYMMETRY", "VIEW"]
 
-    symmetry = headers["POINT SYMMETRY"]
-    symmetry.setChecked(True)
-    assert symmetry.arrowType() == Qt.DownArrow
-    symmetry.setChecked(False)
-    assert symmetry.arrowType() == Qt.RightArrow
+    view = headers["VIEW"]
+    view.setChecked(True)
+    assert view.arrowType() == Qt.DownArrow
+    view.setChecked(False)
+    assert view.arrowType() == Qt.RightArrow
+
+
+def test_what_can_be_hidden_is_switched_from_its_folded_header(qapp):
+    """With every section folded, a "Show bonds" inside the section was out of
+    sight; the switch on the header needs no unfolding."""
+    emitted = []
+    panel = DisplayPanel(RenderSettings(), emitted.append)
+
+    for box, field in ((panel._show_bonds, "show_bonds"), (panel._show_cell, "show_cell"),
+                       (panel._show_poly, "show_polyhedra"),
+                       (panel._show_arrows, "show_mode_arrows")):
+        assert not box.text() and box.toolTip()          # a bare switch, explained
+        assert box.isVisibleTo(panel) or not panel.isVisible()
+        box.setChecked(not box.isChecked())
+        assert getattr(emitted[-1], field) == box.isChecked()
+
+
+def test_the_cell_bonds_and_labels_can_be_restyled(qapp):
+    """They were drawn in fixed colours and widths no control reached."""
+    emitted = []
+    panel = DisplayPanel(RenderSettings(), emitted.append)
+
+    panel._cell_width.setValue(4.5)
+    panel._emit()
+
+    assert emitted[-1].cell_line_width == 4.5
+    for attr in ("_cell_color", "_bond_color", "_hbond_color", "_atom_label_color"):
+        assert attr in panel._color_buttons
+
+
+def test_label_colour_follows_the_background_until_one_is_chosen(qapp):
+    """A fixed near-black was unreadable on the dark ground of the dark theme."""
+    from crystalline.viz.renderer import _readable_on
+
+    panel = DisplayPanel(RenderSettings(), lambda s: None)
+    swatch = panel._color_buttons["_atom_label_color"]
+
+    panel.set_background("#15181c")
+    assert panel._atom_label_color == ""                       # still automatic
+    assert _readable_on("#15181c") in swatch.styleSheet()      # and shown as white
+
+
+def test_reset_restores_the_defaults_but_keeps_the_background(qapp):
+    """The background follows the app's light or dark appearance; a reset that
+    turned a dark viewport white would read as a fault."""
+    emitted = []
+    panel = DisplayPanel(_TWEAKED, emitted.append)
+
+    panel.reset()
+
+    expected = RenderSettings()
+    for field in fields(RenderSettings):
+        if field.name in ("background_color", "adp_temperature_index", "show_adp_ellipsoids"):
+            continue
+        assert getattr(emitted[-1], field.name) == getattr(expected, field.name), field.name
+    assert emitted[-1].background_color == _TWEAKED.background_color
+
+
+def test_new_appearance_settings_reach_the_actors_without_a_rebuild():
+    pv = pytest.importorskip("pyvista")
+    from dataclasses import replace
+
+    import numpy as np
+    from ase.build import bulk
+
+    from crystalline.core.structure import Structure
+    from crystalline.viz.renderer import StructureRenderer
+
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        renderer = StructureRenderer(plotter)
+        renderer.set_settings(replace(RenderSettings(), show_atom_labels=True,
+                                      background_color="#15181c"))
+        renderer.set_structure(Structure.from_ase(bulk("MgO", "rocksalt", a=4.21, cubic=True)))
+        rebuilds = []
+        original = renderer._rebuild
+        renderer._rebuild = lambda: (rebuilds.append(1), original())
+
+        renderer.set_settings(replace(renderer.settings, cell_color="#ff0000",
+                                      cell_line_width=5.0, bond_color="#00ff00"))
+
+        assert rebuilds == []
+        assert np.allclose(renderer._cell_actor.GetProperty().GetColor(), (1, 0, 0))
+        assert renderer._cell_actor.GetProperty().GetLineWidth() == 5.0
+        assert np.allclose(renderer._bond_actor.GetProperty().GetColor(), (0, 1, 0))
+        labels = renderer._label_actor.GetMapper().GetInputAlgorithm().GetTextProperty()
+        assert np.allclose(labels.GetColor(), (1, 1, 1))          # white on the dark ground
+
+        renderer.set_settings(replace(renderer.settings, background_color="white"))
+        assert np.allclose(labels.GetColor(), (0, 0, 0))          # and black on a light one
+    finally:
+        plotter.close()
+
+
+def test_reset_sits_in_a_footer_that_does_not_scroll_away(qapp):
+    from PySide6.QtWidgets import QScrollArea
+
+    panel = DisplayPanel(RenderSettings(), lambda s: None)
+    scroll = panel.findChild(QScrollArea)
+
+    assert not scroll.widget().isAncestorOf(panel._reset_button)
+    assert panel.isAncestorOf(panel._reset_button)
+
+
+def test_the_projection_is_named_orthographic(qapp):
+    panel = DisplayPanel(RenderSettings(), lambda s: None)
+
+    assert [panel._projection.itemText(i) for i in range(panel._projection.count())] == [
+        "Perspective", "Orthographic"]

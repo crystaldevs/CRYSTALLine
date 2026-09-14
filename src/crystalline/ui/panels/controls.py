@@ -15,6 +15,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDoubleSpinBox,
     QGridLayout,
     QHBoxLayout,
@@ -54,8 +55,18 @@ class _Section:
     scanned — and the state is per-section, so what someone opens stays open.
     """
 
-    def __init__(self, parent: QVBoxLayout, title: str, collapsed: bool = False) -> None:
+    def __init__(self, parent: QVBoxLayout, title: str, collapsed: bool = False,
+                 switch: Optional[str] = None) -> None:
+        """``switch``, when given, puts an on/off checkbox at the right of the
+        header, with that text as its tooltip.
+
+        For a section that is about one thing in the view — the bonds, the cell —
+        whether it is shown is the first thing anyone wants and the only thing
+        most people change. Inside the section it was a click to unfold away,
+        and with every section folded, out of sight entirely.
+        """
         self._parent = parent
+        self.switch: Optional[QCheckBox] = None
         self.header = QToolButton()
         # "&" in a button's text is a mnemonic, so "Cell & axes" would draw as
         # "Cell _axes" — the same trap the group-box title fell into. Doubling it
@@ -71,7 +82,20 @@ class _Section:
         self.header.toggled.connect(self._on_toggled)
 
         parent.addSpacing(_SECTION_SPACING)
-        parent.addWidget(self.header)
+        if switch is None:
+            parent.addWidget(self.header)
+        else:
+            self.switch = QCheckBox()
+            self.switch.setToolTip(switch)
+            self.switch.setAccessibleName(switch)
+            self.switch.setCursor(Qt.PointingHandCursor)
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 0)
+            line.setSpacing(6)
+            line.addWidget(self.header, 1)
+            line.addWidget(self.switch, 0, Qt.AlignRight | Qt.AlignVCenter)
+            parent.addWidget(row)
 
         # The rows live in a container so the whole section can be hidden at
         # once — a layout cannot be hidden, only the widgets in it.

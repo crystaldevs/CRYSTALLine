@@ -61,6 +61,14 @@ _SLIDER_SETTLE_MS = 60
 _SWATCH_SIZE = 20
 
 
+def _subheading(text: str) -> QLabel:
+    """A quiet label splitting one section into two groups of rows."""
+    label = QLabel(text)
+    label.setProperty("role", "subheading")
+    label.setStyleSheet("color: palette(mid); margin-top: 6px;")
+    return label
+
+
 def _closest_index(values, target: float) -> int:
     """The entry of ``values`` nearest ``target`` — settings needn't be exact."""
     return min(range(len(values)), key=lambda i: abs(values[i] - target))
@@ -126,49 +134,68 @@ class DisplayPanel(QWidget):
         layout.setContentsMargins(14, 4, 14, 18)
         layout.setSpacing(0)  # sections space themselves, so the rhythm is theirs
 
-        # ── Atoms ──
-        atoms = self._group(layout, "Atoms")
+        # Every section starts folded: the panel opens as a short list of the
+        # things in the view, each a click from its settings. The things that
+        # can be shown or hidden carry that switch on their header, so the
+        # commonest change of all needs no unfolding.
+
+        # ── Atoms ── (always drawn: no switch)
+        atoms = self._group(layout, "Atoms", collapsed=True)
         self._atom_scale = self._float_row(atoms, "Size", settings.atom_scale, 0.1, 2.0, 0.05)
         self._atom_opacity = self._float_row(atoms, "Opacity", settings.atom_opacity, 0.05, 1.0, 0.05)
         self._show_labels = self._check(atoms, "Element labels", settings.show_atom_labels)
         self._label_size = self._int_row(atoms, "Label size", settings.atom_label_size, 6, 40)
-
-        # ── Element colours (per-element swatches; populated per structure) ──
-        elements = self._group(layout, "Element colours", collapsed=True)
-        self._elem_grid = elements.grid
-        self._elem_section = elements
-        self._elem_first_row = elements._row
+        self._atom_label_color = settings.atom_label_color
+        self._color_row(atoms, "Label colour", "_atom_label_color")
+        # Per-element swatches, filled in per structure below a subheading.
+        atoms.add_wide(_subheading("Element colours"))
+        self._elem_grid = atoms.grid
+        self._elem_section = atoms
+        self._elem_first_row = atoms._row
         self._elem_hint = QLabel("Load a structure to recolour its elements.")
         self._elem_hint.setEnabled(False)
-        elements.append(self._elem_hint)
-        reset_btn = QPushButton("Reset to default colours")
+        atoms.append(self._elem_hint)
+        reset_btn = QPushButton("Reset element colours")
         reset_btn.clicked.connect(self._reset_element_colors)
-        elements.append(_left(reset_btn))
+        atoms.append(_left(reset_btn))
 
         # ── Bonds ──
-        bonds = self._group(layout, "Bonds")
-        self._show_bonds = self._check(bonds, "Show bonds", settings.show_bonds)
+        bonds = self._group(layout, "Bonds", collapsed=True, switch="Show bonds")
+        self._show_bonds = self._switch(bonds, settings.show_bonds)
         self._bond_radius = self._float_row(bonds, "Radius (Å)", settings.bond_radius, 0.02, 1.2, 0.02)
         self._bond_tol = self._float_row(bonds, "Tolerance", settings.bond_tolerance, 1.0, 2.0, 0.05)
-        self._show_hbonds = self._check(
-            bonds, "Show hydrogen bonds", settings.show_hydrogen_bonds
-        )
+        self._bond_tol.setToolTip("Two atoms are bonded when they are closer than this many\n"
+                                  "times the sum of their covalent radii.")
+        self._bond_color = settings.bond_color
+        self._color_row(bonds, "Colour", "_bond_color")
+        self._show_hbonds = self._check(bonds, "Hydrogen bonds", settings.show_hydrogen_bonds)
+        self._hbond_color = settings.hydrogen_bond_color
+        self._color_row(bonds, "H-bond colour", "_hbond_color")
+        self._hbond_width = self._float_row(
+            bonds, "H-bond width", settings.hydrogen_bond_width, 0.5, 6.0, 0.5)
 
-        # ── Cell & axes ──
-        cell = self._group(layout, "Cell & axes")
-        self._show_cell = self._check(cell, "Cell edges", settings.show_cell)
-        self._show_axes = self._check(cell, "a/b/c gizmo", settings.show_lattice_vectors)
-        self._show_orient = self._check(cell, "Orientation marker", settings.show_orientation_axes)
+        # ── Unit cell ──
+        cell = self._group(layout, "Unit cell", collapsed=True, switch="Show the cell edges")
+        self._show_cell = self._switch(cell, settings.show_cell)
+        self._cell_color = settings.cell_color
+        self._color_row(cell, "Colour", "_cell_color")
+        self._cell_width = self._float_row(cell, "Line width", settings.cell_line_width, 0.5, 6.0, 0.5)
 
         # ── Polyhedra ──
-        poly = self._group(layout, "Coordination polyhedra", collapsed=True)
-        self._show_poly = self._check(poly, "Show polyhedra", settings.show_polyhedra)
+        poly = self._group(layout, "Coordination polyhedra", collapsed=True,
+                           switch="Show coordination polyhedra")
+        self._show_poly = self._switch(poly, settings.show_polyhedra)
         self._poly_opacity = self._float_row(poly, "Opacity", settings.polyhedra_opacity, 0.05, 1.0, 0.05)
         self._poly_min = self._int_row(poly, "Min. coordination", settings.polyhedra_min_vertices, 3, 12)
+        self._poly_min.setToolTip("Only atoms with at least this many ligands get a polyhedron.")
+        self._poly_edge = self._float_row(
+            poly, "Edge width", settings.polyhedra_edge_width, 0.0, 6.0, 0.5)
+        self._poly_edge.setToolTip("0 draws the polyhedra without an outline.")
 
         # ── Thermal ellipsoids ── (ADP; only meaningful for a run that has them)
-        adp = self._group(layout, "Thermal ellipsoids (ADP)", collapsed=True)
-        self._show_adp = self._check(adp, "Show ellipsoids", settings.show_adp_ellipsoids)
+        adp = self._group(layout, "Thermal ellipsoids", collapsed=True,
+                          switch="Show thermal ellipsoids")
+        self._show_adp = self._switch(adp, settings.show_adp_ellipsoids)
         self._adp_temp = self._combo(adp, "Temperature", [], 0)
         self._adp_probability = self._combo(
             adp, "Probability",
@@ -184,10 +211,11 @@ class DisplayPanel(QWidget):
         self.set_adp_temperatures([])  # nothing loaded yet
 
         # ── Phonon arrows ── (the selected mode's eigenvector, drawn on the atoms)
-        arrows = self._group(layout, "Phonon displacement arrows", collapsed=True)
-        self._show_arrows = self._check(arrows, "Show arrows", settings.show_mode_arrows)
+        arrows = self._group(layout, "Phonon arrows", collapsed=True,
+                             switch="Show the selected mode's displacement arrows")
+        self._show_arrows = self._switch(arrows, settings.show_mode_arrows)
         self._arrow_scale = self._float_row(
-            arrows, "Arrow length (Å)", settings.mode_arrow_scale, 0.2, 5.0, 0.1
+            arrows, "Length (Å)", settings.mode_arrow_scale, 0.2, 5.0, 0.1
         )
         self._arrow_proportional = self._check(
             arrows, "Scale by displacement", settings.mode_arrow_proportional
@@ -209,32 +237,68 @@ class DisplayPanel(QWidget):
         )
         self._color_row(arrows, "Colour", "_mode_arrow_color")
 
-        # ── Measurements ── (Geometry panel overlays: dots, paths, plane patches)
-        measure = self._group(layout, "Measurements", collapsed=True)
-        self._color_row(measure, "Dots", "_measure_point_color")
-        self._color_row(measure, "Lines", "_measure_line_color")
-        self._color_row(measure, "Planes", "_measure_plane_color")
+        # ── Overlays ── (what the Geometry and Point symmetry panels draw)
+        overlays = self._group(layout, "Measurements & symmetry", collapsed=True)
+        overlays.add_wide(_subheading("Measurements"))
+        self._color_row(overlays, "Dots", "_measure_point_color")
+        self._color_row(overlays, "Lines", "_measure_line_color")
+        self._color_row(overlays, "Planes", "_measure_plane_color")
+        overlays.add_wide(_subheading("Point symmetry"))
+        self._color_row(overlays, "Rotation axes", "_symmetry_axis_color")
+        self._color_row(overlays, "Mirror planes", "_symmetry_plane_color")
+        self._color_row(overlays, "Inversion centre", "_symmetry_point_color")
 
-        # ── Point symmetry ── (Point symmetry panel overlays: axes, planes, centre)
-        symmetry = self._group(layout, "Point symmetry", collapsed=True)
-        self._color_row(symmetry, "Rotation axes", "_symmetry_axis_color")
-        self._color_row(symmetry, "Mirror planes", "_symmetry_plane_color")
-        self._color_row(symmetry, "Inversion centre", "_symmetry_point_color")
-
-        # ── Scene ──
-        scene = self._group(layout, "Scene", collapsed=True)
-        self._color_row(scene, "Background", "_bg_color")
+        # ── View ── (the scene around the structure)
+        view = self._group(layout, "View", collapsed=True)
+        self._color_row(view, "Background", "_bg_color")
         self._projection = self._combo(
-            scene, "Projection", ["Perspective", "Parallel (orthographic)"],
+            view, "Projection", ["Perspective", "Orthographic"],
             1 if settings.parallel_projection else 0,
         )
+        self._show_axes = self._check(view, "a/b/c axes", settings.show_lattice_vectors)
+        self._show_orient = self._check(view, "Orientation marker", settings.show_orientation_axes)
 
         layout.addStretch(1)
+
+        # A footer pinned below the scrolling sections, not a button after the
+        # last of them: it is about the whole panel rather than about View, and
+        # it stays in the same place however much is unfolded above it. Flat and
+        # quiet, since it is the one control nobody should press by accident.
+        footer = QWidget()
+        footer.setObjectName("displayFooter")
+        footer.setStyleSheet(
+            "#displayFooter { border-top: 1px solid palette(midlight); }"
+            "QPushButton#resetDefaults { border: none; background: transparent;"
+            " color: palette(mid); padding: 2px 4px; }"
+            "QPushButton#resetDefaults:hover { color: palette(text);"
+            " text-decoration: underline; }"
+        )
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(14, 6, 14, 8)
+        row.addStretch(1)
+        self._reset_button = QPushButton("Reset to defaults")
+        self._reset_button.setObjectName("resetDefaults")
+        self._reset_button.setFlat(True)
+        self._reset_button.setCursor(Qt.PointingHandCursor)
+        self._reset_button.setToolTip("Every setting back to its default. The background "
+                                      "keeps following the app's light or dark appearance.")
+        self._reset_button.clicked.connect(self.reset)
+        row.addWidget(self._reset_button)
+        outer.addWidget(footer)
+
         self._loading = False
 
     # ── section + widget builders (each wired to emit on change) ────────
-    def _group(self, layout: QVBoxLayout, title: str, collapsed: bool = False) -> _Section:
-        return _Section(layout, title, collapsed=collapsed)
+    def _group(self, layout: QVBoxLayout, title: str, collapsed: bool = False,
+               switch: Optional[str] = None) -> _Section:
+        return _Section(layout, title, collapsed=collapsed, switch=switch)
+
+    def _switch(self, section: _Section, value: bool) -> QCheckBox:
+        """The on/off checkbox on a section's header, wired like any other check."""
+        box = section.switch
+        box.setChecked(value)
+        box.toggled.connect(self._emit)
+        return box
 
     def _float_row(self, form, label, value, lo, hi, step) -> QDoubleSpinBox:
         """A slider + spin box bound together over ``[lo, hi]``."""
@@ -318,17 +382,29 @@ class DisplayPanel(QWidget):
         form.add(label, box)
         return box
 
+    def _shown_colour(self, attr: str) -> str:
+        """What a swatch shows: the colour, or for an automatic one, its effect."""
+        value = getattr(self, attr)
+        if value:
+            return value
+        from crystalline.viz.renderer import _readable_on
+
+        return _readable_on(self._bg_color)
+
     def _color_row(self, form, label, attr: str) -> QPushButton:
         """A swatch button that opens the colour picker; writes to ``self.<attr>``."""
         button = QPushButton()
-        self._paint_swatch(button, getattr(self, attr))
+        self._paint_swatch(button, self._shown_colour(attr))
+        if not getattr(self, attr):
+            button.setToolTip("Automatic: black or white, whichever reads on the "
+                              "background. Click to choose a colour.")
         button.clicked.connect(lambda: self._pick_color(button, attr))
         self._color_buttons[attr] = button
         form.add(label, _left(button))
         return button
 
     def _pick_color(self, button: QPushButton, attr: str) -> None:
-        current = QColor(getattr(self, attr))
+        current = QColor(self._shown_colour(attr))
         chosen = QColorDialog.getColor(current, self, "Choose colour")
         if chosen.isValid():
             setattr(self, attr, chosen.name())
@@ -405,6 +481,7 @@ class DisplayPanel(QWidget):
 
         available = bool(labels)
         self._adp_group.set_enabled(available)
+        self._show_adp.setEnabled(available)
         self._show_adp.setToolTip(
             "" if available else "This output has no ADP data (needs the ADP keyword)"
         )
@@ -428,7 +505,83 @@ class DisplayPanel(QWidget):
         button = self._color_buttons.get("_bg_color")
         if button is not None:
             self._paint_swatch(button, color)
+        self._repaint_automatic()
         self._emit()
+
+    def _repaint_automatic(self) -> None:
+        """Repaint the swatches whose colour follows the background."""
+        label = self._color_buttons.get("_atom_label_color")
+        if label is not None and not self._atom_label_color:
+            self._paint_swatch(label, self._shown_colour("_atom_label_color"))
+            label.setToolTip("Automatic: black or white, whichever reads on the "
+                             "background. Click to choose a colour.")
+
+    def reset(self) -> None:
+        """Every setting back to its default — except the background.
+
+        The background follows the app's light or dark appearance, and a reset
+        that turned a dark viewport white would read as a fault, not a default.
+        """
+        from dataclasses import replace
+
+        self.load(replace(RenderSettings(), background_color=self._bg_color))
+        self._emit()
+
+    def load(self, settings: RenderSettings) -> None:
+        """Show ``settings`` in every control, without emitting."""
+        self._loading = True
+        try:
+            for box, value in ((self._atom_scale, settings.atom_scale),
+                               (self._atom_opacity, settings.atom_opacity),
+                               (self._bond_radius, settings.bond_radius),
+                               (self._bond_tol, settings.bond_tolerance),
+                               (self._hbond_width, settings.hydrogen_bond_width),
+                               (self._cell_width, settings.cell_line_width),
+                               (self._poly_opacity, settings.polyhedra_opacity),
+                               (self._poly_edge, settings.polyhedra_edge_width),
+                               (self._adp_opacity, settings.adp_opacity),
+                               (self._arrow_scale, settings.mode_arrow_scale),
+                               (self._label_size, settings.atom_label_size),
+                               (self._poly_min, settings.polyhedra_min_vertices)):
+                box.setValue(value)
+            for check, value in ((self._show_labels, settings.show_atom_labels),
+                                 (self._show_bonds, settings.show_bonds),
+                                 (self._show_hbonds, settings.show_hydrogen_bonds),
+                                 (self._show_cell, settings.show_cell),
+                                 (self._show_poly, settings.show_polyhedra),
+                                 (self._show_adp, settings.show_adp_ellipsoids),
+                                 (self._show_arrows, settings.show_mode_arrows),
+                                 (self._arrow_proportional, settings.mode_arrow_proportional),
+                                 (self._arrow_phase_colors, settings.mode_arrow_phase_colors),
+                                 (self._show_axes, settings.show_lattice_vectors),
+                                 (self._show_orient, settings.show_orientation_axes)):
+                if check.isEnabled() or not value:
+                    check.setChecked(value)
+            self._adp_probability.setCurrentIndex(
+                _closest_index(_ADP_PROBABILITIES, settings.adp_probability))
+            self._projection.setCurrentIndex(1 if settings.parallel_projection else 0)
+            for attr, value in (("_bg_color", settings.background_color),
+                                ("_atom_label_color", settings.atom_label_color),
+                                ("_bond_color", settings.bond_color),
+                                ("_hbond_color", settings.hydrogen_bond_color),
+                                ("_cell_color", settings.cell_color),
+                                ("_mode_arrow_color", settings.mode_arrow_color),
+                                ("_measure_point_color", settings.measure_point_color),
+                                ("_measure_line_color", settings.measure_line_color),
+                                ("_measure_plane_color", settings.measure_plane_color),
+                                ("_symmetry_axis_color", settings.symmetry_axis_color),
+                                ("_symmetry_plane_color", settings.symmetry_plane_color),
+                                ("_symmetry_point_color", settings.symmetry_point_color)):
+                setattr(self, attr, value)
+                button = self._color_buttons.get(attr)
+                if button is not None:
+                    self._paint_swatch(button, self._shown_colour(attr))
+            self._repaint_automatic()
+            self._atom_colors = {int(z): c for z, c in settings.atom_colors}
+            for z, button in self._elem_buttons.items():
+                self._paint_swatch(button, self._atom_colors.get(z, _jmol_hex(z)))
+        finally:
+            self._loading = False
 
     def background(self) -> str:
         """The 3D ground currently set."""
@@ -492,16 +645,23 @@ class DisplayPanel(QWidget):
                 atom_colors=tuple(sorted((int(z), c) for z, c in self._atom_colors.items())),
                 show_atom_labels=self._show_labels.isChecked(),
                 atom_label_size=self._label_size.value(),
+                atom_label_color=self._atom_label_color,
                 show_bonds=self._show_bonds.isChecked(),
                 bond_radius=self._bond_radius.value(),
                 bond_tolerance=self._bond_tol.value(),
+                bond_color=self._bond_color,
                 show_hydrogen_bonds=self._show_hbonds.isChecked(),
+                hydrogen_bond_color=self._hbond_color,
+                hydrogen_bond_width=self._hbond_width.value(),
                 show_cell=self._show_cell.isChecked(),
+                cell_color=self._cell_color,
+                cell_line_width=self._cell_width.value(),
                 show_lattice_vectors=self._show_axes.isChecked(),
                 show_orientation_axes=self._show_orient.isChecked(),
                 show_polyhedra=self._show_poly.isChecked(),
                 polyhedra_opacity=self._poly_opacity.value(),
                 polyhedra_min_vertices=self._poly_min.value(),
+                polyhedra_edge_width=self._poly_edge.value(),
                 show_adp_ellipsoids=self._show_adp.isChecked(),
                 adp_probability=_ADP_PROBABILITIES[self._adp_probability.currentIndex()],
                 adp_opacity=self._adp_opacity.value(),

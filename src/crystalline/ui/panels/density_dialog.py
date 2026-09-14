@@ -358,8 +358,9 @@ class DensityDialog(QDialog):
         self.logarithmic.setVisible(not surface)
         self.cutaway.setVisible(not surface)
         # A slice takes its colours from the map, not from the two swatches.
-        _show(self._positive_row, surface)
-        _show(self._negative_row, surface and self._signed())
+        # Painted by a second field, the surface takes the map's colours too.
+        _show(self._positive_row, surface and not painting)
+        _show(self._negative_row, surface and not painting and self._signed())
         _show(self._cmap_row, not surface or painting)
         self.colour_bar.setVisible(not surface or painting)
         self._buttons.button(QDialogButtonBox.Ok).setEnabled(

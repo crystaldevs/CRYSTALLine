@@ -38,9 +38,6 @@ _ATOM_SCALE = 0.5
 
 # Covalent bonds are a single fixed grey (no per-bond colouring). Hydrogen bonds
 # are drawn as thin dashed light-blue lines, VESTA-style.
-_BOND_COLOR = "#888888"
-_HBOND_COLOR = "#4aa3df"
-_HBOND_LINE_WIDTH = 2.0
 _HBOND_DASH = 0.28   # Å: dash length
 _HBOND_GAP = 0.20    # Å: gap between dashes
 
@@ -74,7 +71,6 @@ _SYMMETRY_LABEL_INSET = 0.08
 # than this are real polyhedron edges (the rest are the hull's triangulation of
 # a flat face), drawn this wide in this fraction of the face colour.
 _POLYHEDRA_EDGE_ANGLE = 15.0
-_POLYHEDRA_EDGE_WIDTH = 1.5
 _POLYHEDRA_EDGE_SHADE = 0.55
 
 # Material for the atom spheres. The specular highlight is what makes small
@@ -185,6 +181,14 @@ _APPEARANCE_ONLY_SETTINGS = frozenset({
     "adp_opacity",
     "polyhedra_opacity",
     "mode_arrow_color",
+    # Colours and line widths of actors that exist already: set on their
+    # properties, never worth a rebuild.
+    "bond_color",
+    "hydrogen_bond_color",
+    "hydrogen_bond_width",
+    "cell_color",
+    "cell_line_width",
+    "atom_label_color",
     "background_color",
     "parallel_projection",
     # Both markers live in the corner widget, which _apply_scene_settings
@@ -346,6 +350,23 @@ class StructureRenderer:
             self._arrow_actor.GetProperty().SetColor(
                 *pv.Color(settings.mode_arrow_color).float_rgb
             )
+        for actor, colour in ((self._bond_actor, settings.bond_color),
+                              (self._hbond_actor, settings.hydrogen_bond_color),
+                              (self._cell_actor, settings.cell_color)):
+            if actor is not None:
+                actor.GetProperty().SetColor(*pv.Color(colour).float_rgb)
+        if self._hbond_actor is not None:
+            self._hbond_actor.GetProperty().SetLineWidth(settings.hydrogen_bond_width)
+        if self._cell_actor is not None:
+            self._cell_actor.GetProperty().SetLineWidth(settings.cell_line_width)
+        if self._label_actor is not None:
+            # The background is on this path too, and labels that follow it
+            # have to change with it.
+            try:
+                text = self._label_actor.GetMapper().GetInputAlgorithm().GetTextProperty()
+                text.SetColor(*pv.Color(self._label_colour()).float_rgb)
+            except Exception:  # noqa: BLE001 - labels are redrawn right on a rebuild
+                pass
 
     def set_bond_reference(self, positions: Optional[np.ndarray]) -> None:
         """Fix the bond network to the geometry at ``positions`` (``None`` clears).
@@ -817,7 +838,7 @@ class StructureRenderer:
         if mesh is None:
             return
         self._bond_actor = self.plotter.add_mesh(
-            mesh, color=_BOND_COLOR, smooth_shading=True, render=False
+            mesh, color=self._settings.bond_color, smooth_shading=True, render=False
         )
         self._bond_actor.SetPickable(False)  # only atoms are pick targets
 
@@ -860,7 +881,8 @@ class StructureRenderer:
         if mesh is None:
             return
         self._hbond_actor = self.plotter.add_mesh(
-            mesh, color=_HBOND_COLOR, line_width=_HBOND_LINE_WIDTH, render=False
+            mesh, color=self._settings.hydrogen_bond_color,
+            line_width=self._settings.hydrogen_bond_width, render=False
         )
         self._hbond_actor.SetPickable(False)  # not a pick target
 
@@ -903,7 +925,7 @@ class StructureRenderer:
             np.asarray(self._positions, dtype=float),
             symbols,
             font_size=int(self._settings.atom_label_size),
-            text_color="#202020",
+            text_color=self._label_colour(),
             show_points=False,
             shape=None,
             always_visible=True,
@@ -911,6 +933,10 @@ class StructureRenderer:
             render=False,
         )
         self._label_actor.SetPickable(False)  # text must never intercept picks
+
+    def _label_colour(self) -> str:
+        """The labels' colour: the one chosen, or whichever reads on the background."""
+        return self._settings.atom_label_color or _readable_on(self._settings.background_color)
 
     def _draw_polyhedra(self) -> None:
         """Draw coordination polyhedra (convex hull of each cation's ligands).
@@ -948,6 +974,8 @@ class StructureRenderer:
         real edges. They are drawn opaque, in a darkened shade of the face
         colour, and unlit so the outline stays an even weight from every angle.
         """
+        if self._settings.polyhedra_edge_width <= 0:
+            return  # no outline asked for
         edges = mesh.extract_feature_edges(
             feature_angle=_POLYHEDRA_EDGE_ANGLE,
             boundary_edges=False,  # closed hulls have none
@@ -963,7 +991,7 @@ class StructureRenderer:
             edges,
             scalars="colors" if "colors" in edges.point_data else None,
             rgb="colors" in edges.point_data,
-            line_width=_POLYHEDRA_EDGE_WIDTH,
+            line_width=self._settings.polyhedra_edge_width,
             lighting=False,
             render=False,
         )
@@ -1727,6 +1755,9 @@ class StructureRenderer:
         key = (
             numbers.tobytes(),
             np.round(positions, 4).tobytes(),
+            # The cell too: a strained lattice with the atoms left where they
+            # were changes every periodic neighbour, and was served from here.
+            np.round(np.asarray(analysis.cell, dtype=float), 4).tobytes(),
             int(min_vertices),
             round(float(self._settings.bond_tolerance), 4),
         )
@@ -1763,6 +1794,7 @@ class StructureRenderer:
 
         from crystalline.core.bonds import connectivity, replicate_polyhedra
 
+        analysis = _one_cell(analysis, self._reference_cell)
         found = self._coordination_polyhedra(analysis, min_vertices, connectivity)
         if not found:
             return None
@@ -1794,7 +1826,9 @@ class StructureRenderer:
         if not vectors:
             return
         edges = _cell_edges(vectors)
-        self._cell_actor = self.plotter.add_mesh(edges, color="#3355aa", line_width=2)
+        self._cell_actor = self.plotter.add_mesh(
+            edges, color=self._settings.cell_color, line_width=self._settings.cell_line_width
+        )
         self._cell_actor.SetPickable(False)
 
     # ── thermal ellipsoids (ADP) ────────────────────────────────────────
@@ -2943,13 +2977,47 @@ def _hull_mesh(polyhedra, overrides: Optional[dict] = None) -> Optional[pv.PolyD
     return merged.compute_normals(consistent_normals=True, auto_orient_normals=True, inplace=False)
 
 
+def _one_cell(analysis, unit_cell):
+    """``analysis`` folded to one unit cell when it is a clean supercell of it.
+
+    Coordination is periodic, so one cell's polyhedra replicated by lattice
+    vectors are the supercell's. Analysing the supercell instead cost CrystalNN
+    time in proportion to the number of cells and, past its size limit, handed
+    the job to the distance fallback — so the polyhedra could change just
+    because the supercell was made larger.
+
+    Only an exact supercell is folded: every atom of the fold has to appear once
+    per cell. A supercell edited in one tile is not periodic any more, and is
+    analysed as it is.
+    """
+    from crystalline.core.cells import to_analysis_cell
+
+    if unit_cell is None or analysis is None or not analysis.is_periodic:
+        return analysis
+    cell = np.asarray(unit_cell, dtype=float)
+    try:
+        ratio = abs(np.linalg.det(np.asarray(analysis.cell, dtype=float)) / np.linalg.det(cell))
+    except Exception:  # noqa: BLE001 - a degenerate cell cannot be folded
+        return analysis
+    cells = int(round(ratio))
+    if cells <= 1 or abs(ratio - cells) > 1e-3 or not np.all(analysis.pbc):
+        return analysis
+    try:
+        folded = to_analysis_cell(analysis, cell)
+    except Exception:  # noqa: BLE001 - analyse the supercell as it is
+        return analysis
+    if len(folded) * cells != len(analysis):
+        return analysis
+    return folded
+
+
 def _fallback_polyhedra(atoms, tolerance: float, min_vertices: int) -> list:
     """Distance-based coordination polyhedra (used when CrystalNN isn't available).
 
     Uses ``ase.neighbor_list`` (periodic, so ligands cross the cell boundary
     correctly) for each atom's neighbours, then keeps only the chemically
     sensible ones: a polyhedron is drawn around a **cation** centre using its
-    **anion** ligands — neighbours more electronegative than the centre. Without
+    **anion** ligands — see :func:`crystalline.core.bonds.is_ligand`. Without
     that filter, covalent radii spuriously bond big cations to each other (a Ca
     "coordinating" nearby Ca/Si), so the hull swallows other cations; the filter
     reproduces the cation–anion polyhedra CrystalNN would give.
@@ -2975,10 +3043,13 @@ def _fallback_polyhedra(atoms, tolerance: float, min_vertices: int) -> list:
     numbers = atoms.get_atomic_numbers()
     en = {int(z): _electronegativity(int(z)) for z in set(int(z) for z in numbers)}
 
-    # centre index -> list of anion ligand world positions (more electronegative)
+    from crystalline.core.bonds import is_ligand
+
+    # centre index -> list of ligand world positions, by the same rule CrystalNN's
+    # path uses, so the two cannot draw different polyhedra for one crystal
     ligands: dict = defaultdict(list)
     for a, b, d in zip(i, j, offset):
-        if en[int(numbers[b])] > en[int(numbers[a])]:  # ligand is the anion of the pair
+        if is_ligand(en[int(numbers[a])], en[int(numbers[b])]):
             ligands[int(a)].append(positions[a] + d)  # neighbour image = positions[a] + d
 
     polyhedra = []

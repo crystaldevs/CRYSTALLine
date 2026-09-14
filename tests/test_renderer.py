@@ -1286,3 +1286,75 @@ def test_turning_both_markers_off_empties_the_corner():
     renderer.set_settings(RenderSettings(show_lattice_vectors=False,
                                          show_orientation_axes=False))
     assert not renderer._orientation_widget.GetEnabled()
+
+
+# ── coordination polyhedra on a supercell ────────────────────────────────
+def _srtio3_supercell(n):
+    from ase.spacegroup import crystal
+
+    from crystalline.core.cells import tile_supercell
+
+    unit = Structure.from_ase(crystal(["Sr", "Ti", "O"], [(0, 0, 0), (.5, .5, .5), (.5, .5, 0)],
+                                      spacegroup=221, cellpar=[3.905] * 3 + [90] * 3))
+    tiled = tile_supercell(unit, (n, n, n))
+    return unit, (tiled[0] if isinstance(tiled, tuple) else tiled)
+
+
+def test_a_supercell_is_analysed_as_one_cell_so_its_size_changes_nothing(monkeypatch):
+    """Analysed whole, a 5x5x5 supercell passed CrystalNN's size limit and fell
+    to the distance fallback, and the polyhedra changed with the supercell."""
+    pytest.importorskip("pymatgen")
+    import crystalline.core.bonds as bonds
+    from crystalline.viz.renderer import _one_cell
+
+    unit, big = _srtio3_supercell(5)
+    analysed = []
+    real = bonds.connectivity
+    monkeypatch.setattr(bonds, "connectivity",
+                        lambda s, *a, **k: analysed.append(len(s)) or real(s, *a, **k))
+
+    folded = _one_cell(big, np.asarray(unit.cell))
+    renderer = _renderer_for_polyhedra()
+    found = renderer._coordination_polyhedra(folded, 4, bonds.connectivity)
+
+    assert len(folded) == len(unit)
+    assert analysed == [len(unit)]
+    assert {int(z): len(lig) for z, _c, lig in found} == {38: 12, 22: 6}
+
+
+def test_an_edited_supercell_is_not_folded():
+    """Not periodic any more: one tile differs from the others."""
+    from crystalline.viz.renderer import _one_cell
+
+    unit, big = _srtio3_supercell(2)
+    atoms = big.to_ase()
+    del atoms[0]
+    edited = Structure.from_ase(atoms)
+
+    assert len(_one_cell(edited, np.asarray(unit.cell))) == len(edited)
+
+
+def test_a_strained_cell_is_analysed_again_even_with_the_atoms_in_place():
+    """The cache was keyed on the positions alone."""
+    pytest.importorskip("pymatgen")
+    from crystalline.core.bonds import connectivity
+
+    unit, _big = _srtio3_supercell(1)
+    renderer = _renderer_for_polyhedra()
+    renderer._coordination_polyhedra(unit, 4, connectivity)
+    strained = unit.to_ase()
+    strained.set_cell(np.asarray(unit.cell) * 1.4, scale_atoms=False)
+    strained = Structure.from_ase(strained)
+
+    found = renderer._coordination_polyhedra(strained, 4, connectivity)
+
+    assert renderer._poly_cache_key[2] == np.round(np.asarray(strained.cell), 4).tobytes()
+    assert found is renderer._poly_cache_found
+
+
+def _renderer_for_polyhedra():
+    import pyvista as pv
+
+    from crystalline.viz.renderer import StructureRenderer
+
+    return StructureRenderer(pv.Plotter(off_screen=True))
