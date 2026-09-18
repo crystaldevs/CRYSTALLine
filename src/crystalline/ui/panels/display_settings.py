@@ -113,7 +113,8 @@ class DisplayPanel(QWidget):
         # Per-element colour overrides {Z: "#rrggbb"} and their swatch buttons.
         self._atom_colors: dict = {int(z): c for z, c in settings.atom_colors}
         self._elem_buttons: dict = {}
-        self._elem_rows: list = []  # grid rows the swatches occupy, cleared per structure
+        # The widgets the swatch rows are made of, removed when the structure changes.
+        self._elem_widgets: list = []
         self._color_buttons: dict = {}  # attribute name -> its swatch, for external sets
 
         # A scroll area keeps the (deliberately generous) set of controls usable
@@ -591,12 +592,18 @@ class DisplayPanel(QWidget):
     def set_elements(self, numbers) -> None:
         """Show a colour swatch per distinct element in the current structure."""
         zs = sorted({int(z) for z in numbers})
-        for row in self._elem_rows:
-            for column in range(2):
-                item = self._elem_grid.itemAtPosition(row, column)
-                if item is not None and item.widget() is not None:
-                    item.widget().setParent(None)
-        self._elem_rows = []
+        # Removed through the widgets we kept, never through the grid's layout
+        # items: reparenting a widget makes Qt delete its QWidgetItem, and
+        # PySide6 6.11 keeps a stale wrapper for an item fetched with
+        # itemAtPosition. The next object Qt allocates at that address — a list
+        # row in another panel — is then handed out as that wrapper, and
+        # destroying it segfaults. That crashed the app on almost every file
+        # load and cell switch.
+        for widget in self._elem_widgets:
+            self._elem_grid.removeWidget(widget)
+            widget.hide()
+            widget.deleteLater()
+        self._elem_widgets = []
         self._elem_buttons = {}
         self._elem_hint.setVisible(not zs)
         # Appended below the hint and the reset button, which keep their rows.
@@ -607,9 +614,10 @@ class DisplayPanel(QWidget):
             button.clicked.connect(lambda _c=False, zz=z, b=button: self._pick_element_color(zz, b))
             self._elem_buttons[z] = button
             caption = QLabel(chemical_symbols[z])
+            swatch = _left(button)
             self._elem_grid.addWidget(caption, row, 0, Qt.AlignLeft | Qt.AlignVCenter)
-            self._elem_grid.addWidget(_left(button), row, 1)
-            self._elem_rows.append(row)
+            self._elem_grid.addWidget(swatch, row, 1)
+            self._elem_widgets += [caption, swatch]
             row += 1
 
     def _pick_element_color(self, z: int, button: QPushButton) -> None:

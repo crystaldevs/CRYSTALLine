@@ -59,8 +59,8 @@ interactive view in the centre, the vibrational modes on the right.
    place. Modes computed away from Γ by a dispersion calculation are animated
    as travelling waves, and the cell can be tiled over one period. Animations
    are exported as GIF, as a sequence of frames, or as MP4, MOV and WebM.
-5. **Input preparation.** Input decks for CRYSTAL (`.d12`) and for its
-   properties program (`.d3`) are written from the structure on screen, with a
+5. **Input preparation.** Input decks for both CRYSTAL (`.d12`) and PROPERTIES 
+   (`.d3`) are written from the structure on screen, with a
    preview of the file before it is saved. The band path can be defined by
    clicking the points of the Brillouin zone.
 6. **Property plots.** Electronic band structures and densities of states, IR
