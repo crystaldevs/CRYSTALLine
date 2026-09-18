@@ -10,6 +10,17 @@ from crystalline.crystalio import density as D  # noqa: E402
 _PLOTTERS = []
 
 
+def _mesh(actor):
+    """The mesh an actor draws, as it reaches the mapper.
+
+    pyvista 0.49 splices a filter between a coloured mesh and its mapper that
+    only runs when the pipeline updates; before that the mapper's input is an
+    empty mesh. Updating first gives the same answer on every pyvista.
+    """
+    actor.mapper.Update()
+    return actor.mapper.dataset
+
+
 def _plotter():
     """An off-screen plotter that is closed when the test ends.
 
@@ -129,7 +140,7 @@ def test_a_supercell_shows_the_field_in_every_one_of_its_cells():
     renderer.set_density(field, D.DensityOptions(isovalue=0.5))
 
     assert len(renderer._density_actors) == 1
-    mesh = renderer._density_actors[0].mapper.dataset
+    mesh = _mesh(renderer._density_actors[0])
     assert len(mesh.split_bodies()) == 4
 
 
@@ -145,7 +156,7 @@ def test_a_potential_can_be_painted_onto_a_density_surface():
     renderer.set_density(field, D.DensityOptions(isovalue=0.5, colour_by=potential))
 
     assert len(renderer._density_actors) == 1
-    mesh = renderer._density_actors[0].mapper.dataset
+    mesh = _mesh(renderer._density_actors[0])
     painted = np.asarray(mesh.point_data["value"])
     assert painted.min() < 0.0 < painted.max()
 
@@ -200,7 +211,7 @@ def test_a_field_is_copied_onto_the_cell_an_atom_was_written_in():
     renderer._density_view = (field, D.DensityOptions(isovalue=0.4, clip_to_cell=False))
     renderer._draw_density()
 
-    centres = [np.asarray(a.mapper.dataset.points).mean(axis=0)
+    centres = [np.asarray(_mesh(a).points).mean(axis=0)
                for a in renderer._density_actors]
     assert any(np.allclose(c, stray, atol=0.1) for c in centres)
 
@@ -222,7 +233,7 @@ def test_no_surface_is_drawn_around_an_atom_that_is_not_on_screen():
 
     drawn = [np.asarray(body.points).mean(axis=0)
              for actor in renderer._density_actors
-             for body in actor.mapper.dataset.split_bodies()]
+             for body in _mesh(actor).split_bodies()]
     assert drawn
     for point in drawn:
         assert np.linalg.norm(renderer._positions - point, axis=1).min() < 1.0
@@ -328,7 +339,7 @@ def _slice_renderer(miller=(0, 0, 1), offset=0.0, cutaway=True):
 def _map(renderer):
     """The slice mesh itself — the actor carrying the field's values."""
     for actor in renderer._density_actors:
-        mesh = actor.mapper.dataset
+        mesh = _mesh(actor)
         if "value" in mesh.point_data:
             return mesh
     raise AssertionError("no map drawn")
@@ -405,8 +416,8 @@ def test_every_atom_on_the_map_is_marked_not_only_the_ones_drawn():
     """A map spans more than the cell box; a peak with a dot beside a peak
     without one reads as two different things."""
     renderer, cell = _slice_renderer(miller=(0, 0, 1), offset=0.0)
-    dots = [actor.mapper.dataset for actor in renderer._density_actors
-            if "value" not in actor.mapper.dataset.point_data]
+    dots = [_mesh(actor) for actor in renderer._density_actors
+            if "value" not in _mesh(actor).point_data]
 
     assert dots
     centres = [np.asarray(body.points).mean(axis=0) for body in dots[0].split_bodies()]
@@ -462,7 +473,7 @@ def test_atoms_on_the_corners_of_the_cell_get_one_whole_surface_each():
     renderer._density_view = (field, D.DensityOptions(isovalue=0.5))
     renderer._draw_density()
 
-    bodies = [b for a in renderer._density_actors for b in a.mapper.dataset.split_bodies()]
+    bodies = [b for a in renderer._density_actors for b in _mesh(a).split_bodies()]
     per_atom = []
     for atom in atoms:
         mine = [b for b in bodies if np.linalg.norm(np.asarray(b.points).mean(axis=0) - atom) < 0.1]

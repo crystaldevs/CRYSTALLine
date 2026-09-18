@@ -437,3 +437,45 @@ def test_the_projection_is_named_orthographic(qapp):
 
     assert [panel._projection.itemText(i) for i in range(panel._projection.count())] == [
         "Perspective", "Orthographic"]
+
+
+def test_changing_structure_replaces_the_element_swatches(qapp):
+    """Each structure gets its own swatches; the last one's are gone."""
+    from PySide6.QtWidgets import QLabel
+
+    panel = DisplayPanel(RenderSettings(), lambda s: None)
+    panel.set_elements([12, 8])
+    panel.set_elements([30, 8, 1])
+
+    grid = panel._elem_grid
+    captions = sorted(
+        grid.itemAt(i).widget().text() for i in range(grid.count())
+        if isinstance(grid.itemAt(i).widget(), QLabel)
+        and grid.itemAt(i).widget().text() in {"H", "O", "Mg", "Zn"}
+    )
+    assert captions == ["H", "O", "Zn"]
+    assert sorted(panel._elem_buttons) == [1, 8, 30]
+
+
+def test_rebuilding_the_swatches_leaves_no_stale_qt_wrappers(qapp):
+    """Rebuilding the swatches must not corrupt what PySide hands out elsewhere.
+
+    They used to be removed through ``itemAtPosition(...).widget()``. On
+    PySide6 6.11 that leaves a stale wrapper for the deleted layout item, so the
+    next Qt object allocated at the same address comes back as the wrong
+    Python type, and deleting it segfaults. That crashed the app on almost
+    every file load and cell switch (Python 3.14 installs pull in 6.11). On
+    6.11 this test crashed within a few rounds; on older PySide it just passes.
+    """
+    from PySide6.QtWidgets import QListWidget, QListWidgetItem
+
+    panel = DisplayPanel(RenderSettings(), lambda s: None)
+    rows = QListWidget()
+    for round_ in range(300):
+        panel.set_elements(range(1, 2 + round_ % 5))
+        rows.clear()
+        for i in range(30):
+            rows.addItem(QListWidgetItem(str(i)))
+        assert all(type(rows.item(i)) is QListWidgetItem for i in range(rows.count()))
+        if round_ % 20 == 0:
+            qapp.processEvents()
