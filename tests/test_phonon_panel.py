@@ -146,10 +146,6 @@ def test_switching_files_resets_the_filter_and_the_selection(qapp):
     assert panel.current_mode_index() == 0
 
 
-def _co_numbers() -> list:
-    return list(_structure().numbers)
-
-
 def _localised_on(atom: int) -> PhononMode:
     """A mode in which only ``atom`` of the two-atom C–O structure moves."""
     eigenvector = np.zeros((2, 3))

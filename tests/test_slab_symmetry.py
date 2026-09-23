@@ -314,8 +314,6 @@ def test_a_slab_whose_path_cannot_be_written_falls_back_to_its_own_points():
 
 
 def test_a_slab_whose_path_writes_keeps_it():
-    from ase.build import graphene
-
     from crystalline.core.properties_input import band_path_kind
 
     assert band_path_kind(_graphene()) == "standard"

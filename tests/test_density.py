@@ -185,7 +185,7 @@ def test_the_tutorials_own_file_names_are_read_correctly():
     """The case that exposed the name guessing, on the real files if present."""
     import os
 
-    base = "/Users/davidemitoli/QMMC2026/OneElectronProperties/output"
+    base = os.path.expanduser("~/QMMC2026/OneElectronProperties/output")
     if not os.path.isdir(base):
         pytest.skip("no QMMC output folder")
     assert D.read_field(os.path.join(base, "mgo_pot3.cube")).kind == D.POTENTIAL

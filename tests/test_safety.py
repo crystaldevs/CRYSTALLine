@@ -222,8 +222,13 @@ def test_the_app_s_own_overrides_are_guarded(qapp):
     }
     for owner, names in expected.items():
         for name in names:
-            fn = owner.__dict__.get(name)
-            assert fn is not None, f"{owner.__name__}.{name} is not defined here"
+            # Whatever Qt would call, wherever it is defined: an override
+            # inherited from a shared base (the overlays share one) is as
+            # guarded as one written out here, and Qt cannot tell them apart.
+            # An unguarded class is still caught — it inherits Qt's own
+            # implementation, which carries no ``__wrapped__``.
+            fn = getattr(owner, name, None)
+            assert fn is not None, f"{owner.__name__}.{name} is not defined at all"
             assert getattr(fn, "__wrapped__", None) is not None, (
                 f"{owner.__name__}.{name} is not guarded — an exception there "
                 f"segfaults the app rather than raising"

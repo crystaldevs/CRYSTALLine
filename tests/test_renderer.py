@@ -132,10 +132,6 @@ def test_a_non_periodic_structure_has_no_gizmo():
     assert renderer._lattice_marker() is None
 
 
-def _count_actors(renderer):
-    return len(list(renderer.plotter.renderer.actors))
-
-
 def test_settings_toggle_bonds_cell_and_polyhedra():
     nacl = Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64, cubic=True))
     renderer = StructureRenderer(pv.Plotter(off_screen=True))
@@ -1358,3 +1354,37 @@ def _renderer_for_polyhedra():
     from crystalline.viz.renderer import StructureRenderer
 
     return StructureRenderer(pv.Plotter(off_screen=True))
+
+
+def test_every_element_the_picker_offers_can_be_drawn():
+    """Adding an atom used to crash the viewport for Z >= 110.
+
+    ASE's Jmol colour table has 110 rows; the picker offers 118 elements, so
+    picking Ds, Rg, Cn, Nh, Fl, Mc, Lv, Ts or Og raised IndexError inside the
+    redraw — the app stopped drawing anything from then on.
+    """
+    from ase.data import chemical_symbols
+
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    for z in range(1, 119):
+        structure = Structure.from_ase(
+            Atoms(chemical_symbols[z] + "2", positions=[(0, 0, 0), (2.0, 0, 0)])
+        )
+        renderer.set_structure(structure)
+        assert renderer._atom_actor is not None, chemical_symbols[z]
+
+
+def test_an_atom_added_to_a_drawn_structure_reaches_the_viewport():
+    """The path that crashed: add an atom, and the renderer redraws on notice."""
+    from ase.data import chemical_symbols
+
+    structure = Structure.from_ase(bulk("Mo", "bcc", a=3.15, cubic=True))
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(structure)
+    structure.add_listener(lambda _s: renderer.refresh())
+
+    before = renderer._atom_mesh_obj.n_points
+    structure.add_atom("Rg", [1.5, 1.5, 1.5])  # Z = 111, no ASE colour
+
+    assert renderer._atom_mesh_obj.n_points > before
+    assert chemical_symbols[111] == "Rg"

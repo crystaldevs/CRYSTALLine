@@ -11,8 +11,6 @@ fight over the camera. The zone gets its own small viewport with its own view.
 
 from __future__ import annotations
 
-from functools import lru_cache
-from pathlib import Path
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -47,6 +45,7 @@ from crystalline.core.brillouin import (
 from crystalline.core.structure import Structure
 from crystalline.ui import menus, theme, wheel_zoom
 from crystalline.ui.safety import guard
+from crystalline.viz.fonts import unicode_font
 
 # Special points are halves, thirds, quarters, sixths and eighths, and every
 # one of those has a glyph of its own — which reads as the number it is rather
@@ -261,7 +260,7 @@ class ZonePickerDialog(QDialog):
 
         self._reset_button = QToolButton(bar)
         self._reset_button.setToolTip("Fit the whole zone, from the default view")
-        self._reset_button.setIcon(menus.reset_view_icon(bar))
+        self._reset_button.setIcon(menus.reset_view_icon())
         menus.style_chip(self._reset_button, "ghost")
         self._reset_button.clicked.connect(
             lambda _checked=False: self._look_along(None))
@@ -394,7 +393,7 @@ class ZonePickerDialog(QDialog):
             _billboard(plotter, anchor, _math_label(label),
                        self._label_colour(), 15)
         if self._guides.isChecked():
-            self._draw_guides(plotter, radius)
+            self._draw_guides(plotter)
         self._draw_axes(plotter)
         # pyvista refuses to enable a picker that is already enabled, so the
         # old one comes down first. A redraw is now rare — options and the
@@ -430,7 +429,7 @@ class ZonePickerDialog(QDialog):
         camera.SetPosition(*(np.asarray(camera.GetPosition(), dtype=float) - offset))
         plotter.renderer.ResetCameraClippingRange()
 
-    def _draw_guides(self, plotter, radius: float) -> None:
+    def _draw_guides(self, plotter) -> None:
         """Γ to every special point, dashed.
 
         These are the symmetry lines a zone diagram names Δ, Λ and Σ. They run
@@ -674,7 +673,7 @@ class ZonePickerDialog(QDialog):
         name = f"zone-legend-{slot}"
         plotter.add_text(text, position=(_LEGEND_X, _LEGEND_TOP - slot * 0.045),
                          viewport=True, font_size=12, color=colour,
-                         font_file=_unicode_font(), name=name, render=False)
+                         font_file=unicode_font(), name=name, render=False)
         actor = plotter.renderer.actors.get(name)
         if actor is not None:                     # right-align on the corner
             actor.GetTextProperty().SetJustificationToRight()
@@ -804,25 +803,6 @@ def _dashed_line(start, end, extent: float):
     if not points:
         return None
     return pv.PolyData(np.asarray(points), lines=np.asarray(lines))
-
-
-@lru_cache(maxsize=1)
-def _unicode_font() -> Optional[str]:
-    """A font file that actually has Γ, → and Å in it.
-
-    VTK's built-in font has none of them, and draws a missing glyph as nothing
-    at all — so a legend line reading "Γ → X  0.238 Å⁻¹" came out with holes
-    where its most important characters were. DejaVu Sans ships with
-    matplotlib, which is already a dependency.
-    """
-    try:
-        import matplotlib
-
-        path = (Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf"
-                / "DejaVuSans.ttf")
-        return str(path) if path.exists() else None
-    except Exception:  # noqa: BLE001 - the labels degrade, nothing breaks
-        return None
 
 
 def _billboard(plotter, position, text: str, colour: str, size: int):

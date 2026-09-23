@@ -17,6 +17,7 @@ from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from crystalline.ui.safety import guard
+from crystalline.ui.widgets.overlay import ParentOverlay
 
 # The dashed frame sits in from the edge so it reads as a target rather than as
 # a border on the viewport.
@@ -42,7 +43,7 @@ _TITLE_POINT_ADD = 2
 _LINE_GAP = 8
 
 
-class DropHint(QWidget):
+class DropHint(ParentOverlay):
     """A translucent "drop it here" panel over its parent (hidden by default)."""
 
     def __init__(self, parent: QWidget) -> None:
@@ -54,30 +55,15 @@ class DropHint(QWidget):
         # advertising, which reads as the drop silently failing.
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self.setAcceptDrops(False)
-        self.setVisible(False)
-        parent.installEventFilter(self)
 
     def show_hint(self, title: str, detail: str = "") -> None:
         """Put the panel up, naming what the drop would do."""
         self._title, self._detail = title, detail
-        self._fit()
-        self.raise_()
-        self.setVisible(True)
+        self._raise_over_parent()
         self.update()
 
     def hide_hint(self) -> None:
         self.setVisible(False)
-
-    @guard(False)
-    def eventFilter(self, obj, event):
-        if obj is self.parent() and event.type() in (event.Type.Resize, event.Type.Show):
-            self._fit()
-        return super().eventFilter(obj, event)
-
-    def _fit(self) -> None:
-        parent = self.parentWidget()
-        if parent is not None:
-            self.setGeometry(parent.rect())
 
     def _fonts(self):
         title = QFont(self.font())

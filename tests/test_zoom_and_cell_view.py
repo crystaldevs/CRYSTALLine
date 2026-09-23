@@ -234,7 +234,6 @@ def test_the_conventional_switch_is_a_single_on_off_control(qapp):
     """Two cells, each the negation of the other — a conv/prim pair spends two
     controls saying what one can."""
     from crystalline.core.cells import CellView
-    from crystalline.ui import menus
 
     class _Window:
         def __init__(self):

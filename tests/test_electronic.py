@@ -284,7 +284,7 @@ def test_text_files_rank_above_fort25_then_the_newest(tmp_path):
         path = tmp_path / name
         path.write_text(header + "\n")
         os.utime(path, (1e9 - age, 1e9 - age))
-    bands, doss = el.find_files(tmp_path, stem="si")
+    bands, doss = el.find_files(tmp_path)
     assert [os.path.basename(p) for p in bands] == [
         "other.BAND", "BAND.DAT", "si_band.BAND", "si_old.BAND",
         "si_band.f25", "looks_like_text.BAND"]
@@ -317,7 +317,7 @@ def test_a_properties_deck_is_found_by_extension_and_content_whatever_its_stem(t
 def test_a_folder_with_several_runs_offers_every_one():
     """Two band structures and two DOS here; the old finder, wanting exactly
     one of each, filled in neither."""
-    bands, doss = el.find_files(_MGO, stem="mgo")
+    bands, doss = el.find_files(_MGO)
     names = {os.path.basename(p) for p in bands + doss}
     assert {"mgo_band.BAND", "mgo_band_b3lyp.BAND",
             "mgo_doss_totalao.DOSS", "mgo_doss_partialao.DOSS"} <= names
@@ -523,11 +523,11 @@ def test_a_spin_down_dos_can_be_mirrored_or_drawn_alongside():
 
 
 # ── the dialog ────────────────────────────────────────────────────────────
-def _dialog(qapp, folder="", structure=None, stem="", state=None):
+def _dialog(qapp, folder="", structure=None, state=None):
     from crystalline.ui.panels.dialog_state import restore
     from crystalline.ui.panels.electronic_dialog import ElectronicDialog
 
-    dialog = ElectronicDialog(structure=structure, folder=folder, stem=stem)
+    dialog = ElectronicDialog(structure=structure, folder=folder)
     restore(dialog, state)
     dialog.show()
     qapp.processEvents()
@@ -554,7 +554,7 @@ def test_nothing_can_be_plotted_until_its_file_is_chosen(qapp):
 @needs_silicon
 def test_the_files_beside_the_output_are_filled_in(qapp):
     """A .d3 run is written beside its SCF output; that is where to look."""
-    dialog = _dialog(qapp, folder=_SI, stem="si")
+    dialog = _dialog(qapp, folder=_SI)
     dialog.mode.setCurrentIndex(dialog.mode.findData(el.BANDS_AND_DOS))
     band, dos, _options = dialog.request()
     assert band.endswith("BAND.DAT") and dos.endswith("DOSS.DAT")
@@ -563,7 +563,7 @@ def test_the_files_beside_the_output_are_filled_in(qapp):
 
 @pytest.mark.skipif(not os.path.isdir(_MGO), reason="no MgO properties folder")
 def test_several_runs_in_one_folder_are_all_offered_and_one_is_chosen(qapp):
-    dialog = _dialog(qapp, folder=_MGO, stem="mgo")
+    dialog = _dialog(qapp, folder=_MGO)
     for kind in ("band", "dos"):
         combo = dialog._files[kind]
         assert combo.count() >= 2, kind
@@ -577,10 +577,10 @@ def test_the_bands_and_dos_chosen_come_from_one_calculation(qapp):
     """Ranked separately the newest of each was a B3LYP band structure beside a
     PBE DOS, drawn 0.75 eV apart. The Fermi level each carries says which SCF
     it came from."""
-    band, dos = el.pair_files(*el.find_files(_MGO, stem="mgo"))
+    band, dos = el.pair_files(*el.find_files(_MGO))
     assert el.describe_bands(band).efermi == pytest.approx(
         el.describe_dos(dos).efermi, abs=1e-3)
-    dialog = _dialog(qapp, folder=_MGO, stem="mgo")
+    dialog = _dialog(qapp, folder=_MGO)
     assert dialog._bands_info.efermi == pytest.approx(dialog._dos_info.efermi, abs=1e-3)
 
 
@@ -612,7 +612,7 @@ def test_the_combined_legend_sits_beside_the_dos_not_on_it():
 
 @needs_silicon
 def test_choosing_another_file_from_the_list_loads_it(qapp):
-    dialog = _dialog(qapp, folder=_SI, stem="si")
+    dialog = _dialog(qapp, folder=_SI)
     combo = dialog._files["band"]
     other = next(i for i in range(combo.count()) if combo.itemData(i).endswith(".f25"))
     combo.setCurrentIndex(other)
@@ -868,7 +868,8 @@ def test_one_menu_entry_opens_the_dialog():
 def test_the_open_runs_files_come_first_by_their_fermi_level_not_their_names(tmp_path):
     """A folder shared by several systems. Which run a file came from is read
     from the Fermi level it records, never from being named after the output."""
-    source = "/Users/davidemitoli/QMMC2026/OneElectronProperties/output/mgo_band_dat.BAND"
+    source = os.path.expanduser(
+        "~/QMMC2026/OneElectronProperties/output/mgo_band_dat.BAND")
     if not os.path.isfile(source):
         pytest.skip("no MgO band file to build the fixture from")
     text = open(source).read()

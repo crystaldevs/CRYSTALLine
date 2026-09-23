@@ -67,7 +67,7 @@ class ElectronicDialog(QDialog):
     # when the loaded output's folder has none.
     last_folder = ""
 
-    def __init__(self, structure=None, folder: str = "", stem: str = "",
+    def __init__(self, structure=None, folder: str = "",
                  parent: Optional[QWidget] = None, efermi: Optional[float] = None) -> None:
         """``efermi`` is the open output's Fermi level (eV): files recording the
         same one are that calculation's, and are offered first."""
@@ -77,7 +77,6 @@ class ElectronicDialog(QDialog):
         self.resize(960, 600)
         self._structure = structure
         self._folder = folder
-        self._stem = stem
         self._bands_info: Optional[el.BandsInfo] = None
         self._dos_info: Optional[el.DosInfo] = None
         self._auto_names: List[str] = []

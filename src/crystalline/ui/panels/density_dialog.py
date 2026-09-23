@@ -74,7 +74,7 @@ class DensityDialog(QDialog):
     # loaded output's folder has none.
     last_folder = ""
 
-    def __init__(self, folder: str = "", stem: str = "",
+    def __init__(self, folder: str = "",
                  parent: Optional[QWidget] = None, miller_cell=None, cell=None) -> None:
         """``miller_cell`` is the conventional cell, which Miller indices refer to;
         ``cell`` is the open structure's own, which a grid of it shares."""
@@ -84,7 +84,6 @@ class DensityDialog(QDialog):
         self.resize(840, 480)
         self._miller_cell = miller_cell
         self._folder = folder
-        self._stem = stem
         self._field: Optional[den.ScalarField] = None
         self._second: Optional[den.ScalarField] = None
         self._error = ""

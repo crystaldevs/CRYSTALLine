@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QStyledItemDelegate,
     QToolButton,
     QVBoxLayout,
@@ -311,6 +312,19 @@ def _left(widget: QWidget) -> QWidget:
     return holder
 
 
+def plain_spin(value: int, minimum: int, maximum: int) -> QSpinBox:
+    """A whole-number box with a range and a starting value, and nothing else.
+
+    The deck builders are mostly rows of these — one per CRYSTAL keyword's
+    integer — and a bare ``QSpinBox`` defaults to 0–99, which silently clamps
+    anything larger the moment it is set.
+    """
+    box = QSpinBox()
+    box.setRange(minimum, maximum)
+    box.setValue(value)
+    return box
+
+
 
 
 def slider_row(
@@ -482,6 +496,7 @@ __all__ = [
     "Section",
     "VALUE_WIDTH",
     "left",
+    "plain_spin",
     "range_row",
     "slider_row",
 ]

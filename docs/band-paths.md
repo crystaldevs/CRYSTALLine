@@ -39,27 +39,6 @@ With `auto`, the smallest factor which makes every coordinate integral is used;
 any multiple of it is also accepted. A factor which would leave a coordinate
 fractional is refused.
 
-## Special points
-
-The labels and the coordinates of the special points are those recognised by
-CRYSTAL, given in tables 14.1 and 14.2 of its manual. They coincide with the
-tables in common use for the cubic lattices, for the hexagonal lattice, and for
-the primitive tetragonal and the primitive and face-centred orthorhombic
-lattices, and differ for others:
-
-- P of the body-centred tetragonal lattice is (½,½,½) for CRYSTAL and (¼,¼,¼)
-  in the other tables;
-- Y and Z of the primitive monoclinic lattice are interchanged;
-- Y and M of the base-centred monoclinic lattice likewise.
-
-A label which denotes one point in the program that writes the file and another
-in the program that reads it produces a band structure of a different path, so
-only the labels recognised by CRYSTAL are written into a deck.
-
-A point is identified up to the symmetry of the lattice. The CRYSTAL tutorial
-writes M of the hexagonal lattice as (0,½,0) where the tables give (½,0,0);
-both denote the same point, and both are recognised.
-
 ## Lattices whose conventional path cannot be written
 
 For seven of the fourteen Bravais lattices — rhombohedral, body-centred

@@ -25,11 +25,12 @@ from typing import Optional
 import numpy as np
 import pyvista as pv
 import vtk
-from ase.data import chemical_symbols, covalent_radii
-from ase.data.colors import jmol_colors
+from ase.data import chemical_symbols
 from scipy.spatial import cKDTree
 
+from crystalline.core import elements
 from crystalline.core.structure import Structure
+from crystalline.viz.fonts import unicode_font, use_unicode_font
 from crystalline.viz.render_settings import RenderSettings
 
 # Fraction of the covalent radius used for the drawn sphere (ball-and-stick).
@@ -825,7 +826,7 @@ class StructureRenderer:
     def _rgb_for(self, numbers: np.ndarray) -> np.ndarray:
         """Per-atom uint8 RGB rows (Jmol colours with the settings' overrides applied)."""
         numbers = np.asarray(numbers, dtype=int)
-        rgb = (jmol_colors[numbers] * 255).astype(np.uint8)
+        rgb = (elements.colours(numbers) * 255).astype(np.uint8)
         for z, color in self._settings.atom_colors:
             mask = numbers == int(z)
             if mask.any():
@@ -1166,7 +1167,7 @@ class StructureRenderer:
                 always_visible=True, pickable=False, render=False,
             )
             actor.SetPickable(False)
-            _use_unicode_font(actor)
+            use_unicode_font(actor)
             self._symmetry_actors.append(actor)
 
     def _symmetry_mesh(self, element, bounds):
@@ -1676,7 +1677,7 @@ class StructureRenderer:
             )
         except Exception:  # noqa: BLE001 - a bar is a nicety; never break the drawing
             return
-        font = _unicode_font()
+        font = unicode_font()
         if font is not None:
             for text in (bar.GetTitleTextProperty(), bar.GetLabelTextProperty()):
                 text.SetFontFamily(vtk.VTK_FONT_FILE)
@@ -2591,7 +2592,9 @@ def _clip_to_cell(surface, cell):
 
 def _sphere_radius(z, scale: float = _ATOM_SCALE):
     """Drawn sphere radius for atomic number(s) ``z`` (scalar or array in → same out)."""
-    return covalent_radii[z] * scale
+    scalar = np.isscalar(z) or np.asarray(z).ndim == 0
+    drawn = elements.radii(z) * scale
+    return float(drawn[0]) if scalar else drawn
 
 
 def _hex_to_rgb(color: str) -> np.ndarray:
@@ -2630,7 +2633,7 @@ def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     positions = np.asarray(positions, dtype=float)
     if len(positions) < 2:
         return np.empty(0, int), np.empty(0, int)
-    radii = covalent_radii[numbers]
+    radii = elements.radii(numbers)
     max_bond = tolerance * 2.0 * float(radii.max())
     candidate_pairs = cKDTree(positions).query_pairs(r=max_bond, output_type="ndarray")
     if len(candidate_pairs) == 0:
@@ -2743,45 +2746,6 @@ def _polyline_tube(points: np.ndarray, radius: float = _ANNOTATION_LINE_RADIUS) 
     segments = len(points) - 1
     poly.lines = np.hstack([[2, k, k + 1] for k in range(segments)]).astype(np.int64)
     return poly.tube(radius=radius)
-
-
-@lru_cache(maxsize=1)
-def _unicode_font() -> Optional[str]:
-    """A font file holding the symbols the labels are written in, or ``None``.
-
-    VTK's built-in fonts stop at Latin-1: they have no σ at all, and they drop
-    the combining overbar of 1̄ without a word — which would leave a centre of
-    inversion labelled "1", the identity, and a 4̄ axis labelled "4". matplotlib
-    ships DejaVu Sans, which has both, and arrives with pymatgen, so it is on
-    hand wherever the app runs.
-    """
-    try:
-        from pathlib import Path
-
-        import matplotlib
-
-        font = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSans.ttf"
-        return str(font) if font.is_file() else None
-    except Exception:  # noqa: BLE001 - labels fall back to the built-in font
-        return None
-
-
-def _use_unicode_font(actor) -> None:
-    """Draw a label actor's text in :func:`_unicode_font`, if there is one.
-
-    The text property sits on the label *hierarchy* feeding the mapper, not on
-    the actor, so it takes a step through the pipeline to reach. Best-effort: a
-    VTK build that arranges this differently keeps the built-in font.
-    """
-    font = _unicode_font()
-    if font is None:
-        return
-    try:
-        text = actor.GetMapper().GetInputAlgorithm().GetTextProperty()
-        text.SetFontFamily(vtk.VTK_FONT_FILE)
-        text.SetFontFile(font)
-    except Exception:  # noqa: BLE001 - purely cosmetic; never break a redraw
-        pass
 
 
 def _readable_on(background) -> str:
@@ -2910,7 +2874,7 @@ def _center_rgb(center_z: int, overrides: Optional[dict]) -> np.ndarray:
     """RGB (0–255 floats) for a polyhedron centred on ``center_z`` — override or Jmol."""
     if overrides and int(center_z) in overrides:
         return _hex_to_rgb(overrides[int(center_z)]).astype(float)
-    return np.asarray(jmol_colors[int(center_z)], dtype=float) * 255
+    return elements.colour(int(center_z)) * 255
 
 
 def _hull_mesh(polyhedra, overrides: Optional[dict] = None) -> Optional[pv.PolyData]:

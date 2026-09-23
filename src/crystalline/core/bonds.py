@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from crystalline.core.measure import angle_between
 from crystalline.core.structure import Structure
 
 # CrystalNN is O(N · neighbours); above this it's too slow for an interactive
@@ -257,7 +258,7 @@ def _hydrogen_bond_contacts(numbers, src, dst, vec) -> List[tuple]:
         d_vec = n_vec[donor][np.argmin(n_dist[donor])]  # H→D for the closest donor
         acceptors = electroneg & (n_dist > _HBOND_MIN_HA) & (n_dist <= _HBOND_MAX_HA)
         for a_idx, a_vec in zip(n_idx[acceptors], n_vec[acceptors]):
-            if _angle_between(d_vec, a_vec) >= _HBOND_MIN_ANGLE:
+            if angle_between(d_vec, a_vec) >= _HBOND_MIN_ANGLE:   # D–H···A
                 contacts.append((int(h), int(a_idx), a_vec))
     return contacts
 
@@ -273,15 +274,6 @@ def _kdtree_pairs(positions: np.ndarray, cutoff: float):
     i = np.concatenate([pairs[:, 0], pairs[:, 1]])  # both directions, like neighbor_list
     j = np.concatenate([pairs[:, 1], pairs[:, 0]])
     return i, j, positions[j] - positions[i]
-
-
-def _angle_between(u: np.ndarray, v: np.ndarray) -> float:
-    """Angle (degrees) between vectors ``u`` and ``v`` — here the D–H···A angle."""
-    nu, nv = np.linalg.norm(u), np.linalg.norm(v)
-    if nu < 1e-9 or nv < 1e-9:
-        return 0.0
-    cos = float(np.dot(u, v) / (nu * nv))
-    return float(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0))))
 
 
 __all__ = [
