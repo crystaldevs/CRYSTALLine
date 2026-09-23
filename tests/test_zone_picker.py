@@ -152,7 +152,9 @@ def test_the_legend_font_can_write_gamma_and_angstrom():
     characters in it — the same reason the markers needed MathText."""
     TTFont = pytest.importorskip("fontTools.ttLib").TTFont
 
-    path = zone_picker._unicode_font()
+    from crystalline.viz.fonts import unicode_font
+
+    path = unicode_font()
     if path is None:
         pytest.skip("matplotlib's bundled font is not available")
     cmap = TTFont(path).getBestCmap()

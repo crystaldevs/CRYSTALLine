@@ -48,6 +48,7 @@ from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from crystalline.core.measure import angle_between
 from crystalline.core.structure import Structure
 
 # CRYSTAL's internal basis-set libraries selectable by the ``BASISSET`` card
@@ -757,7 +758,7 @@ def _p1_slab_body(structure: Structure) -> List[str]:
     cell, positions, axes = _oriented(structure, [i for i, p in enumerate(pbc) if p], "slab")
     va, vb = cell[axes[0]], cell[axes[1]]
     a, b = float(np.linalg.norm(va)), float(np.linalg.norm(vb))
-    gamma = _angle_between(va, vb)
+    gamma = angle_between(va, vb)
 
     normal = np.cross(va, vb)
     normal = normal / np.linalg.norm(normal)
@@ -809,12 +810,6 @@ def _polymer_frame(a_vec: np.ndarray):
         e2 = np.cross(e1, helper)
     e2 = e2 / np.linalg.norm(e2)
     return e1, e2, np.cross(e1, e2)
-
-
-def _angle_between(u: np.ndarray, v: np.ndarray) -> float:
-    """Angle between two vectors, in degrees."""
-    cosine = float(u @ v) / (float(np.linalg.norm(u)) * float(np.linalg.norm(v)))
-    return float(np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0))))
 
 
 def _crystal_body(structure: Structure, opts: GeometryOptions) -> List[str]:

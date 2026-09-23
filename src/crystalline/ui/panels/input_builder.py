@@ -81,6 +81,7 @@ from crystalline.core.crystal_input import (
 )
 from crystalline.core.structure import Structure
 from crystalline.ui.panels.band_path_editor import BandPathEditor
+from crystalline.ui.panels.controls import plain_spin
 
 _GRID_DEFAULT_LABEL = "Default"
 # Sentinels for the split-functional combos: both "unset" states are meaningful
@@ -249,7 +250,7 @@ class _SupercellGroup(QGroupBox):
             for c in range(3):
                 # A diagonal expansion, so switching the group on gives a real
                 # supercell rather than the no-op identity.
-                box = _plain_spin(diagonal if r == c else 0, -9, 9)
+                box = plain_spin(diagonal if r == c else 0, -9, 9)
                 box.setFixedWidth(56)
                 row.addWidget(box)
                 self.cells.append(box)
@@ -460,7 +461,7 @@ class InputBuilderDialog(QDialog):
 
         self._soc_2nd = QCheckBox("Second-variational (2NDVARIAT)")
         form.addRow(self._soc_2nd)
-        self._soc_rot = _plain_spin(0, 0, 1)
+        self._soc_rot = plain_spin(0, 0, 1)
         self._soc_rot.setToolTip("IROT: non-zero rotates the magnetization off the z axis.")
         form.addRow("IROT", self._soc_rot)
         self._soc_rot_theta = _plain_double(90.0, 5.0, 2, maximum=360.0)
@@ -473,8 +474,8 @@ class InputBuilderDialog(QDialog):
 
         self._soc_lock = QCheckBox("Lock occupied spinors (SPINORLOCK)")
         form.addRow(self._soc_lock)
-        self._soc_nspin = _plain_spin(8, 1, 10000)
-        self._soc_ncyc = _plain_spin(10, 1, 999)
+        self._soc_nspin = plain_spin(8, 1, 10000)
+        self._soc_ncyc = plain_spin(10, 1, 999)
         form.addRow("Spinors", self._soc_nspin)
         form.addRow("Cycles", self._soc_ncyc)
 
@@ -542,9 +543,9 @@ class InputBuilderDialog(QDialog):
         form.addRow(self._spinlock)
 
         spinlock_row = QHBoxLayout()
-        self._spinlock_nspin = _plain_spin(0, -200, 200)
+        self._spinlock_nspin = plain_spin(0, -200, 200)
         self._spinlock_nspin.setToolTip("NSPIN: n(α) − n(β), i.e. 2S. 0 is antiferromagnetic.")
-        self._spinlock_ncyc = _plain_spin(50, 1, 9999)
+        self._spinlock_ncyc = plain_spin(50, 1, 9999)
         self._spinlock_ncyc.setToolTip("NCYC: how many cycles to hold it for.")
         spinlock_row.addWidget(QLabel("n(α) − n(β)"))
         spinlock_row.addWidget(self._spinlock_nspin)
@@ -727,7 +728,7 @@ class InputBuilderDialog(QDialog):
 
         self._disp_interp = QCheckBox("Fourier interpolation (INTERPHESS)")
         form.addRow(self._disp_interp)
-        self._disp_interp_l = [_plain_spin(2, 1, 24) for _ in range(3)]
+        self._disp_interp_l = [plain_spin(2, 1, 24) for _ in range(3)]
         row = QHBoxLayout()
         for box in self._disp_interp_l:
             row.addWidget(box)
@@ -754,7 +755,7 @@ class InputBuilderDialog(QDialog):
 
         self._disp_bands = QCheckBox("Phonon bands (BANDS)")
         form.addRow(self._disp_bands)
-        self._disp_bands_points = _plain_spin(30, 2, 500)
+        self._disp_bands_points = plain_spin(30, 2, 500)
         form.addRow("Points per line (NSUB)", self._disp_bands_points)
         # The same editor as the .d3 builder's: a phonon path and an electron
         # path are the same object, and the integers CRYSTAL reads mean nothing
@@ -767,7 +768,7 @@ class InputBuilderDialog(QDialog):
         self._disp_pdos = QCheckBox("Phonon DOS (PDOS)")
         form.addRow(self._disp_pdos)
         self._disp_pdos_max = _plain_double(2500.0, 50.0, 1, maximum=100000.0)
-        self._disp_pdos_bins = _plain_spin(250, 10, 10000)
+        self._disp_pdos_bins = plain_spin(250, 10, 10000)
         self._disp_pdos_proj = QCheckBox("Projected atomic DOS")
         form.addRow("Max frequency (cm⁻¹)", self._disp_pdos_max)
         form.addRow("Bins", self._disp_pdos_bins)
@@ -776,7 +777,7 @@ class InputBuilderDialog(QDialog):
         self._disp_ins = QCheckBox("Neutron-weighted DOS (INS)")
         form.addRow(self._disp_ins)
         self._disp_ins_max = _plain_double(3000.0, 50.0, 1, maximum=100000.0)
-        self._disp_ins_bins = _plain_spin(300, 10, 10000)
+        self._disp_ins_bins = plain_spin(300, 10, 10000)
         self._disp_ins_type = QComboBox()
         self._disp_ins_type.addItems(["Coherent", "Incoherent", "Coherent + incoherent"])
         form.addRow("Max frequency (cm⁻¹)", self._disp_ins_max)
@@ -805,7 +806,7 @@ class InputBuilderDialog(QDialog):
 
         self._qha_temp = QCheckBox("Temperature range (TEMPERAT)")
         form.addRow(self._qha_temp)
-        self._qha_nt = _plain_spin(100, 2, 1000)
+        self._qha_nt = plain_spin(100, 2, 1000)
         self._qha_t1 = _plain_double(10.0, 10.0, 1, maximum=10000.0)
         self._qha_t2 = _plain_double(1200.0, 10.0, 1, maximum=10000.0)
         form.addRow("Steps", self._qha_nt)
@@ -816,7 +817,7 @@ class InputBuilderDialog(QDialog):
         form.addRow(self._qha_vrange)
         self._qha_vmin = _plain_double(0.94, 0.01, 3)
         self._qha_vmax = _plain_double(1.06, 0.01, 3)
-        self._qha_vn = _plain_spin(7, 2, 100)
+        self._qha_vn = plain_spin(7, 2, 100)
         form.addRow("V min (×V₀)", self._qha_vmin)
         form.addRow("V max (×V₀)", self._qha_vmax)
         form.addRow("Points", self._qha_vn)
@@ -866,8 +867,8 @@ class InputBuilderDialog(QDialog):
         self._anh_vci = QCheckBox("Vibrational CI (VCI)")
         self._anh_vci.setToolTip("Runs a VSCF of its own first, so VSCF need not be ticked.")
         form.addRow(self._anh_vci)
-        self._anh_vci_quanta = _plain_spin(6, 1, 30)
-        self._anh_vci_modes = _plain_spin(3, 1, 12)
+        self._anh_vci_quanta = plain_spin(6, 1, 30)
+        self._anh_vci_modes = plain_spin(3, 1, 12)
         self._anh_vci_guess = QComboBox()
         self._anh_vci_guess.addItems(["Harmonic guess", "VSCF guess (VCI@VSCF)"])
         self._anh_vci_guess.setCurrentIndex(1)
@@ -888,7 +889,7 @@ class InputBuilderDialog(QDialog):
         hint.setWordWrap(True)
         form.addRow(hint)
 
-        self._anharm_atom = _plain_spin(1, 1, 100000)
+        self._anharm_atom = plain_spin(1, 1, 100000)
         self._anharm_atom.setToolTip(
             "Sequence number of the hydrogen (or deuterium) atom, as CRYSTAL "
             "numbers atoms after reading the geometry."
@@ -906,7 +907,7 @@ class InputBuilderDialog(QDialog):
 
         self._anharm_iso = QCheckBox("Change an atomic mass (ISOTOPES)")
         form.addRow(self._anharm_iso)
-        self._anharm_iso_atom = _plain_spin(1, 1, 100000)
+        self._anharm_iso_atom = plain_spin(1, 1, 100000)
         self._anharm_iso_mass = _plain_double(2.0, 0.1, 3, minimum=0.1, maximum=300.0)
         form.addRow("Isotope atom", self._anharm_iso_atom)
         form.addRow("Mass (amu)", self._anharm_iso_mass)
@@ -1591,13 +1592,6 @@ def parse_atomspin(text: str) -> tuple:
             ) from None
         pairs.append((label, spin))
     return tuple(pairs)
-
-
-def _plain_spin(value: int, minimum: int, maximum: int) -> QSpinBox:
-    box = QSpinBox()
-    box.setRange(minimum, maximum)
-    box.setValue(value)
-    return box
 
 
 __all__ = ["InputBuilderDialog"]

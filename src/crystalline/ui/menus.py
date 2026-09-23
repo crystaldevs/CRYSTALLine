@@ -67,7 +67,7 @@ def rotate_step_box(parent):
     return box
 
 
-def reset_view_icon(parent=None):
+def reset_view_icon():
     """The reset-the-view glyph — a cube seen from a corner — in theme colour."""
     from PySide6.QtWidgets import QApplication
 
@@ -263,7 +263,7 @@ def _build_edit_menu(window) -> None:
     """An 'Edit' menu: turn editing on, select atoms, and run edit tools."""
     edit_menu = window.menuBar().addMenu("&Edit")
 
-    window._undo_action = QAction(_history_icon(window, "undo.svg"), "Undo", window)
+    window._undo_action = QAction(_history_icon("undo.svg"), "Undo", window)
     window._undo_action.setShortcut("Ctrl+Z")
     window._undo_action.setToolTip("Undo (Ctrl+Z)")
     window._undo_action.triggered.connect(window._undo)
@@ -271,7 +271,7 @@ def _build_edit_menu(window) -> None:
     edit_menu.addAction(window._undo_action)
 
     window._redo_action = QAction(
-        _history_icon(window, "redo.svg"), "Redo", window
+        _history_icon("redo.svg"), "Redo", window
     )
     window._redo_action.setShortcuts(["Ctrl+Shift+Z", "Ctrl+Y"])
     window._redo_action.setToolTip("Redo (Ctrl+Shift+Z)")
@@ -321,7 +321,7 @@ def _build_edit_menu(window) -> None:
     window._update_edit_actions()
 
 
-def _history_icon(window, name: str) -> QIcon:
+def _history_icon(name: str) -> QIcon:
     """The undo or redo glyph, drawn in the current theme's text colour.
 
     Ours rather than the desktop's: ``QIcon.fromTheme`` is null on macOS and
@@ -342,12 +342,12 @@ def refresh_history_icons(window) -> None:
     for attribute, name in (("_undo_action", "undo.svg"), ("_redo_action", "redo.svg")):
         action = getattr(window, attribute, None)
         if action is not None:
-            action.setIcon(_history_icon(window, name))
+            action.setIcon(_history_icon(name))
     # The reset chip is drawn the same way, and vanishes into the toolbar if it
     # keeps the other theme's colour.
     reset = getattr(window, "_reset_view_button", None)
     if reset is not None:
-        reset.setIcon(reset_view_icon(window))
+        reset.setIcon(reset_view_icon())
 
 
 def refresh_appearance_button(window) -> None:
@@ -623,7 +623,7 @@ def _build_toolbars(window) -> None:
     # rather than choosing a direction — so it is a quiet chip, not a coloured one.
     window._reset_view_button = QToolButton(window)
     window._reset_view_button.setToolTip("Fit the whole structure, from the default view")
-    window._reset_view_button.setIcon(reset_view_icon(window))
+    window._reset_view_button.setIcon(reset_view_icon())
     style_chip(window._reset_view_button, "ghost")
     window._reset_view_button.clicked.connect(
         lambda _checked=False: window.viewport.reset_view())

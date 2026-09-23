@@ -36,7 +36,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -84,10 +84,9 @@ ISOSURFACE = "isosurface"
 SLICE = "slice"
 VIEWS = ((ISOSURFACE, "Isosurface"), (SLICE, "Lattice plane (hkl)"))
 
-# Isovalues worth starting from, in e/bohr³. 0.1 sits in the bonding region of
-# a typical solid; 0.002 is the conventional "molecular surface" contour.
+# The isovalue to start from, in e/bohr³: 0.1 sits in the bonding region of a
+# typical solid.
 DEFAULT_ISOVALUE = 0.1
-MOLECULAR_SURFACE_ISOVALUE = 0.002
 
 POSITIVE_COLOUR = "#1f77b4"
 NEGATIVE_COLOUR = "#d62728"
@@ -132,11 +131,6 @@ class DensityOptions:
     # slice, or a second field painted onto a surface. A plain surface has one
     # colour and nothing to key.
     colour_bar: bool = False
-
-
-def has_colour_map(options: "DensityOptions") -> bool:
-    """Whether what ``options`` draw is coloured by value, and so can have a bar."""
-    return options.view == SLICE or options.colour_by is not None
 
 
 # The symbol each kind is written with on a colour bar.
@@ -514,7 +508,7 @@ def kind_of_title(title: str) -> Tuple[str, str]:
 _GRID_EXTENSIONS = (".dat", ".cube", ".cub", ".31")
 
 
-def find_fields(folder, stem: str = "", cell=None) -> List[str]:
+def find_fields(folder, cell=None) -> List[str]:
     """The scalar-field files in ``folder``, best first.
 
     Files are picked out by extension — CRYSTAL's ``.DAT`` and ``fort.31``, and
@@ -529,8 +523,6 @@ def find_fields(folder, stem: str = "", cell=None) -> List[str]:
     and its value order is not a guess), then a charge density over a spin
     density over a potential, then the newest.
 
-    ``stem`` is accepted and ignored: a name says nothing about which run a
-    file came from; the lattice does.
     """
     try:
         entries = [p for p in Path(folder).iterdir()

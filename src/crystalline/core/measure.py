@@ -71,15 +71,25 @@ def distance(positions: np.ndarray, i: int, j: int) -> float:
     return float(np.linalg.norm(p[i] - p[j]))
 
 
-def angle(positions: np.ndarray, i: int, j: int, k: int) -> float:
-    """Angle i–j–k in degrees, with ``j`` at the vertex."""
-    p = np.asarray(positions, dtype=float)
-    u, v = p[i] - p[j], p[k] - p[j]
+def angle_between(u, v) -> float:
+    """Angle between two vectors, in degrees — ``nan`` if either has no length.
+
+    ``nan`` rather than a number, because there is no angle to report: it
+    compares false against any threshold, which is what every caller here
+    wants of a degenerate pair.
+    """
+    u, v = np.asarray(u, dtype=float), np.asarray(v, dtype=float)
     nu, nv = np.linalg.norm(u), np.linalg.norm(v)
     if nu == 0.0 or nv == 0.0:
         return float("nan")
     cosine = float(np.clip(np.dot(u, v) / (nu * nv), -1.0, 1.0))
     return float(np.degrees(np.arccos(cosine)))
+
+
+def angle(positions: np.ndarray, i: int, j: int, k: int) -> float:
+    """Angle i–j–k in degrees, with ``j`` at the vertex."""
+    p = np.asarray(positions, dtype=float)
+    return angle_between(p[i] - p[j], p[k] - p[j])
 
 
 def dihedral(positions: np.ndarray, i: int, j: int, k: int, m: int) -> float:
@@ -206,6 +216,7 @@ __all__ = [
     "POINT",
     "distance",
     "angle",
+    "angle_between",
     "dihedral",
     "plane",
     "measure",

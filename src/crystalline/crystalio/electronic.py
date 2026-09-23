@@ -225,7 +225,7 @@ def _is_fort25(path) -> bool:
     return bool(head) and head[0].lstrip().startswith("-%-")
 
 
-def find_files(folder, stem: str = "", efermi: Optional[float] = None
+def find_files(folder, efermi: Optional[float] = None
                ) -> Tuple[List[str], List[str]]:
     """Band and DOS files in ``folder``, best first.
 
@@ -244,8 +244,6 @@ def find_files(folder, stem: str = "", efermi: Optional[float] = None
     DOS is computed on a finer NEWK mesh that moves it — beryllium's by a tenth
     of an eV — and would otherwise match nothing.
 
-    ``stem`` is accepted and ignored: files used to be preferred when named
-    after the run, and a name says nothing about which run a file came from.
     """
     found = {BAND_FILE: [], DOS_FILE: []}
     try:

@@ -62,8 +62,6 @@ def _hexagonal_blob(n=15, sigma=0.6):
 
 
 def _renderer():
-    import pyvista as pv
-
     from crystalline.viz.renderer import StructureRenderer
 
     return StructureRenderer(_plotter())
@@ -201,7 +199,6 @@ def test_a_field_is_copied_onto_the_cell_an_atom_was_written_in():
     copies of them, and a field drawn over the home cell alone sits a whole
     translation away from the atoms on screen."""
     from crystalline.viz.renderer import StructureRenderer
-    import pyvista as pv
 
     cell, field, centre = _cell_and_field()
     stray = centre - cell[1]                      # the same atom, one -b away
@@ -221,7 +218,6 @@ def test_no_surface_is_drawn_around_an_atom_that_is_not_on_screen():
     it, most of it around atoms nobody drew — which reads as the field being in
     the wrong place. Only the pieces an atom on screen lies against are kept."""
     from crystalline.viz.renderer import StructureRenderer
-    import pyvista as pv
 
     cell, field, centre = _cell_and_field()
     straggler = centre - cell[1] - np.array([0.0, 0.05, 0.0])   # just outside
@@ -309,8 +305,6 @@ def test_the_field_is_read_periodically_anywhere_in_space():
 
 def _slice_renderer(miller=(0, 0, 1), offset=0.0, cutaway=True):
     """A cubic rock-salt-like cell with an atom at the origin, sliced."""
-    import pyvista as pv
-
     from crystalline.core.structure import Structure
     from crystalline.viz.renderer import StructureRenderer
     from ase import Atoms

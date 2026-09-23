@@ -71,11 +71,11 @@ def strict(enabled: bool) -> None:
     _strict = bool(enabled)
 
 
-def install(app=None) -> None:
+def install() -> None:
     """Put the net up: the excepthook, the native handler and the log file.
 
-    Safe to call twice, and safe to call with no ``app`` — everything degrades
-    to writing the log, which is what a headless or test run wants anyway.
+    Safe to call twice, and safe to call before any ``QApplication`` exists:
+    nothing here is Qt's, which is what a headless or test run wants anyway.
     """
     global _installed
     if _installed:

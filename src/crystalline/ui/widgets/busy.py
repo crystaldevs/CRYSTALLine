@@ -27,6 +27,7 @@ from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 from crystalline.ui.safety import guard
+from crystalline.ui.widgets.overlay import ParentOverlay
 
 # The arc sweeps rather than a set of fading dots: one moving shape reads as
 # progress at any size, and costs one repaint of a small rectangle.
@@ -38,7 +39,7 @@ _TICK_MS = 16            # ~60 fps: the indicator is the one thing that must be 
 _SCRIM_ALPHA = 150
 
 
-class BusyOverlay(QWidget):
+class BusyOverlay(ParentOverlay):
     """A translucent scrim over its parent, with a spinner and a line of text.
 
     Sizes itself to the parent and follows it, so a caller only has to
@@ -50,35 +51,20 @@ class BusyOverlay(QWidget):
         self._angle = 0
         self._message = ""
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)  # swallow clicks
-        self.setVisible(False)
         self._timer = QTimer(self)
         self._timer.setInterval(_TICK_MS)
         self._timer.timeout.connect(self._advance)
-        parent.installEventFilter(self)
 
     # ── lifecycle ───────────────────────────────────────────────────────
     def start(self, message: str = "") -> None:
         self._message = message
         self._angle = 0
-        self._fit()
-        self.raise_()
-        self.setVisible(True)
+        self._raise_over_parent()
         self._timer.start()
 
     def stop(self) -> None:
         self._timer.stop()
         self.setVisible(False)
-
-    @guard(False)
-    def eventFilter(self, obj, event):
-        if obj is self.parent() and event.type() in (event.Type.Resize, event.Type.Show):
-            self._fit()
-        return super().eventFilter(obj, event)
-
-    def _fit(self) -> None:
-        parent = self.parentWidget()
-        if parent is not None:
-            self.setGeometry(parent.rect())
 
     def _advance(self) -> None:
         self._angle = (self._angle + _DEGREES_PER_TICK) % 360

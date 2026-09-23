@@ -5,7 +5,6 @@ logic is exercised unbound against a stub window that provides just the bits it
 touches — and the geometry maths, which is pure, is tested directly.
 """
 
-from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -108,10 +107,6 @@ class _StubModeWindow(QMainWindow):
         # The spectra dialog hands this method out as its pick callback, so the
         # stub needs it bound the way the real window has it.
         self._select_mode_near = lambda freq: MainWindow._select_mode_near(self, freq)
-
-
-def _kind(key: str):
-    return SimpleNamespace(key=key)
 
 
 

@@ -19,6 +19,15 @@ html[data-theme="light"] {
   --pst-color-inline-code: #0f6a80;
   --crystal-surface: #f5fbfd;
   --crystal-border: rgba(23, 149, 181, 0.22);
+
+  /* The beta notice: amber, because it is a warning rather than decoration —
+   * in the site's own cyan it read as a title bar and stopped being noticed.
+   * Dark enough to carry the theme's white banner text. */
+  --sbt-color-announcement: #b35309;
+  /* The theme hovers table rows in purple, which belongs to no other part of
+   * this site. A tint of the logo's cyan, light enough to leave the row's own
+   * text readable. */
+  --pst-color-table-row-hover-bg: #dff1f7;
 }
 
 html[data-theme="dark"] {
@@ -33,6 +42,17 @@ html[data-theme="dark"] {
   --pst-color-inline-code: #8fd9ea;
   --crystal-surface: rgba(69, 194, 221, 0.06);
   --crystal-border: rgba(69, 194, 221, 0.25);
+
+  --sbt-color-announcement: #8f4208;
+  --pst-color-table-row-hover-bg: #1d3c47;
+}
+
+/* The banner's own link: white rather than the site's cyan, which on the amber
+ * ground was the one piece of text on the site you had to squint at. */
+.bd-header-announcement a,
+.bd-header-announcement a:hover {
+  color: #fff;
+  text-decoration: underline;
 }
 
 /* ── the landing page ───────────────────────────────────────────────── */

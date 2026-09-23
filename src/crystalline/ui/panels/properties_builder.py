@@ -32,7 +32,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -54,9 +53,7 @@ from crystalline.core.properties_input import (
     build_properties_input,
 )
 from crystalline.core.structure import Structure
-
-
-_CONVENTIONAL_NOTE = "the conventional path for this lattice"
+from crystalline.ui.panels.controls import plain_spin
 
 
 class PropertiesBuilderDialog(QDialog):
@@ -117,8 +114,8 @@ class PropertiesBuilderDialog(QDialog):
 
         newk = QGroupBox("NEWK — eigenvectors on a finer mesh")
         newk_form = QFormLayout(newk)
-        self._newk_shrink = _spin(shrink, 1, 96)
-        self._newk_shrink2 = _spin(shrink * 2, 1, 192)
+        self._newk_shrink = plain_spin(shrink, 1, 96)
+        self._newk_shrink2 = plain_spin(shrink * 2, 1, 192)
         newk_form.addRow("Shrinking factor", self._newk_shrink)
         newk_form.addRow("Gilat factor", self._newk_shrink2)
         newk.setToolTip(
@@ -131,9 +128,9 @@ class PropertiesBuilderDialog(QDialog):
         band = _checkable("BAND — band structure", checked=True)
         form = QFormLayout(band)
         self._band_title = QLineEdit("Band structure")
-        self._band_points = _spin(200, 10, 5000)
-        self._band_first = _spin(1, 1, 9999)
-        self._band_last = _spin(0, 0, 9999)
+        self._band_points = plain_spin(200, 10, 5000)
+        self._band_first = plain_spin(1, 1, 9999)
+        self._band_last = plain_spin(0, 0, 9999)
         self._band_last.setSpecialValueText("auto")
         form.addRow("Title", self._band_title)
         form.addRow("Points along the path", self._band_points)
@@ -152,9 +149,9 @@ class PropertiesBuilderDialog(QDialog):
 
         doss = _checkable("DOSS — density of states")
         form = QFormLayout(doss)
-        self._doss_points = _spin(300, 10, 5000)
+        self._doss_points = plain_spin(300, 10, 5000)
         self._doss_window = QCheckBox("Give an energy window instead of a band range")
-        self._doss_low, self._doss_high = _float_spin(-0.7), _float_spin(0.8)
+        self._doss_low, self._doss_high = _floatplain_spin(-0.7), _floatplain_spin(0.8)
         self._doss_projections = QLineEdit()
         self._doss_projections.setPlaceholderText("e.g.  1, 2   — one projection per atom")
         self._doss_projections.setToolTip(
@@ -172,7 +169,7 @@ class PropertiesBuilderDialog(QDialog):
         coop = _checkable("COOP / COHP — bonding analysis")
         form = QFormLayout(coop)
         self._coop_hamiltonian = QCheckBox("Hamiltonian-weighted (COHP)")
-        self._coop_points = _spin(300, 10, 5000)
+        self._coop_points = plain_spin(300, 10, 5000)
         self._coop_pairs = QLineEdit()
         self._coop_pairs.setPlaceholderText("e.g.  1 : 2,  1 : 3 4")
         self._coop_pairs.setToolTip(
@@ -202,10 +199,10 @@ class PropertiesBuilderDialog(QDialog):
         self._extent_mode = QComboBox()
         self._extent_mode.addItem("Scale the atoms' own extent", "scale")
         self._extent_mode.addItem("Explicit range", "range")
-        self._extent_scale = _float_spin(3.0, decimals=2)
+        self._extent_scale = _floatplain_spin(3.0, decimals=2)
         self._extent_scale.setMinimum(0.1)
-        self._extent_low = _float_spin(-4.0, decimals=2)
-        self._extent_high = _float_spin(12.0, decimals=2)
+        self._extent_low = _floatplain_spin(-4.0, decimals=2)
+        self._extent_high = _floatplain_spin(12.0, decimals=2)
         form.addRow("Extent", self._extent_mode)
         form.addRow("Scale", self._extent_scale)
         form.addRow("Range (bohr)", _bohr_range_row(self._extent_low, self._extent_high))
@@ -241,15 +238,15 @@ class PropertiesBuilderDialog(QDialog):
 
         density = _checkable("ECH3 — charge density on a 3D grid")
         form = QFormLayout(density)
-        self._ech3_points = _spin(100, 2, 2000)
+        self._ech3_points = plain_spin(100, 2, 2000)
         form.addRow("Points along a", self._ech3_points)
         layout.addWidget(density)
         self._density = density
 
         potential = _checkable("POT3 — electrostatic potential on a 3D grid")
         form = QFormLayout(potential)
-        self._pot3_points = _spin(100, 2, 2000)
-        self._pot3_tol = _spin(5, 1, 20)
+        self._pot3_points = plain_spin(100, 2, 2000)
+        self._pot3_tol = plain_spin(5, 1, 20)
         self._pot3_tol.setToolTip("ITOL, the penetration tolerance. 5 is the manual's suggestion.")
         form.addRow("Points along a", self._pot3_points)
         form.addRow("Tolerance (ITOL)", self._pot3_tol)
@@ -269,8 +266,8 @@ class PropertiesBuilderDialog(QDialog):
         self._emd_directions.setToolTip(
             "Directions in oblique coordinates, at most ten, separated by commas."
         )
-        self._emd_pmax = _float_spin(3.0)
-        self._emd_step = _float_spin(0.1)
+        self._emd_pmax = _floatplain_spin(3.0)
+        self._emd_step = _floatplain_spin(0.1)
         form.addRow("Directions", self._emd_directions)
         form.addRow("Max momentum (a.u.)", self._emd_pmax)
         form.addRow("Step", self._emd_step)
@@ -310,11 +307,11 @@ class PropertiesBuilderDialog(QDialog):
 
         xrd = _checkable("XRDSPEC — X-ray diffraction spectrum")
         form = QFormLayout(xrd)
-        self._xrd_index = _spin(6, 1, 40)
+        self._xrd_index = plain_spin(6, 1, 40)
         # four decimals: Cu Kalpha is 1.5406 A, and three rounded it to 1.541
-        self._xrd_lambda = _float_spin(1.5406, decimals=4)
+        self._xrd_lambda = _floatplain_spin(1.5406, decimals=4)
         self._xrd_lambda.setToolTip("Wavelength in Angstrom. 1.5406 is Cu Kα.")
-        self._xrd_b = _float_spin(1.0)
+        self._xrd_b = _floatplain_spin(1.0)
         self._xrd_b.setToolTip("Isotropic Debye-Waller B, typically 0.5 to 1.5.")
         form.addRow("Max Miller index", self._xrd_index)
         form.addRow("Wavelength (Å)", self._xrd_lambda)
@@ -571,14 +568,7 @@ def _parse_directions(text: str) -> tuple:
     return tuple(directions)
 
 
-def _spin(value: int, minimum: int, maximum: int) -> QSpinBox:
-    box = QSpinBox()
-    box.setRange(minimum, maximum)
-    box.setValue(value)
-    return box
-
-
-def _float_spin(value: float, decimals: int = 3) -> QDoubleSpinBox:
+def _floatplain_spin(value: float, decimals: int = 3) -> QDoubleSpinBox:
     box = QDoubleSpinBox()
     box.setRange(-100.0, 100.0)
     box.setDecimals(decimals)

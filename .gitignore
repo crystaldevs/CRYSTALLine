@@ -6,6 +6,10 @@ build/
 dist/
 .eggs/
 
+# Docs (built locally; CI builds the published site from a clean checkout)
+docs/_build/
+site/
+
 # Env / tooling
 .venv/
 .pytest_cache/

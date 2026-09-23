@@ -14,7 +14,6 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 from ase.data import chemical_symbols
-from ase.data.colors import jmol_colors
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -37,6 +36,7 @@ from crystalline.ui.panels.controls import (
     Section as _Section,
     left as _left,
 )
+from crystalline.core import elements
 from crystalline.viz.render_settings import RenderSettings
 
 
@@ -76,8 +76,7 @@ def _closest_index(values, target: float) -> int:
 
 def _jmol_hex(z: int) -> str:
     """The default Jmol colour of element ``z`` as ``#rrggbb``."""
-    r, g, b = (int(round(c * 255)) for c in jmol_colors[int(z)])
-    return f"#{r:02x}{g:02x}{b:02x}"
+    return elements.hex_colour(int(z))
 
 
 class DisplayPanel(QWidget):

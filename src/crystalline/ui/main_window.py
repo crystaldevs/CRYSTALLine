@@ -721,16 +721,13 @@ class MainWindow(QMainWindow):
             except Exception:  # noqa: BLE001 - naming the corners is a nicety
                 structure = None
         folder = str(Path(self._output_path).parent) if self._output_path else ""
-        # Files named after the run (mgo_band.BAND beside mgo.out) rank first.
-        stem = Path(self._output_path).stem if self._output_path else ""
-
         # The run's own files are told apart by the Fermi level they record,
         # not by being named after the output.
         try:
             efermi = float(getattr(self, "_output_props", {}).get("Fermi energy (eV)"))
         except (TypeError, ValueError):
             efermi = None
-        dialog = ElectronicDialog(structure=structure, folder=folder, stem=stem,
+        dialog = ElectronicDialog(structure=structure, folder=folder,
                                   parent=self, efermi=efermi)
         self._restore_dialog(dialog, "electronic")
         if dialog.exec() != QDialog.Accepted:
@@ -1199,12 +1196,11 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.density_dialog import DensityDialog
 
         folder = str(Path(self._output_path).parent) if self._output_path else ""
-        stem = Path(self._output_path).stem if self._output_path else ""
         miller_cell = self._conventional_cell()
         source = getattr(self, "_source", None)
         cell = (np.asarray(source.cell, dtype=float)
                 if source is not None and len(source) and source.is_periodic else None)
-        dialog = DensityDialog(folder=folder, stem=stem, parent=self,
+        dialog = DensityDialog(folder=folder, parent=self,
                                miller_cell=miller_cell, cell=cell)
         self._restore_dialog(dialog, "density")
         if dialog.exec() != QDialog.Accepted:

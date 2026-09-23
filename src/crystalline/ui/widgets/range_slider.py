@@ -20,9 +20,6 @@ from crystalline.ui.safety import guard
 _TRACK_HEIGHT = 4
 _KNOB_RADIUS = 7
 _MIN_WIDTH = 90
-# Below this the two handles overlap and neither can be grabbed, so a drag that
-# would cross keeps them this far apart in *value* terms.
-_MIN_SEPARATION_FRACTION = 0.0
 
 
 class RangeSlider(QWidget):

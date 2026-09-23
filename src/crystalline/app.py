@@ -33,7 +33,7 @@ def run(structure: Optional[Structure] = None) -> int:
     # Before anything that can fail: an error in a Qt virtual override takes the
     # process down with it (shiboken segfaults reporting it), so the net has to
     # be up before the first window exists.
-    safety.install(app)
+    safety.install()
     theme.apply(app)  # the app's own look, light or dark to match the desktop
     window = MainWindow(structure)
     window.show()

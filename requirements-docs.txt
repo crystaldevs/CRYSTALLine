@@ -2,6 +2,14 @@
 # Same stack as CRYSTALClear's docs, so the two sites stay a family.
 sphinx>=7.0,<9
 sphinx-book-theme>=1.1
+# sphinx-book-theme draws its own sidebar toggle in the article header, and the
+# base theme from 0.16 on draws a second one in the navbar — but wires up only
+# the first it finds, which is the navbar one the book theme hides. The visible
+# hamburger is then dead, and the site has no menu at all on a phone. That is
+# what the published site was built with (book theme 1.1.3, whose requirement
+# on the base theme was still open); 1.1.4 pins it exactly, and this line keeps
+# it pinned should a later release open it up again.
+pydata-sphinx-theme<0.16
 myst-parser>=2.0
 sphinx-design>=0.5
 sphinx-copybutton>=0.5
