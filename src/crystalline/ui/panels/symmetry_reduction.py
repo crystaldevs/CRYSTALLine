@@ -84,7 +84,7 @@ class SymmetryReductionDialog(QDialog):
         body.addLayout(left, 3)
 
         right = QVBoxLayout()
-        right.addWidget(QLabel("What that leaves"))
+        right.addWidget(QLabel("Reduced symmetry"))
         self._choices = QListWidget()
         self._choices.setItemDelegate(
             RichTextDelegate(self._choices, symmetry_module.rich))

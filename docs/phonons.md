@@ -18,23 +18,23 @@ The **Amplitude** is defined as the largest displacement of any atom, so that
 one value is appropriate for structures of different size, and the **Speed**
 sets the rate of the animation.
 
-```{image} mode-dry-ice.gif
-:alt: The CO2 molecules of dry ice rocking in a librational mode
+```{image} mode-mof5.gif
+:alt: The linkers of MOF-5 twisting in a low-frequency mode
 :width: 340px
 :align: center
 :class: only-light
 ```
 
-```{image} mode-dry-ice-dark.gif
-:alt: The CO2 molecules of dry ice rocking in a librational mode
+```{image} mode-mof5-dark.gif
+:alt: The linkers of MOF-5 twisting in a low-frequency mode
 :width: 340px
 :align: center
 :class: only-dark
 ```
 
-Above: dry ice (solid CO₂) in its Raman-active libration at 153 cm⁻¹, the
-molecules rocking about their centres. The molecules crossing the cell boundary
-are drawn whole, and their images vibrate with the cell they are drawn in.
+Above: MOF-5 seen down a cube axis, in the lowest optical mode at 17 cm⁻¹ —
+the terephthalate linkers twisting between the Zn₄O clusters. The
+crystallographic cell is shown: 424 atoms, animated live.
 
 ## Exporting an animation
 

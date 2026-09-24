@@ -111,7 +111,7 @@ def load_structure(path: str, initial: bool = False) -> Structure:
     Parameters
     ----------
     path:
-        A CRYSTAL ``.out`` output, a ``.gui``/``fort.34`` geometry file, or a
+        A CRYSTAL ``.out`` output, a ``.gui``/``.f34`` geometry file, or a
         crystallographic ``.cif``.
     initial:
         For ``.out`` files, read the initial geometry instead of the last one
@@ -604,13 +604,13 @@ def file_action(path: str) -> Optional[str]:
 def _is_gui(path: str) -> bool:
     """Whether ``path`` is a CRYSTAL geometry file (``fort.34`` and its kin).
 
-    ``.34`` counts as well as ``.gui``: the Open dialog has always offered
-    ``*.34``, but only a file still *called* ``fort.34`` was recognised, so a
-    renamed one — which is how anybody keeps more than one — was offered, chosen,
-    and then parsed as an output, which it is not.
+    A renamed ``fort.34`` is given ``.f34`` — which is the point of recognising
+    the extension at all: only a file still *called* ``fort.34`` used to be
+    recognised, so a renamed one, which is how anybody keeps more than one, was
+    offered in the dialog, chosen, and then parsed as an output, which it is not.
     """
     ext = os.path.splitext(path)[1].lower()
-    return ext in (".gui", ".34") or os.path.basename(path).startswith("fort.34")
+    return ext in (".gui", ".f34") or os.path.basename(path).startswith("fort.34")
 
 
 def _is_cif(path: str) -> bool:

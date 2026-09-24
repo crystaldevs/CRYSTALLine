@@ -13,7 +13,7 @@ import sys
 _USAGE = """\
 usage: crystalline [file] [--check] [--version]
 
-  file       a CRYSTAL .out/.gui/.34 or a .cif to open on startup
+  file       a CRYSTAL .out/.gui/.f34 or a .cif to open on startup
   --check    check this machine has what CRYSTALLine needs, and say what is
              missing if not
   --version  print the version and exit

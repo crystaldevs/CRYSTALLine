@@ -1948,7 +1948,7 @@ class MainWindow(QMainWindow):
         """Single open: loads geometry, and phonon modes too if the file has them."""
         path, _ = QFileDialog.getOpenFileName(
             self, "Open structure file", "",
-            "Structure files (*.out *.gui *.34 *.cif);;CRYSTAL files (*.out *.gui *.34);;"
+            "Structure files (*.out *.gui *.f34 *.cif);;CRYSTAL files (*.out *.gui *.f34);;"
             "CIF files (*.cif);;All files (*)",
         )
         if not path:
@@ -1991,8 +1991,8 @@ class MainWindow(QMainWindow):
         self._tile_restore = None  # nothing of the old file's tiling to go back to
         self._set_supercell((1, 1, 1))  # a fresh file starts at its own unit cell
         # Remember the output file so property plots (IR/Raman/elastic/EOS) can
-        # read it directly; geometry-only files (.gui/.34/.cif) carry no such data.
-        self._output_path = None if path.lower().endswith((".gui", ".34", ".cif")) else path
+        # read it directly; geometry-only files (.gui/.f34/.cif) carry no such data.
+        self._output_path = None if path.lower().endswith((".gui", ".f34", ".cif")) else path
         self._apply_cell_view()
         # After the view exists (and its ADP tensors have been pushed), so
         # switching the ellipsoids on draws them straight away.

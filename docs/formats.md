@@ -5,7 +5,7 @@
 | Format | Contents read |
 | --- | --- |
 | CRYSTAL `.out` | structure and symmetry, the parameters and results of the calculation, vibrational modes, elastic tensor, equation of state and anharmonic data, according to what the run contains |
-| CRYSTAL `.gui` / `.34` | structure and symmetry |
+| CRYSTAL `.gui` / `.f34` | structure and symmetry |
 | `.cif` | structure |
 
 These files may also be opened by dropping them on the window.
@@ -27,7 +27,7 @@ The files a PROPERTIES (`.d3`) run leaves beside the output:
 | `DOSS.DAT`, `*.DOSS` | densities of states |
 | `fort.25`, `*.f25` | either of those, and charge-density maps |
 | `DENS_CUBE.DAT`, `SPIN_CUBE.DAT`, `POT_CUBE.DAT`, `*.cube` | charge density, spin density and electrostatic potential on a 3D grid |
-| `fort.31` | the same grids in the DLV format |
+| `fort.31`, `*.f31` | the same grids in the DLV format |
 | Molden files | crystalline orbitals |
 | `.d3` decks | the band path's own point names |
 

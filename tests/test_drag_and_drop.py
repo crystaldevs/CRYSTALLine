@@ -106,7 +106,7 @@ def _window():
         ("RUN.OUT", "open"),          # the check is case-insensitive
         ("geom.gui", "open"),
         ("fort.34", "open"),
-        ("relaxed.34", "open"),       # a renamed fort.34 is still one
+        ("relaxed.f34", "open"),      # a renamed fort.34 is still one
         ("cell.cif", "open"),         # a whole structure: an open, not an import
         ("fragment.xyz", "import"),
         ("protein.pdb", "import"),

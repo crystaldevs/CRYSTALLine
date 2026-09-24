@@ -8,12 +8,20 @@ The symmetry reported depends on the periodicity of the structure:
 | --- | --- |
 | crystal (3D) | space group |
 | slab (2D) | layer group |
-| polymer (1D) | rod group |
+| polymer (1D) | the repeat length only — see below |
 | molecule (0D) | point group |
 
 The panel also reports the point group, the lattice parameters, the cell volume
 or area, the density and the formula. All of them are recomputed when the
 structure is edited.
+
+A polymer's symmetry is a rod group, and no rod group is named here: the
+symmetry library the program uses (spglib) implements the 230 space groups and
+the 80 layer groups, but not the 75 rod groups. A 1D structure is therefore
+reported by its repeat length and its formula, and its symmetry elements are
+listed by the point-symmetry analysis below like those of any other structure.
+A deck written for a polymer uses rod group 1, with every atom listed, which is
+always valid.
 
 ## Point symmetry analysis
 

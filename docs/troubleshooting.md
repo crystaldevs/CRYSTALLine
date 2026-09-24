@@ -60,9 +60,7 @@ optimisation which ends before `FREQCALC` contains none.
 
 The path is written as integers divided by a shrinking factor. A factor which
 would leave a coordinate fractional is refused rather than rounded; use `auto`,
-or a multiple of the factor proposed. For some lattices the conventional path
-cannot be written at all; see
-[Band paths](band-paths.md#lattices-whose-conventional-path-cannot-be-written).
+or a multiple of the factor proposed. 
 
 ## A plot fails
 

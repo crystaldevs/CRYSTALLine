@@ -12,13 +12,24 @@ _APP_NAME = "CRYSTALLine"
 
 
 def run(structure: Optional[Structure] = None) -> int:
-    """Launch the CRYSTALLine GUI. Returns the Qt exit code."""
-    # Imported here so `import crystalline.app` doesn't require a display.
+    """Launch the CRYSTALLine GUI. Returns the Qt exit code.
+
+    The order here is the startup time. Importing the main window pulls in VTK,
+    PyVista and Qt's 3D interactor — about four seconds — and on a machine that
+    has never run a matplotlib program, another ten while matplotlib scans every
+    font installed and caches the result. Done before ``QApplication`` exists,
+    as it used to be, that is quarter of a minute of nothing at all: no window,
+    no dock bounce, nothing to say the program is starting.
+
+    So Qt comes up first and puts the logo on screen, and the heavy import
+    happens behind it.
+    """
+    # Imported here so `import crystalline.app` doesn't require a display. Note
+    # what is *not* imported yet: the main window, and everything under it.
     from PySide6.QtGui import QIcon
     from PySide6.QtWidgets import QApplication
     from crystalline.resources import logo_path
     from crystalline.ui import safety, theme
-    from crystalline.ui.main_window import MainWindow
 
     # Both must run *before* QApplication is created: Qt reads the macOS bundle
     # name once, at construction, and the platform plugin is chosen there too.
@@ -35,9 +46,91 @@ def run(structure: Optional[Structure] = None) -> int:
     # be up before the first window exists.
     safety.install()
     theme.apply(app)  # the app's own look, light or dark to match the desktop
+
+    splash = _splash(app)
+    warming = _warm_font_cache()
+
+    from crystalline.ui.main_window import MainWindow  # the slow part
+
     window = MainWindow(structure)
+    if warming is not None:
+        warming.join()  # the window is about to draw labels with those fonts
     window.show()
+    if splash is not None:
+        splash.finish(window)
     return app.exec()
+
+
+def _splash(app):
+    """Put the logo on screen while the main window is being built.
+
+    Returns the splash screen, or ``None`` if it could not be shown — in which
+    case startup simply carries on without it. The message says which of the two
+    waits this is, because a first run takes three times as long as the rest and
+    looks, without a word, like the program has hung.
+    """
+    try:
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QColor, QPixmap
+        from PySide6.QtWidgets import QSplashScreen
+
+        from crystalline.resources import logo_path
+        from crystalline.ui import theme
+
+        pixmap = QPixmap(logo_path())
+        if pixmap.isNull():
+            return None
+        pixmap = pixmap.scaledToWidth(360, Qt.SmoothTransformation)
+        splash = QSplashScreen(pixmap)
+        message = "Starting…" if _fonts_are_cached() else "Starting — preparing fonts, first run only…"
+        colour = QColor(theme.active_palette(app).text)
+        splash.showMessage(message, Qt.AlignHCenter | Qt.AlignBottom, colour)
+        splash.show()
+        app.processEvents()  # nothing is painted until the event loop is let run
+        return splash
+    except Exception:  # noqa: BLE001 - a missing splash must never stop the app
+        return None
+
+
+def _fonts_are_cached() -> bool:
+    """Whether matplotlib has already scanned this machine's fonts.
+
+    Importing ``matplotlib`` is cheap (about a tenth of a second) and does *not*
+    build the cache; only ``font_manager`` does. So the cache can be asked about
+    before anything pays for it.
+    """
+    try:
+        import pathlib
+
+        import matplotlib
+
+        cache = pathlib.Path(matplotlib.get_cachedir())
+        return any(cache.glob("fontlist-v*.json"))
+    except Exception:  # noqa: BLE001 - assume cached; the message is a nicety
+        return True
+
+
+def _warm_font_cache():
+    """Start matplotlib's font scan on a background thread. Returns the thread.
+
+    ``pyvistaqt`` imports ``matplotlib.font_manager``, which on a machine with no
+    cache scans every installed font — eleven seconds here. That happens partway
+    through the main window's import either way; starting it now lets it run
+    while VTK and Qt are still loading, instead of after them. The main thread
+    blocks on the module's own import lock when it gets there, by which time most
+    of the scan is done.
+    """
+    import threading
+
+    def build() -> None:
+        try:
+            import matplotlib.font_manager  # noqa: F401 - imported for its side effect
+        except Exception:  # noqa: BLE001 - it will be imported again, and report then
+            pass
+
+    thread = threading.Thread(target=build, name="font-cache", daemon=True)
+    thread.start()
+    return thread
 
 
 def _prefer_x11_on_wayland() -> bool:
