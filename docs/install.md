@@ -53,7 +53,7 @@ These are installed automatically if not already present:
 
 | Package | Why |
 | --- | --- |
-| PySide6-Essentials ≥ 6.5 | the Qt GUI (Essentials, not the 847 MB metapackage) |
+| PySide6-Essentials ≥ 6.5 | the Qt GUI (Essentials, not the huge metapackage) |
 | pyvista ≥ 0.43, pyvistaqt ≥ 0.11.4, vtk ≥ 9.1 | the 3D viewport |
 | numpy ≥ 1.23, scipy ≥ 1.9 | geometry, bonds, statistics |
 | ase ≥ 3.23, pymatgen ≥ 2023.11.10, spglib ≥ 2.5 | structures, symmetry, Brillouin zones |

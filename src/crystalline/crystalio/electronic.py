@@ -441,6 +441,13 @@ def _band_blocks(text: str, path: str) -> List[BandDeck]:
     optionally followed by the two letters naming them. CRYSTAL also takes the
     path by label alone (``G X``, with the shrinking factor written 0), and
     such a deck carries nothing *but* the names.
+
+    The title record is skipped, deliberately, and so is anything else that is
+    not read by CRYSTAL itself. Many decks do write the path into it — ``SI
+    Path: Gamma-X-W-L-Gamma-K-X (Slater pg 255)`` — but a title is free text: it
+    is not parsed, not kept up to date with the numbers beneath it, and often
+    describes a longer path than the deck goes on to compute. Names are taken
+    only from what CRYSTAL reads as names.
     """
     blocks: List[BandDeck] = []
     lines = text.splitlines()

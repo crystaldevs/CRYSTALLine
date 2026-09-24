@@ -19,7 +19,9 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Optional
 
-import vtk
+# Named modules rather than the ``vtk`` umbrella: importing ``vtk`` pulls in all
+# 163 VTK modules, where PyVista needs 57, and costs about 0.6 s of every start.
+from vtkmodules.vtkCommonCore import VTK_FONT_FILE
 
 __all__ = ["unicode_font", "use_unicode_font"]
 
@@ -47,7 +49,7 @@ def use_unicode_font(actor) -> None:
         return
     try:
         text = actor.GetMapper().GetInputAlgorithm().GetTextProperty()
-        text.SetFontFamily(vtk.VTK_FONT_FILE)
+        text.SetFontFamily(VTK_FONT_FILE)
         text.SetFontFile(font)
     except Exception:  # noqa: BLE001 - purely cosmetic; never break a redraw
         pass

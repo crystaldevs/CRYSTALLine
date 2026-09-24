@@ -47,10 +47,11 @@ interactive view in the centre, the vibrational modes on the right.
 1. **Structure display.** Atoms, bonds, hydrogen bonds, coordination polyhedra
    and the unit cell, drawn in an interactive 3D view. Every element of the
    drawing can be configured from the Display panel.
-2. **Crystallography.** The space group of a crystal, the layer group of a
-   slab, the rod group of a polymer or the point group of a molecule, with the
-   lattice parameters, cell volume, density and formula. These are recomputed
-   whenever the structure is edited.
+2. **Crystallography.** The space group of a crystal, the layer group of a slab
+   or the point group of a molecule, with the lattice parameters, cell volume,
+   density and formula; a polymer is reported by its repeat length, since no
+   library names rod groups. These are recomputed whenever the structure is
+   edited.
 3. **Structure manipulation.** Atoms can be selected, moved, added, deleted,
    duplicated and changed in element; cells can be converted between primitive
    and crystallographic settings, expanded into supercells and edited through

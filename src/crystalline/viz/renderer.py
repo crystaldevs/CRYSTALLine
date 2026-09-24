@@ -24,7 +24,12 @@ from typing import Optional
 
 import numpy as np
 import pyvista as pv
-import vtk
+# Named modules rather than the ``vtk`` umbrella, which imports all of VTK
+# (163 modules against the 57 PyVista needs) and costs about 0.6 s of every
+# start. These four are in modules PyVista has already loaded by this point.
+from vtkmodules.vtkCommonCore import VTK_FONT_FILE
+from vtkmodules.vtkRenderingAnnotation import vtkCaptionActor2D
+from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkPropAssembly
 from ase.data import chemical_symbols
 from scipy.spatial import cKDTree
 
@@ -1680,7 +1685,7 @@ class StructureRenderer:
         font = unicode_font()
         if font is not None:
             for text in (bar.GetTitleTextProperty(), bar.GetLabelTextProperty()):
-                text.SetFontFamily(vtk.VTK_FONT_FILE)
+                text.SetFontFamily(VTK_FONT_FILE)
                 text.SetFontFile(font)
         self._density_bar = title
 
@@ -2079,7 +2084,7 @@ class StructureRenderer:
         # every child, which overrides anything a child computes for itself. A
         # prop assembly just groups props and lets each render on its own terms,
         # which is what the 2D labels below need.
-        assembly = vtk.vtkPropAssembly()
+        assembly = vtkPropAssembly()
         drawn = 0
         for axis, periodic in enumerate(self._structure.pbc):
             if not periodic:
@@ -2148,9 +2153,9 @@ def _sample_nearest(values: np.ndarray, field, points: np.ndarray) -> np.ndarray
 
 def _unlit_actor(mesh, color: str):
     """A flat-shaded actor for ``mesh`` — a gizmo reads best without lighting."""
-    mapper = vtk.vtkPolyDataMapper()
+    mapper = vtkPolyDataMapper()
     mapper.SetInputData(mesh)
-    actor = vtk.vtkActor()
+    actor = vtkActor()
     actor.SetMapper(mapper)
     actor.GetProperty().SetColor(*(c / 255.0 for c in _hex_to_rgb(color)))
     actor.GetProperty().SetLighting(False)
@@ -2160,9 +2165,9 @@ def _unlit_actor(mesh, color: str):
 
 def _bounds_padding_actor(radius: float):
     """An invisible sphere that only exists to widen the gizmo's bounds."""
-    mapper = vtk.vtkPolyDataMapper()
+    mapper = vtkPolyDataMapper()
     mapper.SetInputData(pv.Sphere(radius=radius, theta_resolution=8, phi_resolution=8))
-    actor = vtk.vtkActor()
+    actor = vtkActor()
     actor.SetMapper(mapper)
     actor.GetProperty().SetOpacity(0.0)
     actor.SetPickable(False)
@@ -2182,7 +2187,7 @@ def _axis_label_actor(text: str, position: np.ndarray, color: str):
     which would normally swivel to face the camera, cannot fix it inside an
     assembly whose matrix is imposed on its children.
     """
-    caption = vtk.vtkCaptionActor2D()
+    caption = vtkCaptionActor2D()
     caption.SetCaption(text)
     caption.SetAttachmentPoint(*np.asarray(position, dtype=float))
     caption.BorderOff()

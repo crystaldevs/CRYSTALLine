@@ -6,15 +6,16 @@ bands with `BAND`, and by the frequency deck, which computes phonon bands with
 
 ## Defining a path
 
-The **conventional path** of the Bravais lattice is proposed by default. It is
-derived from the lattice, so it follows the cell if the structure is changed.
+The **conventional path** of the Bravais lattice is proposed by default adopting 
+the Setyawan-Curtarolo convention. It is derived from the lattice, so it 
+follows the cell if the structure is changed.
 
 The path can also be edited directly: segments are added, removed and
 reordered, and the ends of a segment are given either as a label (`X`) or as
 coordinates (`1/2 1/4 3/4`).
 
-The third method is to define it on the Brillouin zone itself, with the **Path
-builder**:
+A third method consists in defining it on the Brillouin zone itself, with the 
+**Path builder**:
 
 ![Choosing a band path on the Brillouin zone](screen4.png)
 
@@ -39,18 +40,15 @@ With `auto`, the smallest factor which makes every coordinate integral is used;
 any multiple of it is also accepted. A factor which would leave a coordinate
 fractional is refused.
 
-## Lattices whose conventional path cannot be written
-
 For seven of the fourteen Bravais lattices — rhombohedral, body-centred
 tetragonal, the three centred orthorhombic lattices and the two monoclinic
 ones — the conventional path passes through points whose coordinates depend on
 the lattice parameters, and no shrinking factor represents them exactly. Two of
 the five plane lattices, the oblique and the centred rectangular, are in the
-same position.
-
-For these the proposed path runs from Γ to each of the special points that
-CRYSTAL names, all of which are simple fractions. The editor reports that this
-is what is being offered. Any other path can be defined with the path builder.
+same position. For these the proposed path runs from Γ to each of the special 
+points that CRYSTAL names, all of which are simple fractions. The editor reports 
+that this is what is being offered. Any other path can be defined with the path 
+builder.
 
 ## Slabs
 

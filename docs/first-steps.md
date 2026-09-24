@@ -3,7 +3,7 @@
 ## Opening a file
 
 **File → Open…** ({kbd}`Ctrl+O`) reads a CRYSTAL output (`.out`), a geometry
-file (`.gui`, `.34`) or a crystallographic information file (`.cif`). A file
+file (`.gui`, `.f34`) or a crystallographic information file (`.cif`). A file
 dropped on the window is opened in the same way.
 
 If the output contains a vibrational calculation, the modes are read with it.

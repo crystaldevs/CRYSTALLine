@@ -26,7 +26,9 @@ from __future__ import annotations
 from typing import Callable, Optional
 
 import numpy as np
-import vtk
+# Named modules, not the ``vtk`` umbrella — see viz/renderer.py.
+from vtkmodules.vtkInteractionStyle import vtkInteractorStyleTrackballCamera
+from vtkmodules.vtkRenderingCore import vtkPropPicker
 
 from crystalline.viz.renderer import StructureRenderer
 
@@ -34,7 +36,7 @@ from crystalline.viz.renderer import StructureRenderer
 _CLICK_SLOP_PX = 3
 
 
-class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
+class AtomDragStyle(vtkInteractorStyleTrackballCamera):
     """Trackball camera style that also lets you drag atoms."""
 
     def __init__(
@@ -58,7 +60,7 @@ class AtomDragStyle(vtk.vtkInteractorStyleTrackballCamera):
         self._on_grab = on_grab
         self._on_camera = on_camera
         self._editing = editing
-        self._picker = vtk.vtkPropPicker()
+        self._picker = vtkPropPicker()
 
         self._index: Optional[int] = None
         self._grabbed = False  # dragging this atom (edit mode), vs just tracking it
