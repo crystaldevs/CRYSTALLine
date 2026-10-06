@@ -26,29 +26,35 @@ identically whichever route the user takes.
 from __future__ import annotations
 
 import dataclasses
-from typing import List, Optional, Sequence
+import math
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
 from crystalline.core import lattice_planes as lp
 from crystalline.core import measure as measure_mod
+from crystalline.core.local_modes import LocalCoordinate, LocalModes
 from crystalline.core.structure import Structure
 from crystalline.ui import preferences
 from crystalline.ui.panels.controls import Section, SliderBox
@@ -91,6 +97,32 @@ _THICKNESS_MAX = 0.50
 # The panel's sections: the key each is remembered under, and its header.
 _SECTIONS = (("measure", "Measure"), ("planes", "Lattice planes"), ("atoms", "Atoms"))
 
+# The measurement table's columns. The last four are a LOCMODES run's, shown
+# only for one: the local mode of the internal coordinate a measurement is.
+_COL_NAME, _COL_VALUE, _COL_K, _COL_KD, _COL_MASS, _COL_FREQ = range(6)
+_LOCAL_COLUMNS = (_COL_K, _COL_KD, _COL_MASS, _COL_FREQ)
+_HEADERS = ("Measurement", "Value", "kᵃ", "kᵃ(d)", "mᵃ", "ωᵃ")
+_HEADER_TIPS = (
+    "The atoms measured — tick a row to draw it in the 3D view. Click any "
+    "heading to sort by it.",
+    "The value measured on the atoms on screen",
+    "Local force constant kᵃ (mdyn/Å) of the internal coordinate, from LOCMODES",
+    "Local force constant kᵃ(d) (mdyn·Å/rad²) of an angle or a dihedral, from LOCMODES",
+    "Local mass mᵃ (amu for a bond, amu·Å for an angle or a dihedral), from LOCMODES",
+    "Local frequency ωᵃ (cm⁻¹), from LOCMODES",
+)
+# The least width (px) the measured atoms keep: enough for a bond's two, and
+# both ends of a longer label.
+_NAME_MIN_WIDTH = 110
+# What each local column shows of an internal coordinate, and to how many places
+# — CRYSTAL's own for the constants and the mass; a tenth of a wavenumber.
+_LOCAL_FIELDS = {
+    _COL_K: ("force_constant", 3),
+    _COL_KD: ("angular_force_constant", 3),
+    _COL_MASS: ("mass", 3),
+    _COL_FREQ: ("frequency", 1),
+}
+
 
 class GeometryPanel(QWidget):
     """Measurements and atom-editing tools for the current selection."""
@@ -115,6 +147,14 @@ class GeometryPanel(QWidget):
         self._structure = structure
         self._selection: List[int] = []
         self._measurements: List[measure_mod.Measurement] = []
+        # A LOCMODES run's internal coordinates, and the source atom each atom
+        # on screen is an image of — together, what tells whether a measurement
+        # is one of them (see _local_for).
+        self._local_modes: Optional[LocalModes] = None
+        self._source_index: Optional[np.ndarray] = None
+        # The column and order the measurements are sorted by; None until a
+        # heading is clicked, when they stand in the order they were measured.
+        self._measure_sort: Optional[Tuple[int, Qt.SortOrder]] = None
         self._editing = False
         self._planes: List[lp.LatticePlane] = []
         self._miller_cell: Optional[np.ndarray] = None
@@ -220,11 +260,15 @@ class GeometryPanel(QWidget):
         self._measure_btn.clicked.connect(self._measure_selection)
         box.addWidget(self._measure_btn)
 
-        # Ticked measurements are drawn in the 3D view.
-        self._list = _CompactList()
+        # Ticked measurements are drawn in the 3D view. A table rather than a
+        # list, sorted by whichever heading is clicked: for a LOCMODES output a
+        # measurement can carry its local mode's force constant, mass and
+        # frequency beside the value, and "the stiffest bonds first" is a sort.
+        self._list = _MeasureTable()
         self._list.setToolTip("Tick a measurement to show it in the 3D view")
-        self._list.setSelectionMode(QListWidget.ExtendedSelection)
-        self._list.itemChanged.connect(lambda _item: self._emit_annotations())
+        self._list.itemChanged.connect(lambda _item, _column: self._emit_annotations())
+        self._list.header().sortIndicatorChanged.connect(self._sort_measurements)
+        self._show_local_columns(False)
         box.addWidget(self._list, 1)
 
         row = QHBoxLayout()
@@ -631,8 +675,121 @@ class GeometryPanel(QWidget):
         return [
             m
             for m, item in zip(self._measurements, self._items())
-            if item.checkState() == Qt.Checked
+            if item.checkState(_COL_NAME) == Qt.Checked
         ]
+
+    # ── local modes ─────────────────────────────────────────────────────
+    def set_local_modes(self, modes: Optional[LocalModes]) -> None:
+        """A LOCMODES run's internal coordinates, or ``None`` for any other file.
+
+        With them, a measurement that is one of those coordinates shows its
+        local mode in four more columns; without them, the columns are not
+        there at all.
+        """
+        self._local_modes = modes if modes else None
+        self._show_local_columns(self._local_modes is not None)
+        self._rematch()
+
+    def set_source_index(self, index) -> None:
+        """The source atom each atom on screen is an image of.
+
+        A measurement is taken on the atoms on screen; an internal coordinate
+        names the primitive cell's. This is what turns the one into the other —
+        a different list after every change of view or supercell.
+        """
+        self._source_index = None if index is None else np.asarray(index, dtype=int)
+        self._rematch()
+
+    def _local_for(self, measurement: measure_mod.Measurement) -> tuple:
+        """The internal coordinates ``measurement`` is — usually one, or none."""
+        modes, source = self._local_modes, self._source_index
+        if modes is None or source is None or measurement.kind == measure_mod.POINT:
+            return ()
+        # The atoms on screen and the index were derived together; an edit that
+        # adds or removes atoms leaves them out of step, and then nothing is
+        # claimed. (An atom moved by hand stays in step, and simply no longer
+        # matches: it is not where LOCMODES had it.)
+        if len(source) != len(self._structure) or any(
+                not 0 <= i < len(source) for i in measurement.indices):
+            return ()
+        atoms = [int(source[i]) for i in measurement.indices]
+        return modes.find(measurement.kind, atoms, measurement.points)
+
+    def _rematch(self) -> None:
+        """Look every measurement up again: the local modes or the atoms changed."""
+        for row, (measurement, item) in enumerate(zip(self._measurements, self._items())):
+            matched = dataclasses.replace(measurement, local=self._local_for(measurement))
+            self._measurements[row] = matched
+            self._fill_measure_row(item, matched)
+
+    def _show_local_columns(self, shown: bool) -> None:
+        for column in _LOCAL_COLUMNS:
+            self._list.setColumnHidden(column, not shown)
+
+    def _fill_measure_row(self, item: QTreeWidgetItem, m: measure_mod.Measurement) -> None:
+        """Write ``m`` into its row: the atoms, the value, and its local mode if any."""
+        if m.kind == measure_mod.POINT:
+            # The label carries the coordinates; they are the value column's.
+            name, _, _ = m.label.partition("  ")
+            x, y, z = (float(v) for v in m.points[0])
+            item.setText(_COL_NAME, name)
+            item.setText(_COL_VALUE, f"({x:.3f}, {y:.3f}, {z:.3f})")
+        else:
+            item.setText(_COL_NAME, m.label)
+            # 1.428 Å, but 108.561°: a degree sign sits on its number.
+            space = "" if m.unit == "°" else " "
+            item.setText(_COL_VALUE, f"{m.value:.3f}{space}{m.unit}")
+        for column, (field, places) in _LOCAL_FIELDS.items():
+            values = [getattr(c, field) for c in m.local]
+            item.setText(column, " / ".join(f"{v:.{places}f}" for v in values if v is not None))
+        for column in (_COL_VALUE,) + _LOCAL_COLUMNS:
+            item.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+        tip = self._local_tooltip(m)
+        for column in range(len(_HEADERS)):
+            item.setToolTip(column, tip)
+
+    def _local_tooltip(self, m: measure_mod.Measurement) -> str:
+        """Everything the row leaves out: CRYSTAL's numbering, cells and own value."""
+        if self._local_modes is None or m.kind == measure_mod.POINT:
+            return ""
+        if not m.local:
+            return "Not one of the internal coordinates LOCMODES gave a force constant for"
+        return "\n\n".join(_describe_local(c) for c in m.local)
+
+    # ── sorting ─────────────────────────────────────────────────────────
+    def _sort_measurements(self, column: int, order: Qt.SortOrder) -> None:
+        """A heading was clicked: sort by it, and keep sorting new rows into place."""
+        self._measure_sort = None if column < 0 else (column, order)
+        self._apply_measure_sort()
+
+    def _apply_measure_sort(self) -> None:
+        """Put the rows, and the measurements behind them, in the chosen order.
+
+        Both move together: the colour, thickness and remove buttons find a
+        measurement by its row, as they do the planes'. Rows with nothing in
+        the column — a point has no single value, a measurement no local mode —
+        stay at the bottom whichever way the column runs, and rows that tie keep
+        the order they had.
+        """
+        if self._measure_sort is None or len(self._measurements) < 2:
+            return
+        column, order = self._measure_sort
+        rows = list(zip(self._measurements, self._items()))
+        keyed = [(r, _sort_key(r[0], column)) for r in rows]
+        present = [(r, key) for r, key in keyed if key is not None]
+        present.sort(key=lambda pair: pair[1], reverse=order == Qt.DescendingOrder)
+        ordered = [r for r, _ in present] + [r for r, key in keyed if key is None]
+        selected = {id(item) for item in self._list.selectedItems()}
+        blocked = self._list.blockSignals(True)
+        try:
+            while self._list.topLevelItemCount():
+                self._list.takeTopLevelItem(0)
+            for _, item in ordered:
+                self._list.addTopLevelItem(item)
+                item.setSelected(id(item) in selected)
+        finally:
+            self._list.blockSignals(blocked)
+        self._measurements = [m for m, _ in ordered]
 
     def clear_measurements(self) -> None:
         self._measurements = []
@@ -651,11 +808,18 @@ class GeometryPanel(QWidget):
         if result is None:
             return
         result = dataclasses.replace(result, thickness=self.measurement_thickness())
+        result = dataclasses.replace(result, local=self._local_for(result))
         self._measurements.append(result)
-        item = QListWidgetItem(result.summary())
+        item = QTreeWidgetItem()
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)  # new measurements are shown straight away
-        self._list.addItem(item)
+        blocked = self._list.blockSignals(True)  # itemChanged would draw it half-made
+        try:
+            item.setCheckState(_COL_NAME, Qt.Checked)  # new measurements are shown straight away
+            self._fill_measure_row(item, result)
+            self._list.addTopLevelItem(item)
+        finally:
+            self._list.blockSignals(blocked)
+        self._apply_measure_sort()  # into its place, if a heading has been clicked
         self._emit_annotations()
 
     def _set_measurement_colour(self) -> None:
@@ -676,12 +840,12 @@ class GeometryPanel(QWidget):
 
     def _remove_selected_measurements(self) -> None:
         for row in reversed(self._selected_rows(self._list)):
-            self._list.takeItem(row)
+            self._list.takeTopLevelItem(row)
             del self._measurements[row]
         self._emit_annotations()
 
-    def _items(self) -> List[QListWidgetItem]:
-        return [self._list.item(row) for row in range(self._list.count())]
+    def _items(self) -> List[QTreeWidgetItem]:
+        return [self._list.topLevelItem(row) for row in range(self._list.topLevelItemCount())]
 
     def _emit_annotations(self) -> None:
         self.annotations_changed.emit(self.shown_annotations())
@@ -920,8 +1084,14 @@ class GeometryPanel(QWidget):
     # line's thickness, a sheet's opacity), restyled the same way: on the rows
     # picked in the list, or on every row when none is.
     @staticmethod
-    def _selected_rows(listing: QListWidget) -> List[int]:
-        """The rows picked in ``listing``, top to bottom."""
+    def _selected_rows(listing) -> List[int]:
+        """The rows picked in ``listing``, top to bottom.
+
+        The planes are a list and the measurements a table (a flat tree); a row
+        is found the one way or the other.
+        """
+        if isinstance(listing, QTreeWidget):
+            return sorted(listing.indexOfTopLevelItem(item) for item in listing.selectedItems())
         return sorted(listing.row(item) for item in listing.selectedItems())
 
     def _restyle(self, listing: QListWidget, entries: list, **change) -> None:
@@ -947,8 +1117,12 @@ class GeometryPanel(QWidget):
         if not chosen.isValid():
             return None
         self._restyle(listing, entries, color=chosen.name())
+        swatch = _colour_swatch(chosen.name())
         for row in rows:
-            listing.item(row).setIcon(_colour_swatch(chosen.name()))
+            if isinstance(listing, QTreeWidget):
+                listing.topLevelItem(row).setIcon(_COL_NAME, swatch)
+            else:
+                listing.item(row).setIcon(swatch)
         return chosen.name()
 
     def _plane_items(self) -> List[QListWidgetItem]:
@@ -1026,6 +1200,116 @@ class _CompactList(QListWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
         return QSize(super().sizeHint().width(), _LIST_HINT_HEIGHT)
+
+
+class _MeasureTable(QTreeWidget):
+    """The measurements as a table: one row each, sorted by a clicked heading.
+
+    A flat tree rather than a table widget, because a tree's rows are items the
+    way a list's are, so the buttons shared with the planes' list work on both.
+    It does not sort itself: the panel sorts the measurements and the rows
+    together (:meth:`GeometryPanel._apply_measure_sort`), so a row and the
+    measurement it shows can never come apart. A third click on a heading
+    leaves the order as it is and stops sorting new rows into it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setColumnCount(len(_HEADERS))
+        self.setHeaderLabels(list(_HEADERS))
+        heading = self.headerItem()
+        for column, tip in enumerate(_HEADER_TIPS):
+            heading.setToolTip(column, tip)
+        self.setRootIsDecorated(False)
+        self.setUniformRowHeights(True)
+        self.setAllColumnsShowFocus(True)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setSortingEnabled(False)
+        header = self.header()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicatorClearable(True)
+        header.setSortIndicator(-1, Qt.AscendingOrder)  # in the order measured
+        # The numbers in full, and the atoms in what is left over: a dihedral's
+        # four atoms took the width of the dock, and pushed ωᵃ out of sight
+        # behind a scroll bar. Shortened in the middle, a label keeps both its
+        # ends, and the row's tooltip has the atoms in full anyway. But not to
+        # nothing — in a narrow dock the numbers alone fill it — so the atoms
+        # keep a floor, and the table scrolls sideways past it (_fit_name_column).
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(_COL_NAME, QHeaderView.Interactive)
+        header.setStretchLastSection(False)
+        header.sectionResized.connect(lambda *_: self._fit_name_column())
+        self.setTextElideMode(Qt.ElideMiddle)
+        for column in (_COL_VALUE,) + _LOCAL_COLUMNS:
+            heading.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+
+    @guard()
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._fit_name_column()
+
+    def _fit_name_column(self) -> None:
+        """Give the atoms whatever width the numbers leave, and never less than a floor."""
+        header = self.header()
+        numbers = sum(header.sectionSize(column) for column in range(1, self.columnCount())
+                      if not self.isColumnHidden(column))
+        width = max(_NAME_MIN_WIDTH, self.viewport().width() - numbers)
+        if header.sectionSize(_COL_NAME) != width:
+            header.resizeSection(_COL_NAME, width)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        # As many rows as the list asked for, and room for the headings above them.
+        return QSize(super().sizeHint().width(),
+                     _LIST_HINT_HEIGHT + self.header().sizeHint().height())
+
+
+# What a measured quantity is called, for a tooltip, and where it sorts: bonds,
+# then angles, then dihedrals, so a column of mixed units runs within each kind.
+_KIND_NAMES = {measure_mod.DISTANCE: "a bond", measure_mod.ANGLE: "an angle",
+               measure_mod.DIHEDRAL: "a dihedral"}
+_KIND_ORDER = {measure_mod.DISTANCE: 0, measure_mod.ANGLE: 1, measure_mod.DIHEDRAL: 2}
+
+
+def _sort_key(m: measure_mod.Measurement, column: int):
+    """What ``m`` sorts by in ``column``; ``None`` when it has nothing there.
+
+    The value and the local mass come in different units for a bond and an
+    angle, so they sort within each kind; the force constants and the frequency
+    are in the same units for all three, and sort straight across.
+    """
+    kind = _KIND_ORDER.get(m.kind)
+    if column == _COL_NAME:
+        return m.label.casefold()
+    if column == _COL_VALUE:
+        return None if kind is None or not math.isfinite(m.value) else (kind, m.value)
+    field = _LOCAL_FIELDS.get(column, (None, 0))[0]
+    if field is None or not m.local:
+        return None
+    value = getattr(m.local[0], field)
+    if value is None:  # a bond's kᵃ(d)
+        return None
+    return (kind, value) if column == _COL_MASS else value
+
+
+def _describe_local(c: LocalCoordinate) -> str:
+    """A tooltip's account of one internal coordinate, in CRYSTAL's terms.
+
+    Atoms numbered as in the output, and the cell of any atom outside the
+    reference one, as a lattice translation of the primitive cell.
+    """
+    atoms = c.atom_label()
+    unit = "Å" if c.kind == measure_mod.DISTANCE else "°"
+    constants = f"kᵃ {c.force_constant:.3f} mdyn/Å"
+    if c.angular_force_constant is not None:
+        constants += f" · kᵃ(d) {c.angular_force_constant:.3f} mdyn·Å/rad²"
+    mass_unit = "amu" if c.kind == measure_mod.DISTANCE else "amu·Å"
+    return "\n".join([
+        f"LOCMODES internal coordinate {c.number}, {_KIND_NAMES.get(c.kind, c.kind)}: {atoms}",
+        f"CRYSTAL's value {c.value:.4f} {unit}",
+        constants,
+        f"mᵃ {c.mass:.3f} {mass_unit} · ωᵃ {c.frequency:.1f} cm⁻¹",
+    ])
 
 
 def _table_icon() -> QIcon:

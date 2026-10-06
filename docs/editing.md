@@ -67,11 +67,39 @@ open stay open in every tab and the next time the program is started.
 | 3              | an angle                 |
 | 4              | a dihedral angle         |
 
-Measurements remain drawn in the view and can be coloured individually or by
-type. The **Thickness** slider sets how thick the lines of distances, angles and
-dihedrals are drawn, in Å: those selected in the list, all of them when none is
-selected, and the ones measured next. A plane through the selected atoms is
-fitted under **Lattice planes**.
+Measurements are listed in a table, the value beside the atoms, and a tick
+draws a measurement in the view; a click on a heading sorts the table by that
+column, and a third click on the same heading stops sorting. They can be
+coloured individually or by type. The **Thickness** slider sets how thick the
+lines of distances, angles and dihedrals are drawn, in Å: those selected in the
+table, all of them when none is selected, and the ones measured next. A plane
+through the selected atoms is fitted under **Lattice planes**.
+
+### Local modes
+
+For the output of a frequency calculation run with `LOCMODES`, the table has
+four more columns. A bond, an angle or a dihedral measured on the atoms of one
+of the internal coordinates LOCMODES computed a force constant for shows that
+coordinate's local mode beside the measured value:
+
+| Column | Quantity | Unit |
+| ------ | -------- | ---- |
+| *k*ᵃ | local force constant | mdyn/Å |
+| *k*ᵃ(d) | local force constant of an angle or a dihedral | mdyn·Å/rad² |
+| *m*ᵃ | local mass | amu for a bond, amu·Å for an angle or a dihedral |
+| *ω*ᵃ | local frequency | cm⁻¹ |
+
+A measurement is recognised by its atoms and by where they are relative to one
+another, so it can be taken in any cell on screen, and from either end: an
+angle keeps its vertex in the middle, as LOCMODES has it. An internal coordinate
+whose atoms lie in neighbouring cells is found on the images drawn there —
+boundary atoms, or a supercell. A near-linear angle, which LOCMODES treats as
+two bends over the same three atoms, shows both, separated by a slash. Hovering
+over a row gives the coordinate as CRYSTAL numbers it, with the cell of each
+atom outside the reference one and CRYSTAL's own value, which for some
+coordinates is not the plain angle of the atoms. A measurement that is none of
+the internal coordinates leaves the four columns empty, and sorts below the
+rest. Reading the section needs CRYSTALClear 0.2.17 or later.
 
 ## Lattice planes
 

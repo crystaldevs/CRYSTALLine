@@ -2770,6 +2770,13 @@ class MainWindow(QMainWindow):
         self._clear_density()
         # Lattice planes outlive a change of view, not a change of crystal.
         self.geometry_panel.clear_lattice_planes()
+        # A LOCMODES run's force constants go beside the measurements that are
+        # its internal coordinates — before the view is built, which tells the
+        # panel which atom on screen is which (see _apply_cell_view). Run here
+        # only as the tab is shown, so a note about them is seen when it is said.
+        self.geometry_panel.set_local_modes(read.local_modes)
+        if read.local_modes_note:
+            self.statusBar().showMessage(f"Local modes not read: {read.local_modes_note}", 8000)
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = read.adps
@@ -3244,6 +3251,10 @@ class MainWindow(QMainWindow):
 
         self._replace_structure(shown, unit_cell, analysis)
         self._adp_index = source_index
+        # The same index tells the Measure section which of a LOCMODES run's
+        # atoms a measurement was taken on.
+        if hasattr(self, "geometry_panel"):
+            self.geometry_panel.set_source_index(source_index)
         self._refresh_adp_tensors()
         self._update_adp_controls()
         if modes is not None:
@@ -3379,6 +3390,10 @@ class _ReadFile:
     adps: Optional[ADPSet]          # thermal ellipsoids, when the run has them
     output_props: dict              # the run's own rows for the Info panel
     capabilities: dict              # probe key → what _probe found
+    # A LOCMODES run's internal coordinates and their local modes, for the
+    # Measure section; and, when the run has them and they would not read, why.
+    local_modes: Optional[object] = None
+    local_modes_note: Optional[str] = None
 
 
 def _read_file(path: str) -> _ReadFile:
@@ -3389,7 +3404,8 @@ def _read_file(path: str) -> _ReadFile:
     most runs carry no ADPs, not every output has the rows the Info panel shows,
     and a probe that fails here is simply left for the window to ask again.
     """
-    from crystalline.crystalio import load, load_adp, output_properties
+    from crystalline.crystalio import (LocalModesError, load, load_adp, output_properties,
+                                       read_local_modes)
 
     loaded = load(path)
     # Geometry-only files (.gui/.f34/.cif) carry no results to plot.
@@ -3408,7 +3424,17 @@ def _read_file(path: str) -> _ReadFile:
             capabilities[key] = _probe(key, output_path)
         except Exception:  # noqa: BLE001 - asked again, and reported, by the window
             pass
-    return _ReadFile(loaded, output_path, adps, output_props, capabilities)
+    # Read here, with the rest, rather than when a measurement asks: a tenth of
+    # a second on a large run, and pandas to import the first time.
+    local_modes, local_modes_note = None, None
+    try:
+        local_modes = read_local_modes(output_path)
+    except LocalModesError as exc:
+        local_modes_note = str(exc)
+    except Exception as exc:  # noqa: BLE001 - never let this break loading a file
+        local_modes_note = f"the LOCMODES section could not be read ({exc})"
+    return _ReadFile(loaded, output_path, adps, output_props, capabilities,
+                     local_modes, local_modes_note)
 
 
 def _no_title_bar(dock: QDockWidget) -> QWidget:

@@ -20,6 +20,7 @@ copied them in and refreshes them from a local copy of their sources.
 | `methane` | an anharmonic scan (`ANHAPES`) | |
 | `thiourea` | a harmonic frequency run | |
 | `corundum` | the output of an `ORBITALS` run — the orbitals themselves are too big to ship | |
+| `locmodes` | `h2o2_synthetic.out`: a `LOCMODES` section for H₂O₂ in a 5 Å box, with made-up force constants, laid out as CRYSTAL23 lays out the blocks the reader needs — not a run | written for the tests |
 
 The school material comes from the CRYSTAL schools' own public repositories —
 [MSSC2024](https://github.com/crystaldevs/MSSC2024),

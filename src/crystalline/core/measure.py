@@ -52,6 +52,12 @@ class Measurement:
     color: Optional[str] = None
     # How thick (Å) its line is drawn. A point is a dot, and has no line.
     thickness: float = DEFAULT_THICKNESS
+    # The LOCMODES internal coordinates this is, when the run computed any —
+    # :class:`crystalline.core.local_modes.LocalCoordinate`, usually one; two
+    # for a near-linear angle, which LOCMODES takes as two bends. Empty
+    # otherwise. Kept on the measurement so it follows it through a sort or a
+    # restyle.
+    local: Tuple[object, ...] = ()
 
     @property
     def unit(self) -> str:

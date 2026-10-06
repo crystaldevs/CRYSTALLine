@@ -83,7 +83,7 @@ def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
     panel._measure_selection()
     assert len(panel.shown_annotations()) == 1
 
-    panel._items()[0].setCheckState(Qt.Unchecked)
+    panel._items()[0].setCheckState(0, Qt.Unchecked)   # the tick is the first column's
     assert panel.shown_annotations() == []       # nothing drawn
     assert len(panel.measurements()) == 1        # but still listed
     assert shown[-1] == []                       # and the viewport was told
@@ -97,7 +97,7 @@ def test_clearing_and_removing_measurements(qapp):
     panel._measure_selection()
     assert len(panel.measurements()) == 2
 
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     panel._remove_selected_measurements()
     assert len(panel.measurements()) == 1
     assert panel.measurements()[0].kind == M.ANGLE  # the right one went
@@ -190,8 +190,8 @@ def test_setting_a_per_item_colour(qapp, monkeypatch):
 
     # Recolour just the distance (row 0); the colour dialog is stubbed.
     monkeypatch.setattr(QColorDialog, "getColor", staticmethod(lambda *a, **k: QColor("#123456")))
-    panel._list.item(0).setSelected(True)
-    panel._list.item(1).setSelected(False)
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(False)
     panel._set_measurement_colour()
 
     assert panel.measurements()[0].color == "#123456"  # the distance is recoloured
@@ -206,7 +206,7 @@ def test_colour_button_needs_a_selected_measurement(qapp):
     panel._list.clearSelection()
     panel._sync_buttons()
     assert not panel._color_btn.isEnabled()  # nothing selected → nothing to recolour
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._color_btn.isEnabled()
 
 
@@ -228,12 +228,12 @@ def test_the_thickness_slider_sets_every_line_or_the_selected_ones(qapp):
     assert panel._thickness.box.value() == pytest.approx(0.2)      # the box follows
 
     # one selected: only that one, and picking another shows its value
-    panel._list.item(1).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(True)
     panel._thickness.box.setValue(0.35)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
     assert panel._thickness.slider.value() == round((0.35 - 0.02) / 0.48 * 1000)
     panel._list.clearSelection()
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._thickness.box.value() == pytest.approx(0.2)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
 
@@ -797,3 +797,154 @@ def test_a_fitted_plane_has_no_position_to_slide(qapp):
     assert not panel._plane_offset.isEnabled()
     panel._plane_offset.set_value(0.4)              # must not raise
     assert panel.lattice_planes()[0].rms == pytest.approx(0.0)
+
+
+# ── local modes: a LOCMODES run's force constants beside the measurements ──
+def _peroxide():
+    """H2O2 as on screen: its four atoms, and O2 again in the cell along −a, at
+    the far end of the H3···O2 contact LOCMODES lists. Source atoms 0–3, then 1."""
+    s = Structure.empty()
+    for element, position in (("O", [0.0, 0.0, 0.0]), ("O", [1.45, 0.0, 0.0]),
+                              ("H", [-0.3, 0.9, 0.2]), ("H", [1.75, -0.2, 0.9]),
+                              ("O", [1.45 - 5.0, 0.0, 0.0])):
+        s.add_atom(element, position)
+    return s, [0, 1, 2, 3, 1]
+
+
+def _peroxide_modes():
+    """The local modes of ``data/locmodes/h2o2_synthetic.out``, built by hand."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+
+    origin = (0, 0, 0)
+    positions = [[0.0, 0.0, 0.0], [1.45, 0.0, 0.0], [-0.3, 0.9, 0.2], [1.75, -0.2, 0.9]]
+    coordinates = (
+        LocalCoordinate(1, M.DISTANCE, (0, 1), (origin, origin), ("O", "O"),
+                        1.45, 4.2, None, 8.0, 950.0),
+        LocalCoordinate(2, M.DISTANCE, (0, 2), (origin, origin), ("O", "H"),
+                        0.9695, 6.5, None, 0.95, 3400.0),
+        LocalCoordinate(4, M.DISTANCE, (2, 1), (origin, (-1, 0, 0)), ("H", "O"),
+                        3.3782, 0.15, None, 0.98, 500.0),
+        LocalCoordinate(5, M.ANGLE, (2, 0, 1), (origin,) * 3, ("H", "O", "O"),
+                        108.0247, 0.7, 0.6, 1.0, 1300.0),
+    )
+    return LocalModes(positions, np.eye(3) * 5.0, coordinates)
+
+
+def _locmodes_panel():
+    structure, source = _peroxide()
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(_peroxide_modes())
+    panel.set_source_index(source)
+    return panel
+
+
+def _measure(panel, *atoms):
+    panel.set_selection(list(atoms))
+    panel._measure_selection()
+    return panel.measurements()[-1]
+
+
+def _row(panel, row):
+    from crystalline.ui.panels.geometry_panel import _HEADERS
+
+    item = panel._items()[row]
+    return [item.text(column) for column in range(len(_HEADERS))]
+
+
+def test_a_measured_internal_coordinate_has_its_local_mode_beside_it(qapp):
+    """What a LOCMODES run adds: measure a bond, and if it is one of the internal
+    coordinates the run computed, its local force constant, mass and frequency
+    are there beside the value."""
+    panel = _locmodes_panel()
+    bond = _measure(panel, 0, 1)
+    assert [c.number for c in bond.local] == [1]
+    assert _row(panel, 0)[1:] == ["1.450 Å", "4.200", "", "8.000", "950.0"]   # no kᵃ(d) for a bond
+    angle = _measure(panel, 1, 0, 2)                      # O2–O1–H3: the same angle, backwards
+    assert [c.number for c in angle.local] == [5]
+    assert _row(panel, 1)[1:] == ["108.025°", "0.700", "0.600", "1.000", "1300.0"]
+
+
+def test_a_measurement_that_is_none_of_them_has_nothing_beside_it(qapp):
+    panel = _locmodes_panel()
+    assert _measure(panel, 0, 3).local == ()               # O1···H4: not an internal coordinate
+    assert _row(panel, 0)[2:] == ["", "", "", ""]
+    assert "Not one of the internal coordinates" in panel._items()[0].toolTip(0)
+
+
+def test_a_contact_into_the_next_cell_is_found_on_the_atom_there(qapp):
+    """LOCMODES names the far atom of H3···O2 by its cell, (-1 0 0): it is the O2
+    drawn a cell along −a, not the one bonded to O1."""
+    panel = _locmodes_panel()
+    assert [c.number for c in _measure(panel, 2, 4).local] == [4]
+    assert _measure(panel, 2, 1).local == ()
+    tip = panel._items()[0].toolTip(0)
+    assert "LOCMODES internal coordinate 4, a bond: H3–O2 (-1 0 0)" in tip
+    assert "CRYSTAL's value 3.3782 Å" in tip
+
+
+def test_the_local_mode_columns_are_there_only_for_a_locmodes_run(qapp):
+    from crystalline.ui.panels.geometry_panel import _LOCAL_COLUMNS
+
+    structure, source = _peroxide()
+    panel = GeometryPanel(structure)
+    hidden = lambda: [panel._list.isColumnHidden(c) for c in _LOCAL_COLUMNS]  # noqa: E731
+    assert hidden() == [True] * 4
+    panel.set_local_modes(_peroxide_modes())
+    assert hidden() == [False] * 4
+    panel.set_local_modes(None)                            # the next file opened in the tab
+    assert hidden() == [True] * 4
+
+
+def test_sorting_moves_each_measurement_with_its_row(qapp):
+    """The table sorts by whichever heading is clicked, and the measurement behind
+    each row goes with it: Remove takes away the row picked, and nothing else.
+    Rows with nothing in the column stay at the bottom, whichever way it runs."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    panel = _locmodes_panel()
+    _measure(panel, 0, 1)            # O1–O2, kᵃ 4.2
+    _measure(panel, 0, 3)            # O1···H4, none
+    _measure(panel, 0, 2)            # O1–H3, kᵃ 6.5
+    panel._items()[0].setCheckState(0, Qt.Unchecked)       # O1–O2 not drawn
+
+    panel._list.header().setSortIndicator(_COL_K, Qt.DescendingOrder)
+    assert [_row(panel, r)[_COL_K] for r in range(3)] == ["6.500", "4.200", ""]
+    assert [round(m.value, 4) for m in panel.measurements()] == [0.9695, 1.45, pytest.approx(2.0, abs=0.1)]
+    assert [m.value for m in panel.shown_annotations()] == [panel.measurements()[0].value,
+                                                            panel.measurements()[2].value]
+    _measure(panel, 2, 4)            # H3···O2(−a), kᵃ 0.15: sorted into place
+    assert [_row(panel, r)[_COL_K] for r in range(4)] == ["6.500", "4.200", "0.150", ""]
+
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._remove_selected_measurements()
+    assert [_row(panel, r)[_COL_K] for r in range(3)] == ["4.200", "0.150", ""]
+    assert [m.local[0].number for m in panel.measurements()[:2]] == [1, 4]
+
+
+def test_a_third_click_on_a_heading_stops_sorting(qapp):
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    panel = _locmodes_panel()
+    _measure(panel, 0, 1)
+    _measure(panel, 0, 2)
+    header = panel._list.header()
+    header.setSortIndicator(_COL_K, Qt.DescendingOrder)
+    header.setSortIndicator(-1, Qt.AscendingOrder)         # cleared: left as it stands
+    _measure(panel, 2, 4)
+    assert [_row(panel, r)[_COL_K] for r in range(3)] == ["6.500", "4.200", "0.150"]
+
+
+def test_atoms_out_of_step_with_their_source_are_not_claimed(qapp):
+    """An edit that adds or removes atoms leaves the index from the last view
+    behind: nothing is matched rather than the wrong thing."""
+    panel = _locmodes_panel()
+    panel.set_source_index([0, 1, 2])                      # three, for five atoms on screen
+    assert _measure(panel, 0, 1).local == ()
+
+
+def test_a_point_lists_its_coordinates_as_its_value(qapp):
+    panel = _locmodes_panel()
+    _measure(panel, 3)
+    assert _row(panel, 0)[:2] == ["H(3)", "(1.750, -0.200, 0.900)"]
+    assert _row(panel, 0)[2:] == ["", "", "", ""]
+
