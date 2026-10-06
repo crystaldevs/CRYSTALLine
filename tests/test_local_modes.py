@@ -226,3 +226,69 @@ def test_the_window_hands_the_measure_section_its_local_modes_and_atoms():
     assert "self.geometry_panel.set_source_index(source_index)" in inspect.getsource(
         MainWindow._apply_cell_view)
 
+
+# ── by symmetry ───────────────────────────────────────────────────────────
+# Two O–H units related by the inversion through the origin, in a 5 Å cube: a
+# crystal with that symmetry, and nothing else. LOCMODES lists the first O–H only.
+_PAIR = np.array([[0.6, 0.1, 0.2], [1.5, 0.4, 0.5], [-0.6, -0.1, -0.2], [-1.5, -0.4, -0.5]])
+_PAIR_TYPES = (8, 1, 8, 1)
+
+
+def _oh(number, a, b, frequency=3500.0):
+    return LocalCoordinate(number, M.DISTANCE, (a, b), _ORIGIN * 2, ("O", "H"),
+                           0.95, 7.0, None, 0.95, frequency)
+
+
+def _pair(*coordinates, count=2):
+    return LocalModes(_PAIR, _LATTICE, tuple(coordinates), _PAIR_TYPES, count)
+
+
+def test_a_coordinate_not_listed_is_found_by_symmetry():
+    """The second O–H is the image of the first under the inversion: the same
+    local mode, though LOCMODES never names it."""
+    modes = _pair(_oh(1, 0, 1))
+    assert modes.find(M.DISTANCE, (2, 3), _PAIR[[2, 3]]) == ()     # not listed
+    found = modes.find_by_symmetry(M.DISTANCE, (2, 3), _PAIR[[2, 3]])
+    assert [(c.number, c.symmetry, c.force_constant) for c in found] == [(1, "-x, -y, -z", 7.0)]
+    assert modes.find_by_symmetry(M.DISTANCE, (3, 2), _PAIR[[3, 2]])  # from either end
+    assert modes.find_by_symmetry(M.DISTANCE, (0, 3), _PAIR[[0, 3]]) == ()  # O1···H4: none
+
+
+def test_symmetry_is_used_only_when_it_is_the_calculations():
+    """The inversion carries no listed coordinate onto another, so nothing in the
+    data can bear it out. It is used when CRYSTAL says it used as many operators
+    as the geometry has — the same group — and not when it does not say, or
+    used fewer: a run in a subgroup, whose local modes need not keep it."""
+    for count, kept in ((2, ["-x, -y, -z"]), (None, []), (1, [])):
+        assert [o.symbol for o in _pair(_oh(1, 0, 1), count=count).operations()] == kept
+
+
+def test_an_operation_the_local_modes_contradict_is_not_used():
+    """Both O–H listed, with different frequencies: then the inversion is not a
+    symmetry of the local modes, whatever the geometry says."""
+    modes = _pair(_oh(1, 0, 1), _oh(2, 2, 3, frequency=3400.0))
+    assert modes.operations() == []
+
+
+def test_a_listed_coordinate_is_found_as_listed_not_by_symmetry():
+    modes = _pair(_oh(1, 0, 1))
+    assert [c.symmetry for c in modes.find(M.DISTANCE, (0, 1), _PAIR[[0, 1]])] == [None]
+
+
+def test_an_operation_is_written_as_the_international_tables_write_it():
+    from crystalline.core.local_modes import _symbol
+
+    assert _symbol(np.diag([-1, 1, -1]), np.array([0.5, 0.5, 0.5])) == "-x+1/2, y+1/2, -z+1/2"
+    assert _symbol(np.array([[0, -1, 0], [1, -1, 0], [0, 0, 1]]),
+                   np.array([0.0, 0.0, 1 / 3])) == "-y, x-y, z+1/3"
+
+
+@pytest.mark.parametrize("line, count", [
+    (" ****    4 SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS", 4),   # what 0.2.17's reader misses
+    (" ****   48 SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS", 48),
+])
+def test_crystals_operator_count_is_read_however_spaced(line, count):
+    from crystalline.crystalio.locmodes import _operation_count
+
+    assert _operation_count(["a line", line, "another"], 3) == count
+    assert _operation_count(["no table here"], 1) is None

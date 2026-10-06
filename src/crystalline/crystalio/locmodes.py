@@ -45,6 +45,7 @@ _SCREENED = "N OF REMAINING INTERNAL COORDINATES AFTER SCREENING"
 _CARTESIAN = "CARTESIAN COORDINATES - PRIMITIVE CELL"
 _LATTICE = "DIRECT LATTICE VECTORS CARTESIAN COMPONENTS (ANGSTROM)"
 
+_SYMMOPS = re.compile(r"^\s*\*+\s+(\d+)\s+SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS")
 _ELEMENT = re.compile(r"^[A-Z][a-z]?$")
 _INTEGER = re.compile(r"-?\d+")
 
@@ -98,16 +99,17 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
             out.get_locmodes()
         lines = list(out.data)
         start = _first(lines, _SCREENED)
-        positions = _cartesian_positions(lines, start)
+        positions, types = _cartesian_positions(lines, start)
         lattice = _lattice(lines, start)
         coordinates = _coordinates(out, len(positions))
+        operation_count = _operation_count(lines, start)
     except LocalModesError:
         raise
     except Exception as exc:  # noqa: BLE001 - whatever the parse trips on, it is said
         raise LocalModesError(f"the LOCMODES section could not be read ({exc})") from exc
     if not coordinates:
         raise LocalModesError("the LOCMODES section lists no internal coordinates")
-    return LocalModes(positions, lattice, tuple(coordinates))
+    return LocalModes(positions, lattice, tuple(coordinates), types, operation_count)
 
 
 # ── the blocks around the tables ──────────────────────────────────────────
@@ -126,14 +128,16 @@ def _last_before(lines: Sequence[str], text: str, end: int) -> int:
     raise LocalModesError(f"no {text!r} block before the LOCMODES section")
 
 
-def _cartesian_positions(lines: Sequence[str], end: int) -> np.ndarray:
-    """CRYSTAL's Cartesian coordinates of the primitive cell's atoms, in Å.
+def _cartesian_positions(lines: Sequence[str], end: int) -> Tuple[np.ndarray, Tuple[int, ...]]:
+    """CRYSTAL's Cartesian coordinates of the primitive cell's atoms, in Å, and their kinds.
 
     Rows of ``number, Z, element, x, y, z`` under four lines of header, to the
-    first line that is not one.
+    first line that is not one. ``Z`` is CRYSTAL's conventional atomic number,
+    which tells apart two atoms of one element given different basis sets or
+    pseudopotentials: what the crystal's symmetry has to keep apart too.
     """
     start = _last_before(lines, _CARTESIAN, end)
-    positions = []
+    positions, types = [], []
     for line in lines[start + 4:]:
         parts = line.split()
         if len(parts) != 6 or not parts[0].isdigit():
@@ -141,9 +145,10 @@ def _cartesian_positions(lines: Sequence[str], end: int) -> np.ndarray:
         if int(parts[0]) != len(positions) + 1:
             raise LocalModesError(f"atom {parts[0]} out of order in the Cartesian block")
         positions.append([float(value) for value in parts[3:6]])
+        types.append(int(parts[1]))
     if not positions:
         raise LocalModesError("an empty Cartesian block")
-    return np.asarray(positions, dtype=float)
+    return np.asarray(positions, dtype=float), tuple(types)
 
 
 def _lattice(lines: Sequence[str], end: int) -> np.ndarray:
@@ -154,6 +159,26 @@ def _lattice(lines: Sequence[str], end: int) -> np.ndarray:
     if lattice.shape != (3, 3) or abs(np.linalg.det(lattice)) < 1e-8:
         raise LocalModesError("the lattice vectors span no volume")
     return lattice
+
+
+def _operation_count(lines: Sequence[str], end: int) -> Optional[int]:
+    """How many symmetry operators CRYSTAL used, the identity among them.
+
+    From the head of its table, ``****    4 SYMMOPS - TRANSLATORS IN FRACTIONAL
+    UNITS``, the last before the LOCMODES section. Only the count: the
+    operators themselves are printed in the conventional cell's frame, and the
+    positions are the primitive cell's. The count is what tells whether the
+    symmetry found from the geometry is the calculation's.
+
+    Read here rather than through ``Crystal_output.get_symmops``, which in
+    CRYSTALClear 0.2.17 looks for exactly three spaces before the number and
+    so misses every table of fewer than ten operators.
+    """
+    for index in range(end - 1, -1, -1):
+        match = _SYMMOPS.match(lines[index])
+        if match:
+            return int(match.group(1))
+    return None
 
 
 # ── the tables ────────────────────────────────────────────────────────────

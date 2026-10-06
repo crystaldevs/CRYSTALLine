@@ -998,7 +998,8 @@ def test_the_table_is_exported_as_it_is_shown(qapp, tmp_path):
     assert header == list(M.EXPORT_COLUMNS) + list(M.EXPORT_LOCAL_COLUMNS)
     assert [row[1] for row in rows] == ["O(0)–O(1)", "H(2)–O(4)", "O(0)–H(3)"]   # as sorted
     assert rows[0][:4] == ["distance", "O(0)–O(1)", "1.450000", "Å"]
-    assert rows[0][4:] == ["1", "O1–O2", "1.45", "4.2", "", "8.0", "950.0"]     # no K^A(D) for a bond
+    assert rows[0][4:] == ["1", "O1–O2", "1.45", "4.2", "", "8.0", "950.0",     # no K^A(D) for a bond
+                           "as listed"]
     assert rows[1][4:6] == ["4", "H3–O2 (-1 0 0)"]
     assert rows[2][4:] == [""] * len(M.EXPORT_LOCAL_COLUMNS)                    # none of them
 
@@ -1097,3 +1098,34 @@ def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
     assert buttons[0].width() > 100                     # and wider at 640 than at their least
     panel.hide()
 
+
+def test_a_measurement_found_by_symmetry_is_marked_as_such(qapp, tmp_path):
+    """Its local mode is a listed coordinate's, carried over by an operation of
+    the crystal: in italics in the table, the operation in the tooltip and in
+    the export, so it is never taken for a coordinate the output names."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    pair = [[0.6, 0.1, 0.2], [1.5, 0.4, 0.5], [-0.6, -0.1, -0.2], [-1.5, -0.4, -0.5]]
+    structure = Structure.empty()
+    for element, position in zip("OHOH", pair):
+        structure.add_atom(element, position)
+    oh = LocalCoordinate(1, M.DISTANCE, (0, 1), ((0, 0, 0),) * 2, ("O", "H"),
+                         0.95, 7.0, None, 0.95, 3500.0)
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(LocalModes(pair, np.eye(3) * 5.0, (oh,), (8, 1, 8, 1), 2))
+    panel.set_source_index([0, 1, 2, 3])
+
+    listed = _measure(panel, 0, 1)
+    mirrored = _measure(panel, 2, 3)                      # the inversion's image, not listed
+    assert [c.symmetry for c in listed.local] == [None]
+    assert [(c.number, c.symmetry) for c in mirrored.local] == [(1, "-x, -y, -z")]
+    rows = panel._items()
+    assert rows[1].text(_COL_K) == rows[0].text(_COL_K) == "7.000"
+    assert rows[1].font(_COL_K).italic() and not rows[0].font(_COL_K).italic()
+    assert "Not listed itself" in rows[1].toolTip(0) and "-x, -y, -z" in rows[1].toolTip(0)
+
+    target = tmp_path / "pair.csv"
+    panel.export_csv(str(target))
+    _, first, second = _read_csv(target)
+    assert (first[-1], second[-1]) == ("as listed", "by symmetry (-x, -y, -z)")

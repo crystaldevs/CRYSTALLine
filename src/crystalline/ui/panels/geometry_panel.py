@@ -735,7 +735,11 @@ class GeometryPanel(QWidget):
                 not 0 <= i < len(source) for i in measurement.indices):
             return ()
         atoms = [int(source[i]) for i in measurement.indices]
-        return modes.find(measurement.kind, atoms, measurement.points)
+        # As listed, or else as the image of a coordinate that is: LOCMODES
+        # does not list every one of a set the crystal's symmetry makes
+        # equivalent, and equivalent coordinates share a local mode.
+        return (modes.find(measurement.kind, atoms, measurement.points)
+                or modes.find_by_symmetry(measurement.kind, atoms, measurement.points))
 
     def _rematch(self) -> None:
         """Look every measurement up again: the local modes or the atoms changed."""
@@ -766,6 +770,14 @@ class GeometryPanel(QWidget):
             item.setText(column, " / ".join(f"{v:.{places}f}" for v in values if v is not None))
         for column in (_COL_VALUE,) + _LOCAL_COLUMNS:
             item.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+        # A local mode found by symmetry, not as listed, in italics: the same
+        # numbers, said of a coordinate the output never names (the tooltip
+        # says which one it is the image of).
+        by_symmetry = any(c.symmetry for c in m.local)
+        for column in _LOCAL_COLUMNS:
+            font = item.font(column)
+            font.setItalic(by_symmetry)
+            item.setFont(column, font)
         tip = self._local_tooltip(m)
         for column in range(len(_HEADERS)):
             item.setToolTip(column, tip)
@@ -1379,7 +1391,12 @@ def _describe_local(c: LocalCoordinate) -> str:
         f"CRYSTAL's value {c.value:.4f} {unit}",
         constants,
         f"mᵃ {c.mass:.3f} {mass_unit} · ωᵃ {c.frequency:.1f} cm⁻¹",
-    ])
+    ] + ([
+        f"Not listed itself: by symmetry, the image of coordinate {c.number} — "
+        f"{c.symmetry} (in the primitive cell's coordinates) carries this "
+        f"measurement onto it, and a symmetry of the crystal leaves a local mode "
+        f"as it is."
+    ] if c.symmetry else []))
 
 
 def _table_icon() -> QIcon:

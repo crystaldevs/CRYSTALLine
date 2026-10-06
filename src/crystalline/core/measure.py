@@ -172,7 +172,8 @@ EXPORT_COLUMNS = ("Kind", "Atoms", "Value", "Unit")
 EXPORT_POSITION_COLUMNS = ("x (Å)", "y (Å)", "z (Å)")
 EXPORT_LOCAL_COLUMNS = ("LOCMODES coordinate", "CRYSTAL atoms", "CRYSTAL value",
                         "K^A (mdyn/Å)", "K^A(D) (mdyn·Å/rad²)",
-                        "M^A (amu; amu·Å for angles and dihedrals)", "W^A (cm⁻¹)")
+                        "M^A (amu; amu·Å for angles and dihedrals)", "W^A (cm⁻¹)",
+                        "Found")
 
 
 def export_rows(measurements: Sequence[Measurement],
@@ -184,7 +185,8 @@ def export_rows(measurements: Sequence[Measurement],
     shows. A point's position goes in three columns of its own, there only
     when the table has a point. With ``local_modes``, each row also carries the
     LOCMODES internal coordinate the measurement is, its numbers as CRYSTAL
-    prints them; a near-linear angle, which is two bends, is two rows, the
+    prints them, and whether it was found as listed or as the symmetry image
+    of a listed coordinate; a near-linear angle, which is two bends, is two rows, the
     measurement repeated on each, and a measurement that is no internal
     coordinate leaves those columns empty.
     """
@@ -216,9 +218,13 @@ def _local_cells(coordinate) -> list:
     if coordinate is None:
         return [""] * len(EXPORT_LOCAL_COLUMNS)
     angular = coordinate.angular_force_constant
+    # As listed, or as the symmetry image of the listed coordinate the numbers
+    # are from — the operation carrying the measurement onto it.
+    symmetry = getattr(coordinate, "symmetry", None)
+    found = f"by symmetry ({symmetry})" if symmetry else "as listed"
     return [str(coordinate.number), coordinate.atom_label(), repr(coordinate.value),
             repr(coordinate.force_constant), "" if angular is None else repr(angular),
-            repr(coordinate.mass), repr(coordinate.frequency)]
+            repr(coordinate.mass), repr(coordinate.frequency), found]
 
 
 def selection_hint(count: int) -> str:

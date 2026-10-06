@@ -101,17 +101,29 @@ another, so it can be taken in any cell on screen, and from either end: an
 angle keeps its vertex in the middle, as LOCMODES has it. An internal coordinate
 whose atoms lie in neighbouring cells is found on the images drawn there —
 boundary atoms, or a supercell. A near-linear angle, which LOCMODES treats as
-two bends over the same three atoms, shows both, separated by a slash. Hovering
+two bends over the same three atoms, shows both, separated by a slash, as do
+two coordinates LOCMODES defines over the same four atoms. Hovering
 over a row gives the coordinate as CRYSTAL numbers it, with the cell of each
 atom outside the reference one and CRYSTAL's own value, which for some
 coordinates is not the plain angle of the atoms. A measurement that is none of
 the internal coordinates leaves the four columns empty, and sorts below the
 rest. Reading the section needs CRYSTALClear 0.2.17 or later.
 
+LOCMODES does not always list every coordinate of a set the crystal's symmetry
+makes equivalent, and equivalent coordinates share a local mode. A measurement
+that is not listed itself, but that an operation of the crystal carries onto a
+coordinate that is, shows that coordinate's local mode, in *italics*; hovering
+gives the coordinate and the operation, written as in the International Tables
+in the primitive cell's coordinates. Only the calculation's own symmetry is
+used: the operations found in the geometry are kept when there are as many as
+CRYSTAL used, and otherwise only those its local modes bear out, and an
+operation under which the local modes differ is never used.
+
 Exported, each measurement carries the internal coordinate it is: its number
 in the output, its atoms as CRYSTAL names them, CRYSTAL's value, and *k*ᵃ,
-*k*ᵃ(d), *m*ᵃ and *ω*ᵃ as printed. A near-linear angle is written once for
-each of its two bends.
+*k*ᵃ(d), *m*ᵃ and *ω*ᵃ as printed, and whether it was found as listed or by
+symmetry, with the operation. A near-linear angle is written once for each of
+its two bends.
 
 ## Lattice planes
 
