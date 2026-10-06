@@ -387,10 +387,12 @@ def test_the_position_boxes_do_not_widen_the_dock(qapp):
     from PySide6.QtWidgets import QScrollArea
 
     panel = GeometryPanel(_nacl())
-    # the panel's own width before the boxes existed, plus the scroll bar the
-    # panel now keeps room for
+    # the panel's own width without the boxes, plus the scroll bar the panel
+    # keeps room for. That width is now the Measure row's — Colour, Remove,
+    # Clear all and Export side by side: 357 px with the macOS style, 384 here,
+    # where the offscreen style makes every button at least 80 px wide.
     scroll_bar = panel.findChild(QScrollArea).verticalScrollBar().sizeHint().width()
-    assert panel.sizeHint().width() <= 360 + scroll_bar
+    assert panel.sizeHint().width() <= 370 + scroll_bar
 
 
 def test_a_typed_position_moves_the_periodic_images_too(qapp):
@@ -947,4 +949,130 @@ def test_a_point_lists_its_coordinates_as_its_value(qapp):
     _measure(panel, 3)
     assert _row(panel, 0)[:2] == ["H(3)", "(1.750, -0.200, 0.900)"]
     assert _row(panel, 0)[2:] == ["", "", "", ""]
+
+
+# ── exporting the table ───────────────────────────────────────────────────
+def _read_csv(path):
+    import csv
+
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return list(csv.reader(handle))
+
+
+def test_the_table_is_exported_as_it_is_shown(qapp, tmp_path):
+    """Every row, in the order on screen, with the numbers in full — and for a
+    LOCMODES run the internal coordinate each measurement is, as CRYSTAL gives it."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    panel = _locmodes_panel()
+    _measure(panel, 0, 1)            # O1–O2, kᵃ 4.2
+    _measure(panel, 0, 3)            # O1···H4, none
+    _measure(panel, 2, 4)            # H3···O2(−a), kᵃ 0.15
+    panel._list.header().setSortIndicator(_COL_K, Qt.DescendingOrder)
+
+    target = tmp_path / "peroxide_measurements.csv"
+    panel.export_csv(str(target))
+    header, *rows = _read_csv(target)
+
+    assert header == list(M.EXPORT_COLUMNS) + list(M.EXPORT_LOCAL_COLUMNS)
+    assert [row[1] for row in rows] == ["O(0)–O(1)", "H(2)–O(4)", "O(0)–H(3)"]   # as sorted
+    assert rows[0][:4] == ["distance", "O(0)–O(1)", "1.450000", "Å"]
+    assert rows[0][4:] == ["1", "O1–O2", "1.45", "4.2", "", "8.0", "950.0"]     # no K^A(D) for a bond
+    assert rows[1][4:6] == ["4", "H3–O2 (-1 0 0)"]
+    assert rows[2][4:] == [""] * len(M.EXPORT_LOCAL_COLUMNS)                    # none of them
+
+
+def test_a_near_linear_angle_exports_as_one_row_per_bend(qapp, tmp_path):
+    """LOCMODES gives the two bends of a near-linear angle a force constant each;
+    a spreadsheet wants a number in a cell, so the angle is written twice."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+
+    modes = _peroxide_modes()
+    second = LocalCoordinate(6, M.ANGLE, (2, 0, 1), ((0, 0, 0),) * 3, ("H", "O", "O"),
+                             -171.5, 0.058, 0.230, 1.379, 1005.2)
+    structure, source = _peroxide()
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(LocalModes(modes.positions, modes.lattice,
+                                     modes.coordinates + (second,)))
+    panel.set_source_index(source)
+    _measure(panel, 2, 0, 1)
+    target = tmp_path / "bends.csv"
+    panel.export_csv(str(target))
+    _, *rows = _read_csv(target)
+    assert [(row[4], row[7]) for row in rows] == [("5", "0.7"), ("6", "0.058")]
+    assert rows[0][:4] == rows[1][:4]                       # the same measurement on both
+
+
+def test_a_table_without_local_modes_exports_without_their_columns(qapp, tmp_path):
+    """Any other file: what was measured, and a point's position in columns of its own."""
+    panel = GeometryPanel(_water())
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    panel.set_selection([2])
+    panel._measure_selection()
+    target = tmp_path / "water.csv"
+    panel.export_csv(str(target))
+    header, distance, point = _read_csv(target)
+    assert header == list(M.EXPORT_COLUMNS) + list(M.EXPORT_POSITION_COLUMNS)
+    assert distance == ["distance", "O(0)–H(1)", "0.957200", "Å", "", "", ""]
+    assert point == ["point", "H(2)", "", "", "-0.240000", "0.926600", "0.000000"]
+    assert target.read_bytes().startswith(b"\xef\xbb\xbf")  # a spreadsheet reads it as UTF-8
+
+
+def test_the_export_button_follows_the_table(qapp):
+    """And Clear all with it: both stayed greyed out after the first measurement
+    until the selection next changed."""
+    panel = GeometryPanel(_water())
+    assert not panel._export_btn.isEnabled()
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    assert panel._export_btn.isEnabled() and panel._clear_btn.isEnabled()
+    panel.clear_measurements()
+    assert not panel._export_btn.isEnabled() and not panel._clear_btn.isEnabled()
+
+
+def test_the_export_is_offered_beside_the_run_and_named_after_it(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    panel = GeometryPanel(_water())
+    panel.set_source_file("/runs/dafadnp/DAFADNP_FREQ_LOCMODES.out")
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    offered = []
+    chosen = tmp_path / "picked"                           # typed without the extension
+
+    def ask(_parent, _title, suggested, _filter):
+        offered.append(suggested)
+        return str(chosen), "CSV files (*.csv)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(ask))
+    panel._export_btn.click()
+    assert offered == ["/runs/dafadnp/DAFADNP_FREQ_LOCMODES_measurements.csv"]
+    assert (tmp_path / "picked.csv").is_file()
+
+
+def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
+    """Colour, Remove, Clear all and Export share the table's width: the first
+    starts where the table starts, the last ends where it ends, and they grow
+    together as the dock is widened — as the planes' row does."""
+    from PySide6.QtCore import QPoint
+
+    panel = GeometryPanel(_water())
+    buttons = (panel._color_btn, panel._remove_btn, panel._clear_btn, panel._export_btn)
+
+    def edges(widget):
+        left = widget.mapTo(panel, QPoint(0, 0)).x()
+        return left, left + widget.width()
+
+    for width in (420, 640):
+        panel.resize(width, 700)
+        panel.show()
+        qapp.processEvents()
+        table = edges(panel._list)
+        assert edges(buttons[0])[0] == table[0]
+        assert edges(buttons[-1])[1] == table[1]
+        widths = [b.width() for b in buttons]
+        assert max(widths) - min(widths) <= 2           # shared out evenly
+    assert buttons[0].width() > 100                     # and wider at 640 than at their least
+    panel.hide()
 

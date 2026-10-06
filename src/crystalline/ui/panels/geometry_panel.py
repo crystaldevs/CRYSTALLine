@@ -25,8 +25,10 @@ identically whichever route the user takes.
 
 from __future__ import annotations
 
+import csv
 import dataclasses
 import math
+import os
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -38,11 +40,13 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -152,6 +156,8 @@ class GeometryPanel(QWidget):
         # is one of them (see _local_for).
         self._local_modes: Optional[LocalModes] = None
         self._source_index: Optional[np.ndarray] = None
+        # The file the tab has open, which an export is named after and put beside.
+        self._source_file: Optional[str] = None
         # The column and order the measurements are sorted by; None until a
         # heading is clicked, when they stand in the order they were measured.
         self._measure_sort: Optional[Tuple[int, Qt.SortOrder]] = None
@@ -271,18 +277,34 @@ class GeometryPanel(QWidget):
         self._show_local_columns(False)
         box.addWidget(self._list, 1)
 
+        # Four buttons sharing the table's width, the first flush with its left
+        # edge and the last with its right, however wide the dock is made — as
+        # the planes' three below are, rather than huddled at the left.
         row = QHBoxLayout()
         self._color_btn = QPushButton("Colour…")
         self._color_btn.setToolTip("Set the colour of the selected measurement(s)")
         self._color_btn.clicked.connect(self._set_measurement_colour)
-        row.addWidget(self._color_btn)
+        row.addWidget(self._color_btn, 1)
         self._remove_btn = QPushButton("Remove")
         self._remove_btn.clicked.connect(self._remove_selected_measurements)
-        row.addWidget(self._remove_btn)
+        row.addWidget(self._remove_btn, 1)
         self._clear_btn = QPushButton("Clear all")
         self._clear_btn.clicked.connect(self.clear_measurements)
-        row.addWidget(self._clear_btn)
-        row.addStretch(1)
+        row.addWidget(self._clear_btn, 1)
+        # The table, out of the program: for a LOCMODES run, the force constants
+        # of the bonds and angles measured, ready for a spreadsheet or a script.
+        # With the other three, which act on the table too. "Export…" and not
+        # "Export to CSV…": the row is the widest in the panel with a fourth
+        # button, and so sets the dock's least width; the tooltip and the save
+        # dialog say what it writes.
+        self._export_btn = QPushButton("Export…")
+        self._export_btn.setToolTip(
+            "Write the table to a CSV file — every row, in the order shown, with "
+            "the values in full and, for a LOCMODES run, each local mode as "
+            "CRYSTAL gives it"
+        )
+        self._export_btn.clicked.connect(self._export_measurements)
+        row.addWidget(self._export_btn, 1)
         box.addLayout(row)
         # The colour button follows the list selection, not just "any measurement".
         self._list.itemSelectionChanged.connect(self._sync_buttons)
@@ -847,8 +869,52 @@ class GeometryPanel(QWidget):
     def _items(self) -> List[QTreeWidgetItem]:
         return [self._list.topLevelItem(row) for row in range(self._list.topLevelItemCount())]
 
+    # ── exporting ───────────────────────────────────────────────────────
+    def set_source_file(self, path: Optional[str]) -> None:
+        """The file the tab has open: where an export is offered, and what it is named after."""
+        self._source_file = path
+
+    def _export_measurements(self) -> None:
+        """Ask where, and write the table there as CSV."""
+        if not self._measurements:
+            return
+        source = self._source_file
+        suggested = "measurements.csv"
+        if source:
+            stem = os.path.splitext(os.path.basename(source))[0]
+            suggested = os.path.join(os.path.dirname(source), f"{stem}_measurements.csv")
+        path, _ = QFileDialog.getSaveFileName(self, "Export measurements", suggested,
+                                              "CSV files (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        try:
+            self.export_csv(path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Export failed",
+                                 f"Could not write the measurements:\n{exc}")
+
+    def export_csv(self, path: str) -> None:
+        """Write the table to ``path``: every row, in the order shown.
+
+        With a byte-order mark, so that a spreadsheet takes it for UTF-8 and
+        shows Å and ° as they are; a script reading it as ``utf-8-sig`` (or
+        pandas, which does so on its own) never sees the mark.
+        """
+        header, rows = measure_mod.export_rows(self._measurements,
+                                               local_modes=self._local_modes is not None)
+        with open(path, "w", newline="", encoding="utf-8-sig") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(header)
+            writer.writerows(rows)
+
     def _emit_annotations(self) -> None:
         self.annotations_changed.emit(self.shown_annotations())
+        # Every change to the table ends here, so the buttons that need rows
+        # follow it: Clear all and Export used to stay greyed out after the
+        # first measurement, until the selection next changed.
+        self._sync_buttons()
 
     # ── lattice planes ──────────────────────────────────────────────────
     def set_miller_cell(self, cell) -> None:
@@ -1143,6 +1209,7 @@ class GeometryPanel(QWidget):
         self._measure_btn.setEnabled(1 <= count <= 4)
         self._remove_btn.setEnabled(bool(self._measurements))
         self._clear_btn.setEnabled(bool(self._measurements))
+        self._export_btn.setEnabled(bool(self._measurements))
         self._color_btn.setEnabled(bool(self._list.selectedItems()))
 
         # A plane needs indices that name one, and a cell for them to be in; the

@@ -2775,6 +2775,7 @@ class MainWindow(QMainWindow):
         # panel which atom on screen is which (see _apply_cell_view). Run here
         # only as the tab is shown, so a note about them is seen when it is said.
         self.geometry_panel.set_local_modes(read.local_modes)
+        self.geometry_panel.set_source_file(path)  # an export is offered beside it
         if read.local_modes_note:
             self.statusBar().showMessage(f"Local modes not read: {read.local_modes_note}", 8000)
         self._source = result.structure

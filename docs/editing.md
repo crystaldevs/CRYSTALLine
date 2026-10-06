@@ -75,6 +75,12 @@ lines of distances, angles and dihedrals are drawn, in Å: those selected in the
 table, all of them when none is selected, and the ones measured next. A plane
 through the selected atoms is fitted under **Lattice planes**.
 
+**Export…**, beside **Clear all**, writes the table to a CSV file, offered beside the file the
+tab has open and named after it: every row in the order shown, ticked or not,
+with the measured values in full rather than to the three places the table
+shows. A point's position takes three columns of its own. The file starts with
+a UTF-8 byte-order mark, so that a spreadsheet shows Å and ° as they are.
+
 ### Local modes
 
 For the output of a frequency calculation run with `LOCMODES`, the table has
@@ -100,6 +106,11 @@ atom outside the reference one and CRYSTAL's own value, which for some
 coordinates is not the plain angle of the atoms. A measurement that is none of
 the internal coordinates leaves the four columns empty, and sorts below the
 rest. Reading the section needs CRYSTALClear 0.2.17 or later.
+
+Exported, each measurement carries the internal coordinate it is: its number
+in the output, its atoms as CRYSTAL names them, CRYSTAL's value, and *k*ᵃ,
+*k*ᵃ(d), *m*ᵃ and *ω*ᵃ as printed. A near-linear angle is written once for
+each of its two bends.
 
 ## Lattice planes
 

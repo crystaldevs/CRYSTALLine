@@ -165,6 +165,62 @@ def _label(symbols: Sequence[str], indices: Sequence[int], joiner: str) -> str:
     return f"{text} +{extra} more" if extra > 0 else text
 
 
+# The table's columns, written out: what was measured, and — for a LOCMODES run —
+# the internal coordinate it is, in CRYSTAL's terms and units (the K^A ... W^A
+# of its own table of force constants).
+EXPORT_COLUMNS = ("Kind", "Atoms", "Value", "Unit")
+EXPORT_POSITION_COLUMNS = ("x (Å)", "y (Å)", "z (Å)")
+EXPORT_LOCAL_COLUMNS = ("LOCMODES coordinate", "CRYSTAL atoms", "CRYSTAL value",
+                        "K^A (mdyn/Å)", "K^A(D) (mdyn·Å/rad²)",
+                        "M^A (amu; amu·Å for angles and dihedrals)", "W^A (cm⁻¹)")
+
+
+def export_rows(measurements: Sequence[Measurement],
+                local_modes: bool = False) -> Tuple[list, list]:
+    """``(header, rows)`` for writing ``measurements`` out as a table.
+
+    One row per measurement, in the order given — the order on screen — with
+    the measured value in full rather than to the three places the table
+    shows. A point's position goes in three columns of its own, there only
+    when the table has a point. With ``local_modes``, each row also carries the
+    LOCMODES internal coordinate the measurement is, its numbers as CRYSTAL
+    prints them; a near-linear angle, which is two bends, is two rows, the
+    measurement repeated on each, and a measurement that is no internal
+    coordinate leaves those columns empty.
+    """
+    points = any(m.kind == POINT for m in measurements)
+    header = list(EXPORT_COLUMNS)
+    if points:
+        header += EXPORT_POSITION_COLUMNS
+    if local_modes:
+        header += EXPORT_LOCAL_COLUMNS
+    rows = []
+    for m in measurements:
+        if m.kind == POINT:
+            measured = [m.kind, m.label.partition("  ")[0], "", ""]
+        else:
+            measured = [m.kind, m.label, f"{m.value:.6f}", m.unit]
+        if points:
+            measured += ([f"{v:.6f}" for v in np.asarray(m.points, dtype=float)[0]]
+                         if m.kind == POINT else ["", "", ""])
+        if not local_modes:
+            rows.append(measured)
+            continue
+        for coordinate in m.local or (None,):
+            rows.append(measured + _local_cells(coordinate))
+    return header, rows
+
+
+def _local_cells(coordinate) -> list:
+    """An internal coordinate's columns: empty when the measurement is none."""
+    if coordinate is None:
+        return [""] * len(EXPORT_LOCAL_COLUMNS)
+    angular = coordinate.angular_force_constant
+    return [str(coordinate.number), coordinate.atom_label(), repr(coordinate.value),
+            repr(coordinate.force_constant), "" if angular is None else repr(angular),
+            repr(coordinate.mass), repr(coordinate.frequency)]
+
+
 def selection_hint(count: int) -> str:
     """What the current number of selected atoms will measure."""
     return {
@@ -191,4 +247,8 @@ __all__ = [
     "measure",
     "measure_point",
     "selection_hint",
+    "EXPORT_COLUMNS",
+    "EXPORT_LOCAL_COLUMNS",
+    "EXPORT_POSITION_COLUMNS",
+    "export_rows",
 ]
