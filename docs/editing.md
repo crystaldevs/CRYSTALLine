@@ -67,8 +67,9 @@ open stay open in every tab and the next time the program is started.
 | 3              | an angle                 |
 | 4              | a dihedral angle         |
 
-Measurements are listed in a table, the value beside the atoms, and a tick
-draws a measurement in the view; a click on a heading sorts the table by that
+Measurements are listed in a table, the value beside the atoms. A new
+measurement is listed unticked, and is drawn in the view only once its tick is
+set; unticked again, it stays in the table. A click on a heading sorts the table by that
 column, and a third click on the same heading stops sorting. They can be
 coloured individually or by type. The **Thickness** slider sets how thick the
 lines of distances, angles and dihedrals are drawn, in Å: those selected in the
