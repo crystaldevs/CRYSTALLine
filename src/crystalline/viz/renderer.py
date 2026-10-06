@@ -763,7 +763,11 @@ class StructureRenderer:
             self._draw_bonds(self._positions, self._numbers)
         if settings.show_hydrogen_bonds:
             self._draw_hydrogen_bonds()
-        self._bonded_from = self._positions.copy()  # what a rebuild bonds from
+        # What the bonds just drawn were worked out from — the reference when one
+        # is set, as _draw_bonds takes its pairs from it, and not the atoms: a
+        # later move to where they already are must not be read as "nothing has
+        # changed" when the reference has changed under them.
+        self._bonded_from = self._bonding_geometry().copy()
         # A coordination polyhedron is a large translucent solid centred on an
         # atom, and an ADP ellipsoid is a couple of tenths of an Angstrom sitting
         # inside it — the polyhedron swallows it whole. When the ellipsoids are

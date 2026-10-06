@@ -71,6 +71,44 @@ def test_a_held_view_draws_nothing_until_it_is_let_go():
     assert "if self._suspended:" in inspect.getsource(Viewport.__init__)
 
 
+def test_what_was_owed_while_a_view_was_held_is_drawn_once_it_is_let_go():
+    """The hold only defers: one draw is made on the way out, by the same path
+    that catches up a view that was hidden — there is one of those, and both
+    ways in go through it."""
+    from crystalline.ui.viewport import Viewport
+
+    drawn = []
+
+    class _Interactor:
+        def setUpdatesEnabled(self, _on):
+            pass
+
+        def isVisible(self):
+            return True
+
+    class _View:
+        held = Viewport.held
+        _draw_held = Viewport._draw_held
+
+        def __init__(self):
+            self.interactor = _Interactor()
+            self._suspended = False
+            self._render_held = False
+            self._render_now = lambda: drawn.append("drew")
+
+    view = _View()
+    with view.held():
+        pass
+    assert drawn == []                 # not during the block, and not from inside it
+
+    view._draw_held()                  # a turn later, as held() schedules it
+
+    assert drawn == ["drew"]
+    assert not view._render_held       # and nothing is owed twice
+    view._draw_held()
+    assert drawn == ["drew"]
+
+
 def test_reference_cell_outlines_original_not_supercell():
     base = bulk("NaCl", "rocksalt", a=5.64)
     supercell = Structure.from_ase(base.repeat((2, 2, 1)))
@@ -709,6 +747,27 @@ def test_moving_atoms_to_where_they_are_drawn_does_nothing(monkeypatch):
 
     renderer.update_positions(here + 0.1)                   # and a real move is drawn
     assert work == ["reglyph", "reglyph"]
+
+
+def test_a_rebuild_remembers_what_it_bonded_from(monkeypatch):
+    """A rebuild takes its bond pairs from the reference when one is set, so that
+    is what it has to record as the geometry on screen — not where the atoms are.
+    Recording the atoms, a reference moved onto them read as no change at all,
+    and the bonds of the geometry it replaced stayed on screen."""
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(_two_atoms())
+    here = renderer._positions.copy()
+    apart = here + [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]]
+
+    renderer.set_bond_reference(apart)       # bonds worked out from the atoms pulled apart
+    renderer.refresh()                       # a rebuild: a setting changed, say
+    work = []
+    monkeypatch.setattr(renderer, "_reglyph_atoms", lambda: work.append("reglyph"))
+
+    renderer.set_bond_reference(here)        # ...and now from where they actually are
+    renderer.update_positions(here)          # atoms unmoved, but the bonding has changed
+
+    assert work == ["reglyph"]
 
 
 def _arrow_extent(renderer):
