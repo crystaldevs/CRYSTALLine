@@ -31,5 +31,8 @@ Claude outputs/
 /CLAUDE.md
 /ARCHITECTURE.md
 
+# Tests against unpublished runs: they spell out results that are not public yet
+/tests/test_dafadnp.py
+
 # Generated at build time from the GitHub releases (docs/conf.py).
 docs/release-notes.md

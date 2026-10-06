@@ -25,7 +25,7 @@ Qt- and PyVista-free, like the rest of ``core``.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence, Tuple
+from typing import Iterable, List, Sequence, Tuple
 
 import numpy as np
 from ase.data import atomic_masses, chemical_symbols
@@ -85,16 +85,57 @@ def mode_character(mode: PhononMode, numbers: Sequence[int]) -> ModeCharacter:
     comes back empty rather than raising: the panel labels what it can and
     leaves the rest blank.
     """
-    weights, symbols = _atom_weights(mode, numbers)
-    if weights is None:
-        return ModeCharacter(composition=(), effective_atoms=0.0, n_atoms=len(numbers))
+    return mode_characters([mode], numbers)[0]
 
-    shares: dict = {}
-    for symbol, w in zip(symbols, weights):
-        shares[symbol] = shares.get(symbol, 0.0) + float(w)
+
+def mode_characters(modes: Iterable[PhononMode], numbers: Sequence[int]) -> List[ModeCharacter]:
+    """:func:`mode_character` of every mode in ``modes``, on one geometry.
+
+    What a file's whole mode list is labelled with. The geometry's elements and
+    masses are worked out once, and each mode's energy is summed per element by
+    numpy rather than atom by atom in Python — which, for a few hundred modes of
+    a few hundred atoms, was most of the time the Phonons panel took to fill.
+    """
+    numbers = np.asarray(numbers, dtype=int)
+    symbols, element = _elements(numbers)
+    masses = atomic_masses[numbers]
+    return [_character(mode, numbers, masses, symbols, element) for mode in modes]
+
+
+def _elements(numbers: np.ndarray):
+    """``(symbols, element)``: the elements present, in order of first appearance,
+    and for each atom the index of its element among them.
+
+    First appearance, as the composition was built when it was summed atom by
+    atom: elements with equal shares then keep the order they always had.
+    """
+    if len(numbers) == 0:
+        return [], np.zeros(0, dtype=int)
+    present, first, inverse = np.unique(numbers, return_index=True, return_inverse=True)
+    order = np.argsort(first)
+    rank = np.empty_like(order)
+    rank[order] = np.arange(len(order))
+    return [chemical_symbols[z] for z in present[order]], rank[np.ravel(inverse)]
+
+
+def _character(mode: PhononMode, numbers: np.ndarray, masses: np.ndarray, symbols, element):
+    """One mode's :class:`ModeCharacter`, given its geometry's elements and masses."""
+    eigenvector = np.asarray(mode.eigenvector)
+    if len(numbers) == 0 or eigenvector.shape != (len(numbers), 3):
+        # Modes and geometry out of step (e.g. a stale selection).
+        return ModeCharacter(composition=(), effective_atoms=0.0, n_atoms=len(numbers))
+    # |e|^2, so a complex (non-Gamma) eigenvector is measured by the energy its
+    # atoms carry over a cycle rather than by whichever phase we caught it at.
+    energy = masses * np.sum(np.abs(eigenvector) ** 2, axis=1)
+    total = float(energy.sum())
+    if not np.isfinite(total) or total <= 0.0:
+        # A null mode (all-zero eigenvector) has no composition.
+        return ModeCharacter(composition=(), effective_atoms=0.0, n_atoms=len(numbers))
+    weights = energy / total
+    shares = np.bincount(element, weights=weights, minlength=len(symbols))
     composition = tuple(
         sorted(
-            ((sym, share) for sym, share in shares.items() if share >= _MIN_SHARE),
+            ((sym, float(share)) for sym, share in zip(symbols, shares) if share >= _MIN_SHARE),
             key=lambda item: item[1],
             reverse=True,
         )
@@ -106,22 +147,4 @@ def mode_character(mode: PhononMode, numbers: Sequence[int]) -> ModeCharacter:
     )
 
 
-def _atom_weights(mode: PhononMode, numbers: Sequence[int]):
-    """``(weights, symbols)``, or ``(None, None)`` when there's nothing to report."""
-    numbers = np.asarray(numbers, dtype=int)
-    eigenvector = np.asarray(mode.eigenvector)
-    if len(numbers) == 0 or eigenvector.shape != (len(numbers), 3):
-        return None, None  # modes and geometry out of step (e.g. a stale selection)
-
-    masses = atomic_masses[numbers]
-    # |e|^2, so a complex (non-Gamma) eigenvector is measured by the energy its
-    # atoms carry over a cycle rather than by whichever phase we caught it at.
-    energy = masses * np.sum(np.abs(eigenvector) ** 2, axis=1)
-    total = float(energy.sum())
-    if not np.isfinite(total) or total <= 0.0:
-        return None, None  # a null mode (all-zero eigenvector) has no composition
-    symbols = [chemical_symbols[z] for z in numbers]
-    return energy / total, symbols
-
-
-__all__ = ["ModeCharacter", "mode_character"]
+__all__ = ["ModeCharacter", "mode_character", "mode_characters"]

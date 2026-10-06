@@ -369,15 +369,19 @@ class GeometryPanel(QWidget):
         box.addLayout(_labelled("Opacity", self._plane_opacity))
 
         # Where the plane sits along its own normal, in units of d(hkl): 0 is the
-        # plane through the origin and 1 is its next neighbour, so one sweep of
-        # this covers every distinct plane of the family. Live, like the opacity
-        # above it — a plane is placed by eye against the atoms far more often
-        # than it is calculated.
-        self._plane_offset = SliderBox(0.0, 0.0, 1.0, 0.01)
+        # plane through the origin, and 1 and -1 are its neighbours on either
+        # side. Both sides, because a plane is drawn only where it cuts the cell
+        # on screen, and with a negative index the cell lies partly or wholly on
+        # the negative side of the origin's plane: (-1 0 0) moved anywhere from 0
+        # to 1 left the cell altogether and drew nothing, and (1 -1 0) could
+        # reach only half of it. Live, like the opacity above it — a plane is
+        # placed by eye against the atoms far more often than it is calculated.
+        self._plane_offset = SliderBox(0.0, -1.0, 1.0, 0.01)
         self._plane_offset.setToolTip(
             "Position of the selected plane(s) — of every plane when none is "
-            "selected — along the normal, in units of d(hkl). 0 and 1 are "
-            "neighbouring planes of the family; 0.5 lies halfway between them."
+            "selected — along the normal, in units of d(hkl). 0 is the plane "
+            "through the origin, 1 and -1 its neighbours on either side of it, "
+            "and 0.5 lies halfway to the next one."
         )
         self._plane_offset.changed.connect(self._set_plane_offset)
         self._plane_list.itemSelectionChanged.connect(self._show_plane_offset)

@@ -1204,7 +1204,10 @@ class _ZoneView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.plotter = QtInteractor(self)
+        # Not redrawn five times a second for as long as the dialog is open,
+        # as pyvistaqt's default does: every change here asks for its draw
+        # (see Viewport, which turns the same timer off).
+        self.plotter = QtInteractor(self, auto_update=False)
         self.plotter.setAcceptDrops(False)  # see Viewport: drops belong to the window
         layout.addWidget(self.plotter)
         from crystalline.ui import theme

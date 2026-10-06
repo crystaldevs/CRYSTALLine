@@ -244,6 +244,9 @@ def _router(blank_on_screen=False):
         def _refresh_chrome(self):
             self.calls.append(("menus for", self._tab.name))
 
+        def _settle_tab(self, tab):
+            self.calls.append(("settle", tab.name))
+
     return _Stub()
 
 
@@ -259,7 +262,8 @@ def test_the_first_file_comes_to_the_front_and_says_what_it_left_out(qapp, warni
     window = _router()
     window._show_read_file("/runs/a.out", "modes could not be read", front=True)
 
-    assert window.calls == [("take", "new, in front"), ("fill", "new, in front", "new, in front")]
+    assert window.calls == [("take", "new, in front"), ("fill", "new, in front", "new, in front"),
+                            ("settle", "new, in front")]   # laid out and drawn before it is seen
     assert window._tab.name == "new, in front"
     assert warnings_said == [("Modes not read", "a.out:\nmodes could not be read")]
 
@@ -281,7 +285,8 @@ def test_the_others_are_set_behind_without_taking_the_screen(qapp, warnings_said
 def test_a_file_read_into_an_empty_window_fills_its_empty_tab(qapp, warnings_said):
     window = _router(blank_on_screen=True)
     window._show_read_file("/runs/b.out", None, front=False)
-    assert window.calls == [("take", "on screen"), ("fill", "on screen", "on screen")]
+    assert window.calls == [("take", "on screen"), ("fill", "on screen", "on screen"),
+                            ("settle", "on screen")]
 
 
 def test_a_tab_read_in_behind_says_what_it_left_out_when_first_shown(qapp, warnings_said):

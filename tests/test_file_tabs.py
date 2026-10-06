@@ -126,9 +126,13 @@ class _Part(QWidget):
         self.closed = 0
         self.renderer = type("R", (), {"settings": object()})()
         self.interactor = self   # the viewport's VTK widget, closed with the tab
+        self.events = None       # the window's record of what happened, in order
 
     def set_editing_enabled(self, enabled):
         self.editing = enabled
+
+    def draw_now(self):
+        self.events.append(("drawn", self.tab))
 
     def stop(self):
         self.stopped += 1
@@ -155,6 +159,7 @@ class _Window(QMainWindow):
     _close_current_tab = MainWindow._close_current_tab
     _take_tab_for_file = MainWindow._take_tab_for_file
     _realise_tab = MainWindow._realise_tab
+    _settle_tab = MainWindow._settle_tab
     _show_notice = MainWindow._show_notice
     _tab_for_page = MainWindow._tab_for_page
     _on_file_tab_changed = MainWindow._on_file_tab_changed
@@ -178,6 +183,7 @@ class _Window(QMainWindow):
         self.made = []          # every tab created
         self.built = []         # every tab whose widgets were actually built
         self.installed = []     # every (tab, path) put into widgets
+        self.events = []        # ("filled" | "drawn", tab), in the order they happened
         self._file_tabs = QTabWidget(self)
         self._file_tabs.setTabsClosable(True)
         self.setCentralWidget(self._file_tabs)
@@ -202,7 +208,9 @@ class _Window(QMainWindow):
 
     def _build_tab_widgets(self, tab):
         for name in file_tabs.PER_TAB_WIDGETS:
-            setattr(tab, name, _Part(name))
+            part = _Part(name)
+            part.tab, part.events = tab, self.events
+            setattr(tab, name, part)
         for name, stack in self._panel_stacks.items():
             stack.addWidget(getattr(tab, name))
         self.built.append(tab)
@@ -210,6 +218,7 @@ class _Window(QMainWindow):
     def _fill_tab(self, tab, path, read):
         """What the window does once a file is read and its tab is on screen."""
         self.installed.append((tab, path))
+        self.events.append(("filled", tab))
         tab.path = path
         self._update_tab_labels()
 
@@ -336,6 +345,47 @@ def test_a_tab_opened_beside_others_is_built_only_when_it_is_looked_at(qapp):
     window._file_tabs.setCurrentIndex(1)
     assert window.built.count(waiting) == 1               # built once, not on every visit
     assert third.built()                                  # and the third, when visited
+
+
+def test_a_tab_looked_at_for_the_first_time_is_drawn_at_once_with_its_file(qapp):
+    """Its view used to come up a turn after the tab, and be drawn a turn after
+    that; the window reached the screen in between, with the view's window up
+    and nothing in it, which macOS shows white — a flash across a dark window
+    every time a tab was first opened. It is drawn before the event loop runs
+    again, and after its file is in it, so the first picture is the finished one.
+    """
+    window = _Window()
+    window.open("/runs/urea.out")
+    waiting = window.open("/runs/ice.out", front=False)
+
+    window._file_tabs.setCurrentIndex(1)                  # first looked at
+    assert window.events[-2:] == [("filled", waiting), ("drawn", waiting)]
+
+    window._file_tabs.setCurrentIndex(0)
+    window._file_tabs.setCurrentIndex(1)                  # back again: its view is up already
+    assert window.events.count(("drawn", waiting)) == 1
+
+
+def test_closing_the_tab_in_front_shows_the_one_behind_it_finished(qapp, monkeypatch):
+    """Closing the tab on screen is the other way a tab is first looked at, and
+    Qt brings the one behind it forward from inside the close. It is laid out
+    as well as drawn before the window is shown again: a frame earlier, its
+    Info panel showed scrollbars its rows did not need yet, light bars down and
+    across a dark dock."""
+    from PySide6.QtCore import QEvent
+
+    window = _Window()
+    first = window.open("/runs/urea.out")
+    waiting = window.open("/runs/ice.out", front=False)
+    monkeypatch.setattr(QApplication, "sendPostedEvents", staticmethod(
+        lambda _receiver=None, kind=0: window.events.append(("laid out", kind))))
+
+    window._close_tab(first)
+
+    assert window._tab is waiting
+    assert window.events[-3:] == [("filled", waiting),
+                                  ("laid out", QEvent.LayoutRequest),
+                                  ("drawn", waiting)]
 
 
 def test_a_background_result_lands_in_the_tab_it_was_started_in(qapp, monkeypatch):
@@ -522,6 +572,76 @@ def test_a_hidden_view_is_not_drawn_into():
     assert "self._render_held" in inspect.getsource(inspect.unwrap(Viewport.eventFilter))
     # a draw queued while the view was shown, and run after it was hidden, is held too
     assert "self._render_held = True" in inspect.getsource(inspect.unwrap(Viewport._draw_queued))
+
+
+def test_no_view_is_redrawn_on_a_timer():
+    """pyvistaqt redraws a view five times a second unless told not to, by a
+    timer holding the interactor's own render — taken before the viewport
+    replaces it, so it went round the hold above and drew into hidden tabs
+    too. With three files open, fifteen draws a second of nothing new.
+
+    Checked on the source, as above.
+    """
+    import inspect
+
+    from crystalline.ui.panels.zone_picker import _ZoneView
+    from crystalline.ui.viewport import Viewport
+
+    assert "QtInteractor(self, auto_update=False)" in inspect.getsource(Viewport.__init__)
+    assert "QtInteractor(self, auto_update=False)" in inspect.getsource(_ZoneView.__init__)
+
+
+def _drawing_stub(monkeypatch):
+    """The viewport's drawing machinery on a plain QObject, with a plain widget
+    for its VTK window: a real ``Viewport`` cannot be built here."""
+    from PySide6.QtCore import QObject
+
+    from crystalline.ui import viewport
+
+    drawn = []
+    monkeypatch.setattr(viewport, "BasePlotter",
+                        type("P", (), {"render": staticmethod(lambda _p: drawn.append("now"))}))
+
+    class _Stub(QObject):
+        draw_now = viewport.Viewport.draw_now
+        _draw_queued = viewport.Viewport._draw_queued
+
+    stub = _Stub()
+    stub.interactor = QWidget()
+    stub._render_now = lambda: drawn.append("queued")   # QtInteractor.render: a turn later
+    stub._render_held = stub._render_queued = False
+    return stub, drawn
+
+
+def test_a_view_drawn_at_once_is_not_drawn_again_on_the_next_turn(qapp, monkeypatch):
+    stub, drawn = _drawing_stub(monkeypatch)
+    stub.interactor.show()
+    stub._render_held = stub._render_queued = True        # asked for while it was built
+    stub.draw_now()
+    assert drawn == ["now"]                               # on this thread, not via a request
+    stub._draw_queued()                                   # the draw that was queued, a turn on
+    assert drawn == ["now"]                               # has nothing left to do
+    assert not stub._render_held
+
+
+def test_a_view_not_on_screen_is_not_drawn_at_once(qapp, monkeypatch):
+    stub, drawn = _drawing_stub(monkeypatch)              # never shown
+    stub._render_held = True
+    stub.draw_now()
+    assert drawn == [] and stub._render_held              # still owed, for when it is shown
+
+
+def test_a_tab_looked_at_is_framed_at_the_size_it_is_seen_at():
+    """Its view is put on screen before anything is put into it. Framed while
+    still hidden, at a default size it never has, a tall view got the framing
+    of a wide one and the cell ran off both sides — a background tab's first
+    look, but not a tab opened in front."""
+    import inspect
+
+    source = inspect.getsource(MainWindow._build_tab_widgets)
+    shown = source.index("self.viewport.show()")
+    assert "if tab.page.isVisible():" in source[:shown]   # only for a tab being looked at
+    assert shown < source.index("self.viewport.show_structure(")
 
 
 def test_the_file_tabs_start_at_the_left_of_the_view():

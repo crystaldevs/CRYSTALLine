@@ -37,6 +37,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from crystalline.ui.widgets.tab_bar import SlidingTabBar
+
 
 # Vector formats ignore raster DPI; JPEG has no alpha channel. Used to grey out
 # the controls that don't apply to the chosen format.
@@ -335,6 +337,8 @@ class PlotPanel(QWidget):
         super().__init__(parent)
 
         self._tabs = QTabWidget(self)
+        # Closable tabs, so the close buttons must travel with a swipe too.
+        self._tabs.setTabBar(SlidingTabBar(self._tabs))
         self._tabs.setDocumentMode(True)
         self._tabs.setTabsClosable(True)
         self._tabs.setMovable(True)

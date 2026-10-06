@@ -749,6 +749,25 @@ def test_the_position_slider_moves_a_plane_along_its_normal(qapp):
     assert "at 0.50 d" in panel._plane_list.item(0).text()   # and the row says so
 
 
+def test_the_position_slider_reaches_the_other_side_of_the_origin(qapp):
+    """A plane is drawn only where it cuts the cell, and with a negative index
+    the cell lies on the negative side of the plane through the origin: from 0
+    to 1, (-1 0 0) left the cell altogether and drew nothing."""
+    panel, _structure, drawn = _plane_panel()
+    _type_miller(panel, -1, 0, 0)
+    panel._add_plane_btn.click()
+
+    panel._plane_list.item(0).setSelected(True)
+    panel._plane_offset.set_value(-0.5)
+
+    assert panel.lattice_planes()[0].offset == pytest.approx(-0.5)
+    assert drawn[-1][0][0].offset == pytest.approx(-0.5)
+    assert "at -0.50 d" in panel._plane_list.item(0).text()
+    panel._plane_offset.set_value(-1.0)                   # the neighbour on that side
+    assert panel.lattice_planes()[0].offset == pytest.approx(-1.0)
+    assert panel._plane_offset.slider.value() == panel._plane_offset.slider.minimum()
+
+
 def test_picking_a_plane_shows_where_it_sits(qapp):
     panel, _structure, _drawn = _plane_panel()
     _type_miller(panel, 1, 1, 1)

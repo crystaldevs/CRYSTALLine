@@ -684,6 +684,33 @@ def _two_atoms() -> Structure:
     return s
 
 
+def test_moving_atoms_to_where_they_are_drawn_does_nothing(monkeypatch):
+    """Opening a file asked for that twice — an animation stopped that was not
+    playing, a mode parked at rest — and each re-glyphed every atom and worked
+    every bond out again."""
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(_two_atoms())
+    work = []
+    monkeypatch.setattr(renderer, "_reglyph_atoms", lambda: work.append("reglyph"))
+    here = renderer._positions.copy()
+
+    renderer.update_positions(here)
+    assert work == []                                       # nothing moved
+    renderer.update_positions(here + 6e-17)                 # a mode at rest: cos(π/2) ≠ 0
+    assert work == []
+
+    renderer.set_bond_reference(here)                       # bonds fixed to where they are
+    renderer.update_positions(here)
+    assert work == []                                       # still nothing to do
+
+    renderer.set_bond_reference(here + [[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]])
+    renderer.update_positions(here)                          # same atoms, other bonding
+    assert work == ["reglyph"]
+
+    renderer.update_positions(here + 0.1)                   # and a real move is drawn
+    assert work == ["reglyph", "reglyph"]
+
+
 def _arrow_extent(renderer):
     """Longest side of the arrow actor's bounding box, in Angstrom."""
     bounds = np.array(renderer._arrow_actor.GetBounds()).reshape(3, 2)

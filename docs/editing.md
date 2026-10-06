@@ -60,12 +60,12 @@ open stay open in every tab and the next time the program is started.
 
 **Measure** measures the current selection:
 
-| Atoms selected | Quantity |
-| --- | --- |
-| 1 | the position of the atom |
-| 2 | a distance |
-| 3 | an angle |
-| 4 | a dihedral angle |
+| Atoms selected | Quantity                 |
+| -------------- | ------------------------ |
+| 1              | the position of the atom |
+| 2              | a distance               |
+| 3              | an angle                 |
+| 4              | a dihedral angle         |
 
 Measurements remain drawn in the view and can be coloured individually or by
 type. The **Thickness** slider sets how thick the lines of distances, angles and
@@ -82,9 +82,21 @@ are written with four indices (*h k i l*), *i* = −(*h* + *k*) following from
 the other two.
 
 The plane is placed either at a **position** along its normal, in units of the
-interplanar spacing *d*(hkl) from the plane through the origin or **through the 
-selected atom**. **Whole family** draws every plane of the family across the cell on
-screen, *d*(hkl) apart.
+interplanar spacing *d*(hkl) from the plane through the origin — from −1 to 1:
+0 is the plane through the origin, 1 and −1 its neighbours on either side, 0.5
+lies halfway to the next one — or **through the selected atom**. Negative
+positions matter for a plane with a negative index, such as (1 −1 0) or
+(−1 0 0): the cell lies partly or wholly on the negative side of the plane
+through the origin, and a plane is drawn only where it cuts the cell. **Whole family** draws every plane of the family across the cell on
+screen, *d*(hkl) apart. Each plane is drawn where it cuts the displayed cell
+(for a slab, the layer and 1 Å either side of it) and is listed with *d*(hkl)
+and the number of atoms lying on it, within 0.15 Å — the same test that marks
+atoms on a density slice; **Select atoms** selects them, ready to be measured.
+The **Opacity** slider sets how see-through the
+planes selected in the list are — every plane when none is selected — and the
+opacity new planes are drawn with; at 0 only the outline of a plane is drawn.
+Planes are kept through a change of view or supercell and cleared when another
+file is opened.
 
 **Fit to selected atoms** goes the other way, from atoms to a plane: a fitted plane
 is coloured, made see-through, used to select atoms and removed like any other, but 

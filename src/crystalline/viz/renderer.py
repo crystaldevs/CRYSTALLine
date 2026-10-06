@@ -116,6 +116,9 @@ _ATOM_MATERIAL = dict(
 # own limit stays low — unless the topology is frozen, in which case the scan
 # runs once per animation and each frame is only an array gather.
 _LIVE_BOND_MAX_ATOMS = 5000
+# Atoms moved by less than this (Å) have not moved: a millionth of a picometre,
+# far below anything drawn, and far above the rounding of a mode at rest.
+_UNMOVED = 1e-9
 _LIVE_HBOND_MAX_ATOMS = 400
 
 # Above this atom count, per-atom element labels are suppressed: they'd be an
@@ -312,6 +315,10 @@ class StructureRenderer:
         # every frame of an animation instead of being rebuilt per frame.
         self._frozen_bond_pairs: Optional[tuple] = None
         self._frozen_hbond_pairs: Optional[np.ndarray] = None
+        # The geometry the bonds on screen were last worked out from — the
+        # reference, or the atoms themselves — so a move to where the atoms
+        # already are can be recognised as no move at all (update_positions).
+        self._bonded_from: Optional[np.ndarray] = None
         # Cache the (expensive) CrystalNN coordination analysis so a rebuild that
         # only changed display settings — a slider nudge, a colour, a toggle —
         # doesn't re-run it. Keyed on the analysed geometry + min-coordination.
@@ -467,9 +474,12 @@ class StructureRenderer:
         atoms for small systems (recomputed here); for large systems bonds are
         left in place during animation to keep it smooth.
         """
+        positions = np.asarray(positions, dtype=float)
         if len(self._positions) != len(positions):
             raise ValueError("position count changed; call refresh() instead")
-        self._positions = np.asarray(positions, dtype=float)
+        if self._already_drawn_at(positions):
+            return  # the frame on screen is this one
+        self._positions = positions
         self._reglyph_atoms()
         self._update_live_bonds()
         self._update_polyhedra(self._positions)
@@ -477,6 +487,33 @@ class StructureRenderer:
         if self._mode_vectors is not None:
             self._redraw_mode_arrows()  # arrows ride along with the atoms
         self.plotter.render()
+
+    def _bonding_geometry(self, positions: Optional[np.ndarray] = None) -> np.ndarray:
+        """The geometry bonds are worked out from: the reference, if one is set."""
+        if self._bond_reference is not None:
+            return self._bond_reference
+        return self._positions if positions is None else positions
+
+    def _already_drawn_at(self, positions: np.ndarray) -> bool:
+        """Whether moving the atoms to ``positions`` would change nothing on screen.
+
+        Opening a file asked twice for a move to where the atoms already were —
+        stopping an animation that was not playing, and parking a newly chosen
+        mode at the start of its cycle, where a Γ mode is at rest — and each
+        re-glyphed every atom and worked every bond out again. Nothing has moved
+        when the atoms are where they are drawn *and* the bonds would be worked
+        out from the same geometry as before: a new bond reference with the
+        atoms still in place can change which atoms are bonded.
+
+        "Where they are" within :data:`_UNMOVED`, not to the last bit: the mode
+        parked at the start of its cycle is displaced by cos(π/2) — 6e-17, not 0.
+        """
+        def same(a, b) -> bool:
+            return np.shape(a) == np.shape(b) and np.allclose(a, b, rtol=0.0, atol=_UNMOVED)
+
+        return (self._bonded_from is not None
+                and same(positions, self._positions)
+                and same(self._bonding_geometry(positions), self._bonded_from))
 
     @property
     def atom_count(self) -> int:
@@ -726,6 +763,7 @@ class StructureRenderer:
             self._draw_bonds(self._positions, self._numbers)
         if settings.show_hydrogen_bonds:
             self._draw_hydrogen_bonds()
+        self._bonded_from = self._positions.copy()  # what a rebuild bonds from
         # A coordination polyhedron is a large translucent solid centred on an
         # atom, and an ADP ellipsoid is a couple of tenths of an Angstrom sitting
         # inside it — the polyhedron swallows it whole. When the ellipsoids are
@@ -937,6 +975,7 @@ class StructureRenderer:
         if len(self._positions) > _LIVE_BOND_MAX_ATOMS:
             return
         self._update_bonds(self._positions)
+        self._bonded_from = self._bonding_geometry().copy()
         # The hydrogen-bond scan is the expensive one; a frozen topology makes it
         # a gather, so only the unfrozen path needs the tighter limit.
         frozen = self._frozen_hbond_pairs is not None or self._bond_reference is not None

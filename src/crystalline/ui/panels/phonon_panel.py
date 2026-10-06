@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.core.mode_analysis import ModeCharacter, mode_character
+from crystalline.core.mode_analysis import ModeCharacter, mode_characters
 from crystalline.core.phonons import (
     PhononMode,
     PhononModes,
@@ -461,7 +461,7 @@ class PhononPanel(QWidget):
         """
         if self._numbers is None:
             return []
-        return [mode_character(mode, self._numbers) for mode in modes]
+        return mode_characters(modes, self._numbers)
 
     def character(self, index: int) -> Optional[ModeCharacter]:
         """Composition of mode ``index``, or ``None`` when it wasn't analysed."""
