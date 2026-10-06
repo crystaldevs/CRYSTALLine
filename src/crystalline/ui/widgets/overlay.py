@@ -11,7 +11,7 @@ while a scrim exists precisely to swallow clicks. Those stay with each.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtWidgets import QWidget
 
 from crystalline.ui.safety import guard
@@ -24,20 +24,21 @@ class ParentOverlay(QWidget):
 
     def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
-        # A window of its own, asked for rather than inherited. An overlay has
-        # to be one to be seen over the 3D views, which are windows of their
-        # own: drawn into its parent's, it would sit underneath them. It used
-        # to become one by accident — Qt makes every sibling native when the
-        # first VTK view asks for a window — and that is not enough once
-        # _take_down has let the window go, since it is made again on showing
-        # only for a widget that asks.
+        # A window of its own, asked for rather than left to chance. An overlay
+        # has to be one to be seen over the 3D views, which are windows of
+        # their own: drawn into its parent's, it would sit underneath them. It
+        # used to become one by accident — Qt makes every sibling native when
+        # the first VTK view asks for a window.
         self.setAttribute(Qt.WA_NativeWindow, True)
         self.setVisible(False)
         parent.installEventFilter(self)
 
     @guard(False)
     def eventFilter(self, obj, event):
-        if obj is self.parent() and event.type() in (event.Type.Resize, event.Type.Show):
+        # Only while it is up: taken down, it is kept at no size at all (see
+        # _take_down), and fitting it to the parent again would undo that.
+        if (obj is self.parent() and self.isVisible()
+                and event.type() in (event.Type.Resize, event.Type.Show)):
             self._fit()
         return super().eventFilter(obj, event)
 
@@ -53,15 +54,30 @@ class ParentOverlay(QWidget):
         self.setVisible(True)
 
     def _take_down(self) -> None:
-        """Hide the overlay, and let its window go with it.
+        """Hide the overlay, and shrink it to nothing.
 
         Hidden is not gone on macOS. The window keeps the last picture painted
         into it, and that picture reached the screen again, for one frame, each
         time a tab was closed: the drop hint, "Open 13 files", over the 3D view
         long after the files had been dropped. Not reproducible from a script
-        — only after a real drag — so the picture is not left anywhere it could
-        come back from: the window goes, and the next showing makes a new one.
+        — only after a real drag — so the window is left no room to show it in:
+        at no size, a picture it keeps has nowhere to appear. ``_raise_over_
+        parent`` gives it its size back.
+
+        Shrunk, not destroyed. Destroying the window was the first answer, and
+        it crashed the app on every drop: the hint is up under the pointer
+        while files are dragged in, so macOS takes its window for the drop
+        target, and it is taken down in the middle of the drag — its window
+        freed, then reached for by the drag's next message (a segfault in
+        ``-[NSDragDestination _setTarget:]``). A window shrunk to nothing is
+        still there to be reached for.
+
+        Shrunk first, then hidden: Qt keeps a hidden widget's new size to
+        itself until it is shown again, and the window would have stayed the
+        size of the page, picture and all. And to a pixel, not to nothing: Qt
+        takes an empty size to mean "hide the window" and leaves its frame as
+        it was. One pixel of a picture — the faint corner of the hint's scrim —
+        is not one anyone can see.
         """
+        self.setGeometry(QRect(self.x(), self.y(), 1, 1))
         self.setVisible(False)
-        if self.internalWinId():
-            self.destroy(True, True)
