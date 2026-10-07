@@ -253,27 +253,87 @@ def test_a_digit_subscript_is_one_string_and_a_letter_is_two():
         assert zone_picker._label_parts(axis) == ("k", letter)
 
 
+class _Window:
+    """A render window that reports whatever DPI the test is about."""
+
+    def __init__(self, dpi: int) -> None:
+        self.dpi = dpi
+
+    def GetDPI(self) -> int:  # noqa: N802 - VTK's name
+        return self.dpi
+
+
+class _Plotter:
+    """Enough plotter for the labels: something to add actors to, and a window."""
+
+    def __init__(self, dpi: int = 72) -> None:
+        self.ren_win = _Window(dpi)
+        self.actors = []
+
+    def add_actor(self, actor, **_kwargs):
+        self.actors.append(actor)
+        return actor
+
+
+def _drawn(plotter, text: str):
+    return next(a for a in plotter.actors if a.GetInput() == text)
+
+
 def test_the_subscript_is_placed_in_pixels_after_the_base():
     """``SetDisplayOffset`` is applied after projection, so the two actors keep
     their arrangement at every zoom and from every angle — a second label
     anchored in the scene would drift apart from the first as the view moved.
-    The offset is the width the base is actually drawn at, measured for the
-    screen's own DPI: guessing from the character count puts the subscript
-    inside the letter or out in space."""
-    import inspect
+    The offset has to clear the base: the letters are drawn from the anchor
+    rightwards (justification is left), so anything less puts the subscript on
+    top of the k it belongs to."""
+    plotter = _Plotter(dpi=144)
 
-    source = inspect.getsource(zone_picker._draw_label)
-    assert "_text_width(base, size, dpi)" in source
-    assert "_dpi_of(plotter)" in source
-    assert "SetDisplayOffset" in inspect.getsource(zone_picker._billboard)
+    for label in ("k_x", "k_y", "k_z"):            # all three, not just the first
+        zone_picker._draw_label(plotter, (0.0, 0.0, 0.0), label, "#101010", 14)
 
+    assert _drawn(plotter, "k").GetDisplayOffset() == (0, 0)
+    for letter in ("x", "y", "z"):
+        across, down = _drawn(plotter, letter).GetDisplayOffset()
+        assert across >= zone_picker._text_width("k", 14, 144)   # clear of the letter
+        assert down < 0                                          # and below its middle
+
+
+def test_the_subscript_is_placed_again_for_the_screen_it_lands_on():
+    """A render window reports 72 DPI until it has one, and the scene is built
+    before the dialog is shown — so on a Retina screen every subscript was
+    measured at half the size its letters are drawn at, and sat on top of its
+    own k. The placing is done again once there is a window to ask."""
+    plotter = _Plotter(dpi=72)
+    zone_picker._draw_label(plotter, (0.0, 0.0, 0.0), "k_y", "#101010", 14)
+    subscript = _drawn(plotter, "y")
+    for_72 = subscript.GetDisplayOffset()[0]
+
+    plotter.ren_win.dpi = 144                       # the window turns out to be Retina
+    zone_picker.place_subscripts(plotter)
+
+    assert subscript.GetDisplayOffset()[0] >= zone_picker._text_width("k", 14, 144)
+    assert subscript.GetDisplayOffset()[0] > for_72
+
+
+def test_a_rebuilt_scene_forgets_the_labels_it_dropped():
+    """``clear()`` takes the actors; keeping their records would place subscripts
+    that are no longer drawn, and grow the list for the life of the dialog."""
+    plotter = _Plotter(dpi=144)
+    zone_picker._draw_label(plotter, (0.0, 0.0, 0.0), "k_z", "#101010", 14)
+    assert zone_picker._subscripts(plotter)
+
+    zone_picker.forget_subscripts(plotter)
+
+    assert not zone_picker._subscripts(plotter)
+
+
+def test_the_width_is_measured_in_the_pixels_the_glyphs_are_drawn_in():
     # Wider text, further along — whatever the font turns out to be.
     narrow = zone_picker._text_width("k", 14, 144)
     wide = zone_picker._text_width("kkk", 14, 144)
     assert 0 < narrow < wide
     assert zone_picker._text_width("", 14, 144) == 0
-    # And it is measured in the pixels the glyphs are drawn in: twice the DPI,
-    # twice the width, which is what keeps a HiDPI screen right.
+    # Twice the DPI, twice the width, which is what keeps a HiDPI screen right.
     assert zone_picker._text_width("k", 14, 144) > zone_picker._text_width("k", 14, 72)
 
 
