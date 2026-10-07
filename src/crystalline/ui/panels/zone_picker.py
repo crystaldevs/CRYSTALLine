@@ -16,7 +16,7 @@ from typing import List, Optional, Tuple
 from functools import lru_cache
 
 import numpy as np
-from PySide6.QtCore import QEvent
+from PySide6.QtCore import QEvent, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -394,6 +394,7 @@ class ZonePickerDialog(QDialog):
         refitting, so selecting a point does not also swing the view."""
         plotter = self._view.plotter
         plotter.clear()
+        forget_subscripts(plotter)  # cleared with the actors they belong to
         self._actors = {}
         self._path_actors = []
         try:
@@ -968,13 +969,61 @@ def _draw_label(plotter, position, label: str, colour: str, size: int):
     base, subscript = _label_parts(label)
     actor = _billboard(plotter, position, base, colour, size)
     if subscript:
-        dpi = _dpi_of(plotter)
         small = max(_SUBSCRIPT_MIN_SIZE, int(round(size * _SUBSCRIPT_SCALE)))
-        _billboard(plotter, position, subscript, colour, small,
-                   offset=(_text_width(base, size, dpi)
-                           + int(round(size * _SUBSCRIPT_GAP * dpi / 72.0)),
-                           -int(round(size * _SUBSCRIPT_DROP * dpi / 72.0))))
+        beside = _billboard(plotter, position, subscript, colour, small)
+        _subscripts(plotter).append((beside, base, size))
+        _place_subscript(beside, base, size, _dpi_of(plotter))
     return actor
+
+
+def _place_subscript(actor, base: str, size: int, dpi: int) -> None:
+    """Offset one subscript to just past its base, in pixels at ``dpi``."""
+    actor.SetDisplayOffset(
+        _text_width(base, size, dpi) + int(round(size * _SUBSCRIPT_GAP * dpi / 72.0)),
+        -int(round(size * _SUBSCRIPT_DROP * dpi / 72.0)),
+    )
+
+
+def _subscripts(plotter) -> list:
+    """The subscript actors drawn on ``plotter``, with what places each one.
+
+    Kept so they can be placed again: where a subscript goes depends on how
+    wide its base is *in pixels*, and that is not known until the window it
+    will be drawn in says what DPI it has. See :func:`place_subscripts`.
+    """
+    labels = getattr(plotter, "_zone_subscripts", None)
+    if labels is None:
+        labels = []
+        plotter._zone_subscripts = labels
+    return labels
+
+
+def forget_subscripts(plotter) -> None:
+    """Drop the record of the subscripts — for a ``clear()``, which drops them."""
+    _subscripts(plotter).clear()
+    plotter._zone_subscript_dpi = None
+
+
+def place_subscripts(plotter) -> bool:
+    """Put every subscript beside its base, for the DPI the window has *now*.
+
+    A text actor's glyphs are drawn at ``font size x DPI / 72``, and the offset
+    that puts the subscript beside the base is in pixels — so the two only agree
+    when the width is measured at the DPI the window actually draws at. A window
+    reports 72 until it has one, which is while the scene is built: measured
+    then, a Retina window drew every subscript half a letter to the left, on top
+    of the k it belongs to. So the offsets are set again whenever they might
+    have changed — when the view is shown, and when it is resized, which is what
+    moving the window to a screen of another density amounts to. Returns whether
+    anything moved, since what moved has to be drawn again.
+    """
+    dpi = _dpi_of(plotter)
+    if getattr(plotter, "_zone_subscript_dpi", None) == dpi:
+        return False  # each was placed for this DPI as it was drawn
+    for actor, base, size in _subscripts(plotter):
+        _place_subscript(actor, base, size, dpi)
+    plotter._zone_subscript_dpi = dpi
+    return True
 
 
 def _dpi_of(plotter) -> int:
@@ -1204,7 +1253,10 @@ class _ZoneView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.plotter = QtInteractor(self)
+        # Not redrawn five times a second for as long as the dialog is open,
+        # as pyvistaqt's default does: every change here asks for its draw
+        # (see Viewport, which turns the same timer off).
+        self.plotter = QtInteractor(self, auto_update=False)
         self.plotter.setAcceptDrops(False)  # see Viewport: drops belong to the window
         layout.addWidget(self.plotter)
         from crystalline.ui import theme
@@ -1213,6 +1265,11 @@ class _ZoneView(QWidget):
         self.plotter.set_background(theme.active_palette(QApplication.instance()).scene)
         self._smooth_the_zoom()
         self.setMinimumSize(360, 320)
+        # Owned by the view, so that it goes when the view does rather than
+        # firing into a dialog that has been closed (see _place_labels).
+        self._settling = QTimer(self)
+        self._settling.setSingleShot(True)
+        self._settling.timeout.connect(self._place_labels)
 
     def export_image(self, path: str, *, scale: int = 1,
                      transparent: bool = False) -> str:
@@ -1236,6 +1293,33 @@ class _ZoneView(QWidget):
         """
         self.plotter.enable_parallel_projection()
         self.plotter.interactor.installEventFilter(self)
+
+    @guard()
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """Place the subscripts once there is a window to measure them for.
+
+        The scene is built before the dialog is shown, when the render window
+        still reports the default 72 DPI; on a Retina screen it draws at twice
+        that, and a subscript placed for 72 lands on top of its own letter.
+
+        Twice: a widget is shown before its VTK window is made, so the DPI may
+        still be the default here, and is certainly right a turn later.
+        """
+        super().showEvent(event)
+        self._place_labels()
+        self._settling.start(0)
+
+    @guard()
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        """And again on a resize, which is what moving to another screen is."""
+        super().resizeEvent(event)
+        self._place_labels()
+
+    @guard()
+    def _place_labels(self) -> None:
+        """Put the subscripts where this window's DPI says, and draw if they moved."""
+        if place_subscripts(self.plotter):
+            self.plotter.render()
 
     @guard(default=False)
     def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt's name

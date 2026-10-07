@@ -64,7 +64,7 @@ class BusyOverlay(ParentOverlay):
 
     def stop(self) -> None:
         self._timer.stop()
-        self.setVisible(False)
+        self._take_down()  # not merely hidden: see ParentOverlay._take_down
 
     def pulse(self, message: Optional[str] = None) -> None:
         """Advance the spinner and paint it *now*, for work that cannot yield.

@@ -85,3 +85,32 @@ def test_summary_reads_as_composition_then_spread():
 
     assert "O 100%" in summary
     assert "1.0 of 3 atoms move" in summary
+
+
+def test_a_whole_list_is_analysed_as_each_mode_would_be():
+    """The batch the Phonons panel fills its list with must say, mode for mode,
+    what the one-at-a-time analysis says — element order included, which for
+    equal shares follows the order the elements first appear in."""
+    from crystalline.core.mode_analysis import mode_characters
+
+    rng = np.random.default_rng(3)
+    numbers = [atomic_numbers[s] for s in ("O", "C", "H", "C", "N", "H", "O")]
+    modes = [_mode(rng.normal(size=(7, 3))) for _ in range(20)]
+    modes.append(_mode(np.zeros((7, 3))))                       # a null mode
+
+    batch = mode_characters(modes, numbers)
+
+    assert len(batch) == len(modes)
+    for mode, character in zip(modes, batch):
+        single = mode_character(mode, numbers)
+        assert [s for s, _ in character.composition] == [s for s, _ in single.composition]
+        assert [v for _, v in character.composition] == pytest.approx(
+            [v for _, v in single.composition])
+        assert character.effective_atoms == pytest.approx(single.effective_atoms)
+    assert batch[-1].composition == ()
+
+    from crystalline.core.mode_analysis import _elements
+
+    symbols, element = _elements(np.asarray(numbers))
+    assert symbols == ["O", "C", "H", "N"]                       # as they first appear
+    assert list(element) == [0, 1, 2, 1, 3, 2, 0]

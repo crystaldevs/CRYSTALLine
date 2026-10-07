@@ -7,20 +7,20 @@ have a switch at the right of their title, which works with the section folded.
 
 ## Drawing options
 
-- **Atoms** — radius, opacity, element labels (size and colour) and a colour for
+- **Atoms**: radius, opacity, element labels (size and colour) and a colour for
   each element. Labels follow the background, black or white, unless a colour
   is chosen.
-- **Bonds** — radius, colour, and the tolerance used to decide which atoms are
+- **Bonds**: radius, colour, and the tolerance used to decide which atoms are
   bonded; hydrogen bonds, drawn as dashed D–H···A interactions, with their own
   colour and width.
-- **Unit cell** — colour and width of the cell edges.
-- **Coordination polyhedra** — opacity, minimum coordination and edge width, in
+- **Unit cell**: colour and width of the cell edges.
+- **Coordination polyhedra**: opacity, minimum coordination and edge width, in
   the style used by VESTA.
-- **Thermal ellipsoids** and **Phonon arrows** — available when the output
+- **Thermal ellipsoids** and **Phonon arrows**: available when the output
   provides them.
-- **Measurements & symmetry** — the colours of the objects drawn by the
+- **Measurements & symmetry**: the colours of the objects drawn by the
   Geometry and Point symmetry panels.
-- **View** — background colour, projection (perspective or orthographic), the
+- **View**: background colour, projection (perspective or orthographic), the
   **a**/**b**/**c** axes and the orientation marker.
 
 **Reset to defaults**, at the foot of the panel, restores every setting except

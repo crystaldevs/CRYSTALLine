@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 from crystalline.crystalio import electronic as el
 from crystalline.ui.panels.controls import ColourButton, Section, range_row, slider_row
 from crystalline.ui.safety import guard
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 # By extension only: BAND.DAT and fort.25 are names, and names are rewritten.
 _BAND_FILTER = "Band structures (*.BAND *.DAT *.f25 *.25);;All files (*)"
@@ -88,11 +89,10 @@ class ElectronicDialog(QDialog):
         self._frame_shown = ("eV", el.RELATIVE)
 
         outer = QVBoxLayout(self)
-        intro = QLabel(
+        intro = WrappedLabel(
             "Band and DOS files from a PROPERTIES run. CRYSTAL writes their "
             "energies relative to the Fermi level; choose absolute energies to "
             "move everything, the Fermi line included, up by E_F.")
-        intro.setWordWrap(True)
         intro.setStyleSheet("color: palette(mid);")
         outer.addWidget(intro)
 
@@ -153,8 +153,7 @@ class ElectronicDialog(QDialog):
             self._file_rows[kind] = row
             data.add(caption, row)
 
-        self._summary = QLabel()
-        self._summary.setWordWrap(True)
+        self._summary = WrappedLabel()
         self._summary.setStyleSheet("color: palette(mid);")
         data.add_wide(self._summary)
 

@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
-    QLabel,
     QListWidget,
     QListWidgetItem,
     QSpinBox,
@@ -30,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.ui.panels.controls import Section, VALUE_WIDTH, left, slider_row
+from crystalline.ui.panels.controls import Section, left, set_value_width, slider_row
 from crystalline.crystalio.pes import (
     DEFAULT_NSTATES,
     DEFAULT_RANGE,
@@ -39,6 +38,7 @@ from crystalline.crystalio.pes import (
     PESRun,
     representations,
 )
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 
 class PESDialog(QDialog):
@@ -50,8 +50,7 @@ class PESDialog(QDialog):
         self._run = run
 
         layout = QVBoxLayout(self)
-        summary = QLabel(run.summary, self)
-        summary.setWordWrap(True)
+        summary = WrappedLabel(run.summary, self)
         layout.addWidget(summary)
 
         cut = Section(layout, "Cut")
@@ -101,7 +100,7 @@ class PESDialog(QDialog):
         self.nstates = QSpinBox(self)
         self.nstates.setRange(1, 30)
         self.nstates.setValue(DEFAULT_NSTATES)
-        self.nstates.setFixedWidth(VALUE_WIDTH)
+        set_value_width(self.nstates)
         mode_options.add("States", left(self.nstates))
         layout.addWidget(self._mode_box)
 

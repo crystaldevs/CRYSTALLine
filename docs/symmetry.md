@@ -8,7 +8,7 @@ The symmetry reported depends on the periodicity of the structure:
 | --- | --- |
 | crystal (3D) | space group |
 | slab (2D) | layer group |
-| polymer (1D) | the repeat length only — see below |
+| polymer (1D) | the repeat length only, see below |
 | molecule (0D) | point group |
 
 The panel also reports the point group, the lattice parameters, the cell volume
@@ -29,11 +29,7 @@ One-dimensional systems are not otherwise supported; see
 
 A space group can be written in several settings, and a crystal computed in a
 non-standard one has lattice parameters its standard description does not
-share. A P2₁/n crystal with c = 8.97 Å and β = 105.5° is, in the standard
-P2₁/c setting, a cell with c = 10.43 Å and β = 124.1°: same crystal,
-same volume, different cell.
-
-The **Cell** box at the top of the Info panel chooses between the two:
+share. The **Cell** box at the top of the Info panel chooses between the two:
 
 | Cell | What the panel reports |
 | --- | --- |
@@ -41,39 +37,29 @@ The **Cell** box at the top of the Info panel chooses between the two:
 | **Standard setting** | the conventional standard cell, with the group's standard symbol (P2₁/c) |
 
 The choice is remembered between sessions, and the
-[CRYSTAL input builder](inputs.md#the-geometry-block) starts on it. If the cell
-on screen is not a conventional cell of its group — the primitive cell of a
-centred lattice, shown with **CONV. CELL** off — the panel reports it as it is
-and says so under **Cell**. The choice applies to crystals only: a slab is
-always described by its layer group and in-plane cell.
+[CRYSTAL input builder](inputs.md#the-geometry-block) starts on it. It applies
+to crystals only: a slab is always described by its layer group and in-plane
+cell.
 
 ## Point symmetry analysis
 
-**Cell → Point symmetry analysis** lists the symmetry elements of the structure
-— rotation axes, mirror planes and inversion centres — and draws them in the
-view.
+**Cell → Point symmetry analysis** lists the symmetry elements of the
+structure: rotation axes, mirror planes and inversion centres. They are also
+drawn in the view.
 
 The operators are named in the Schoenflies notation used in chemistry:
-C<sub>2</sub>, C<sub>3</sub>, C<sub>4</sub> and C<sub>6</sub> for the rotation
-axes, S<sub>4</sub> and S<sub>6</sub> for the rotoreflection axes, σ for a
-mirror plane and i for a centre of inversion. The mirrors are distinguished
-where the group allows it: σ<sub>h</sub> perpendicular to the principal axis,
-σ<sub>v</sub> containing it, and σ<sub>d</sub> bisecting the two-fold axes
-across it. A group with no single
-principal axis — the orthorhombic ones, whose three two-fold axes are
-equivalent — keeps the plain σ.
+C<sub>2</sub> to C<sub>6</sub> for rotation axes, S<sub>4</sub> and
+S<sub>6</sub> for rotoreflection axes, σ for a mirror plane and i for a centre
+of inversion. Where the group allows it the mirrors are distinguished as
+σ<sub>h</sub>, σ<sub>v</sub> and σ<sub>d</sub>.
 
-In a crystal each element is listed with its orientation in lattice terms: an
-axis by the direction it runs along, as in C<sub>4</sub> ∥ [001], and a mirror by
-the lattice plane it lies in, as in σ ∥ (110). The two are not interchangeable
-when the axes are not orthogonal: in a hexagonal crystal the mirror whose normal
-is **a** is the plane (2 1̄ 1̄ 0), written with four indices as lattice planes
-are, and not (1 0 0). In a molecule, which has no lattice, an axis is given by
-its Cartesian direction and a mirror by its Cartesian normal.
+In a crystal each element carries its orientation in lattice terms: an axis by
+the direction it runs along, as in C<sub>4</sub> ∥ [001], and a mirror by the
+plane it lies in, as in σ ∥ (110). In a molecule, which has no lattice, both
+are given as Cartesian directions.
 
-The group itself is reported in the convention of its own kind: a space group or
-a layer group in the Hermann–Mauguin notation, a molecular point group in the
-Schoenflies one.
+The group itself is reported in its own convention: Hermann–Mauguin for a space
+or layer group, Schoenflies for a molecular point group.
 
 ## Reducing the symmetry
 

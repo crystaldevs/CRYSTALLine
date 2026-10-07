@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from crystalline.core.mode_analysis import ModeCharacter, mode_character
+from crystalline.core.mode_analysis import ModeCharacter, mode_characters
 from crystalline.core.phonons import (
     PhononMode,
     PhononModes,
@@ -132,6 +132,12 @@ class PhononPanel(QWidget):
     """
 
     mode_selected = Signal(int)
+    # Whether there is anything to animate at all. The Display panel greys its
+    # arrow controls on this, the way the ellipsoids follow the ADP data: a
+    # length and a colour for arrows no file can draw are controls that do
+    # nothing. Emitted rather than asked for, so no caller has to remember to
+    # ask after every path that loads, drops or restores the modes.
+    modes_changed = Signal(bool)
     qpoint_selected = Signal(int)
     tile_requested = Signal(tuple)
 
@@ -323,6 +329,7 @@ class PhononPanel(QWidget):
         self._set_filter_available(modes.has_activity)
         self._populate()
         self.setEnabled(len(modes) > 0)
+        self.modes_changed.emit(self.has_modes())
 
     def set_qpoints(self, qpoints, current: int = 0) -> None:
         """List the q-points the run sampled, showing ``current`` as selected.
@@ -461,7 +468,7 @@ class PhononPanel(QWidget):
         """
         if self._numbers is None:
             return []
-        return [mode_character(mode, self._numbers) for mode in modes]
+        return mode_characters(modes, self._numbers)
 
     def character(self, index: int) -> Optional[ModeCharacter]:
         """Composition of mode ``index``, or ``None`` when it wasn't analysed."""
@@ -528,6 +535,7 @@ class PhononPanel(QWidget):
         self.mode_list.clear()
         self.character_label.clear()
         self.set_note()  # whatever it said was about the modes just dropped
+        self.modes_changed.emit(False)
         self._set_filter_available(False)
         self.set_qpoints([])  # the new file's q-points are the window's to supply
         self.setEnabled(False)

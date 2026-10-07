@@ -83,7 +83,7 @@ class DropHint(ParentOverlay):
         self.update()
 
     def hide_hint(self) -> None:
-        self.setVisible(False)
+        self._take_down()  # not merely hidden: see ParentOverlay._take_down
 
     def _fonts(self):
         title = QFont(self.font())

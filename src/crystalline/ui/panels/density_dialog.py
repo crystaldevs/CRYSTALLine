@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QHBoxLayout,
-    QLabel,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
@@ -45,6 +44,7 @@ from crystalline.core import lattice_planes
 from crystalline.crystalio import density as den
 from crystalline.ui.panels.controls import ColourButton, Section, slider_row
 from crystalline.ui.widgets.miller import MillerIndices
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 from crystalline.ui.safety import guard
 
 # By extension only: a cube's name is rewritten freely, its extension is not.
@@ -91,11 +91,10 @@ class DensityDialog(QDialog):
         self._error = ""
 
         outer = QVBoxLayout(self)
-        intro = QLabel(
+        intro = WrappedLabel(
             "A charge density, a spin density or an electrostatic potential "
             "from an ECH3 or POT3 run. Values are in the atomic units CRYSTAL "
             "writes them in.")
-        intro.setWordWrap(True)
         intro.setStyleSheet("color: palette(mid);")
         outer.addWidget(intro)
 
@@ -144,8 +143,7 @@ class DensityDialog(QDialog):
         section.add("and", _with_button(self.second, second_browse))
         self._second_row = section.row_widgets("and")
 
-        self.info = QLabel("")
-        self.info.setWordWrap(True)
+        self.info = WrappedLabel("")
         self.info.setStyleSheet("color: palette(mid);")
         section.append(self.info)
 

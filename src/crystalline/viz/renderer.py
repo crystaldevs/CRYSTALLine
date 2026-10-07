@@ -116,6 +116,9 @@ _ATOM_MATERIAL = dict(
 # own limit stays low — unless the topology is frozen, in which case the scan
 # runs once per animation and each frame is only an array gather.
 _LIVE_BOND_MAX_ATOMS = 5000
+# Atoms moved by less than this (Å) have not moved: a millionth of a picometre,
+# far below anything drawn, and far above the rounding of a mode at rest.
+_UNMOVED = 1e-9
 _LIVE_HBOND_MAX_ATOMS = 400
 
 # Above this atom count, per-atom element labels are suppressed: they'd be an
@@ -127,23 +130,35 @@ _ATOM_LABEL_MAX_ATOMS = 400
 # lattice shifts, so this can be tight.
 _IMAGE_FRAC_TOL = 1e-3
 
-# Lattice-vector indicator: small a/b/c arrows near the structure. Colours follow
-# the common convention a=red, b=green, c=blue (as in VESTA).
+# The corner marker: three labelled arrows. Colours follow the common convention
+# a=red, b=green, c=blue (as in VESTA), and the cartesian marker takes the same
+# three for x, y and z — the two share the corner, one at a time, so what tells
+# them apart should be the letters and nothing else.
 _LATTICE_COLORS = ("#d62728", "#2ca02c", "#1f77b4")
 _LATTICE_LABELS = ("a", "b", "c")
+_CARTESIAN_LABELS = ("X", "Y", "Z")
 # Fixed arrow length (Å): the gizmo shows only the a/b/c *directions*, so it stays
 # the same size regardless of the lattice parameters (editing a/b/c must not
 # grow or shrink it). Comparable to a bond length, so it reads well beside atoms.
 _LATTICE_ARROW_LENGTH = 2.0
-# How far past the arrow tip its label sits, as a multiple of the arrow length.
-_LATTICE_LABEL_OFFSET = 1.18
+# Where a label is anchored, as a multiple of the arrow length: just past the
+# tip, with the glyph drawn up and to the right of that — see _axis_label_actor.
+# The xyz marker anchors its letters at the foot of each cone and lets them fall
+# across it, which it can afford because they are black; a, b and c are drawn in
+# their axis's own colour, and a blue "c" over the blue arrowhead is not there
+# at all. So they are placed clear of the arrow instead.
+_LATTICE_LABEL_OFFSET = 1.12
 # Corner of the render window the gizmo occupies, as (xmin, ymin, xmax, ymax)
 # in normalised viewport coordinates: the lower left, a fifth of each side.
 _GIZMO_VIEWPORT = (0.0, 0.0, 0.24, 0.24)
-# Label glyph size: a caption scales its text to its own normalised box, so the
-# box drives how big the letter comes out next to the arrows.
-_LATTICE_LABEL_BOX = 0.05
-_LATTICE_LABEL_FONT_SIZE = 20
+# The lettering, taken from vtkAxesActor — the stock marker this one replaces.
+# A caption scales its text to its own normalised box, and that actor gives its
+# letters a wide, short one, which is what makes them larger and better placed
+# than the small square box the gizmo used to use. The font size, the italic,
+# the justification and the padding are its too.
+_LATTICE_LABEL_BOX = (0.25, 0.1)
+_LATTICE_LABEL_FONT_SIZE = 12
+_LATTICE_LABEL_PADDING = 3
 # The widget frames the marker's 3D bounds, and a 2D caption contributes none —
 # so a label anchored at an arrow tip lands on the very edge of the viewport and
 # gets clipped. An invisible sphere this many arrow-lengths across pads the
@@ -312,6 +327,10 @@ class StructureRenderer:
         # every frame of an animation instead of being rebuilt per frame.
         self._frozen_bond_pairs: Optional[tuple] = None
         self._frozen_hbond_pairs: Optional[np.ndarray] = None
+        # The geometry the bonds on screen were last worked out from — the
+        # reference, or the atoms themselves — so a move to where the atoms
+        # already are can be recognised as no move at all (update_positions).
+        self._bonded_from: Optional[np.ndarray] = None
         # Cache the (expensive) CrystalNN coordination analysis so a rebuild that
         # only changed display settings — a slider nudge, a colour, a toggle —
         # doesn't re-run it. Keyed on the analysed geometry + min-coordination.
@@ -467,9 +486,12 @@ class StructureRenderer:
         atoms for small systems (recomputed here); for large systems bonds are
         left in place during animation to keep it smooth.
         """
+        positions = np.asarray(positions, dtype=float)
         if len(self._positions) != len(positions):
             raise ValueError("position count changed; call refresh() instead")
-        self._positions = np.asarray(positions, dtype=float)
+        if self._already_drawn_at(positions):
+            return  # the frame on screen is this one
+        self._positions = positions
         self._reglyph_atoms()
         self._update_live_bonds()
         self._update_polyhedra(self._positions)
@@ -477,6 +499,33 @@ class StructureRenderer:
         if self._mode_vectors is not None:
             self._redraw_mode_arrows()  # arrows ride along with the atoms
         self.plotter.render()
+
+    def _bonding_geometry(self, positions: Optional[np.ndarray] = None) -> np.ndarray:
+        """The geometry bonds are worked out from: the reference, if one is set."""
+        if self._bond_reference is not None:
+            return self._bond_reference
+        return self._positions if positions is None else positions
+
+    def _already_drawn_at(self, positions: np.ndarray) -> bool:
+        """Whether moving the atoms to ``positions`` would change nothing on screen.
+
+        Opening a file asked twice for a move to where the atoms already were —
+        stopping an animation that was not playing, and parking a newly chosen
+        mode at the start of its cycle, where a Γ mode is at rest — and each
+        re-glyphed every atom and worked every bond out again. Nothing has moved
+        when the atoms are where they are drawn *and* the bonds would be worked
+        out from the same geometry as before: a new bond reference with the
+        atoms still in place can change which atoms are bonded.
+
+        "Where they are" within :data:`_UNMOVED`, not to the last bit: the mode
+        parked at the start of its cycle is displaced by cos(π/2) — 6e-17, not 0.
+        """
+        def same(a, b) -> bool:
+            return np.shape(a) == np.shape(b) and np.allclose(a, b, rtol=0.0, atol=_UNMOVED)
+
+        return (self._bonded_from is not None
+                and same(positions, self._positions)
+                and same(self._bonding_geometry(positions), self._bonded_from))
 
     @property
     def atom_count(self) -> int:
@@ -647,7 +696,7 @@ class StructureRenderer:
         """Put the right marker in the one corner widget — or empty it.
 
         A VTK renderer has a *single* orientation-marker widget, so the a/b/c
-        gizmo and the stock xyz marker are two candidates for one slot. Both are
+        gizmo and the x/y/z marker are two candidates for one slot. Both are
         decided here and shown through our own widget, and nothing else may
         touch it. In particular ``plotter.add_axes()`` must not be called: it
         builds a *second* widget and, on the way, shrinks the one it replaces to
@@ -664,7 +713,7 @@ class StructureRenderer:
         settings = self._settings
         marker = self._lattice_marker() if settings.show_lattice_vectors else None
         if marker is None and settings.show_orientation_axes:
-            marker = pv.create_axes_marker()
+            marker = self._cartesian_marker()
         self._set_orientation_widget(marker)
 
     def _rebuild(self) -> None:
@@ -726,6 +775,11 @@ class StructureRenderer:
             self._draw_bonds(self._positions, self._numbers)
         if settings.show_hydrogen_bonds:
             self._draw_hydrogen_bonds()
+        # What the bonds just drawn were worked out from — the reference when one
+        # is set, as _draw_bonds takes its pairs from it, and not the atoms: a
+        # later move to where they already are must not be read as "nothing has
+        # changed" when the reference has changed under them.
+        self._bonded_from = self._bonding_geometry().copy()
         # A coordination polyhedron is a large translucent solid centred on an
         # atom, and an ADP ellipsoid is a couple of tenths of an Angstrom sitting
         # inside it — the polyhedron swallows it whole. When the ellipsoids are
@@ -937,6 +991,7 @@ class StructureRenderer:
         if len(self._positions) > _LIVE_BOND_MAX_ATOMS:
             return
         self._update_bonds(self._positions)
+        self._bonded_from = self._bonding_geometry().copy()
         # The hydrogen-bond scan is the expensive one; a frozen topology makes it
         # a gather, so only the unfrozen path needs the tighter limit.
         frozen = self._frozen_hbond_pairs is not None or self._bond_reference is not None
@@ -2210,9 +2265,12 @@ class StructureRenderer:
 
         A VTK orientation-marker widget instead lives in screen space — always
         the same corner, always the same size — and only turns to follow the
-        camera. It is built from the real lattice vectors rather than a stock
-        xyz marker, so a non-orthogonal cell shows its true angles (a hexagonal
-        cell's a and b really do come out 120 degrees apart).
+        camera. It is built from the real lattice vectors, so a non-orthogonal
+        cell shows its true angles (a hexagonal cell's a and b really do come
+        out 120 degrees apart) — which is also why neither marker can be a
+        ``vtkAxesActor``: that actor draws its three axes along x, y and z and
+        can only be put elsewhere by a transform, which would shear the
+        arrowheads of every cell that is not orthogonal.
 
         The widget survives ``plotter.clear()``, unlike an actor, so it is
         created once and only its marker is swapped when the cell changes.
@@ -2224,36 +2282,31 @@ class StructureRenderer:
         if np.allclose(cell, 0.0):
             return None
 
-        # vtkPropAssembly, not vtkAssembly: the latter pokes its own matrix into
-        # every child, which overrides anything a child computes for itself. A
-        # prop assembly just groups props and lets each render on its own terms,
-        # which is what the 2D labels below need.
-        assembly = vtkPropAssembly()
-        drawn = 0
+        axes = []
         for axis, periodic in enumerate(self._structure.pbc):
             if not periodic:
                 continue
-            vec = cell[axis]
-            length = float(np.linalg.norm(vec))
+            length = float(np.linalg.norm(cell[axis]))
             if length < 1e-6:
                 continue
-            direction = vec / length
-            arrow = pv.Arrow(
-                start=(0.0, 0.0, 0.0), direction=direction, scale=_LATTICE_ARROW_LENGTH
-            )
-            assembly.AddPart(_unlit_actor(arrow, _LATTICE_COLORS[axis]))
-            assembly.AddPart(
-                _axis_label_actor(
-                    _LATTICE_LABELS[axis],
-                    direction * _LATTICE_ARROW_LENGTH * _LATTICE_LABEL_OFFSET,
-                    _LATTICE_COLORS[axis],
-                )
-            )
-            drawn += 1
-        if not drawn:
-            return None
-        assembly.AddPart(_bounds_padding_actor(_LATTICE_ARROW_LENGTH * _GIZMO_BOUNDS_PADDING))
-        return assembly
+            axes.append((cell[axis] / length, _LATTICE_LABELS[axis], _LATTICE_COLORS[axis]))
+        return _axes_marker(axes)
+
+    def _cartesian_marker(self):
+        """The x/y/z marker, for a structure with no lattice to show instead.
+
+        Built here rather than taken from ``pv.create_axes_marker``: the two
+        markers share one corner, one at a time, and the stock one is drawn to a
+        different plan — thin line shafts, small cones, black letters — so the
+        corner changed its whole appearance depending on which was in it. Same
+        arrows, same lettering, same colours; only the letters differ, which is
+        the one thing that should.
+        """
+        return _axes_marker([
+            (direction, label, colour)
+            for direction, label, colour
+            in zip(np.eye(3), _CARTESIAN_LABELS, _LATTICE_COLORS)
+        ])
 
     def _set_orientation_widget(self, marker) -> None:
         """Show ``marker`` in the viewport corner (``None`` empties the corner)."""
@@ -2293,6 +2346,37 @@ def _sample_nearest(values: np.ndarray, field, points: np.ndarray) -> np.ndarray
     for axis in range(3):
         np.clip(index[:, axis], 0, field.shape[axis] - 1, out=index[:, axis])
     return values[index[:, 0], index[:, 1], index[:, 2]]
+
+
+def _axes_marker(axes):
+    """A corner marker: one labelled arrow per ``(direction, label, colour)``.
+
+    Both markers are built here — the a/b/c gizmo from the cell's own vectors,
+    the x/y/z one from the cartesian frame — so that the corner looks the same
+    whichever of them is in it. ``None`` when there is nothing to draw.
+
+    The arrows share one length, so a marker shows direction alone and never
+    rescales with the lattice parameters (editing a, b or c must not grow or
+    shrink it).
+    """
+    # vtkPropAssembly, not vtkAssembly: the latter pokes its own matrix into
+    # every child, which overrides anything a child computes for itself. A prop
+    # assembly just groups props and lets each render on its own terms, which is
+    # what the 2D labels need.
+    assembly = vtkPropAssembly()
+    drawn = 0
+    for direction, label, colour in axes:
+        direction = np.asarray(direction, dtype=float)
+        arrow = pv.Arrow(start=(0.0, 0.0, 0.0), direction=direction,
+                         scale=_LATTICE_ARROW_LENGTH)
+        assembly.AddPart(_unlit_actor(arrow, colour))
+        assembly.AddPart(_axis_label_actor(
+            label, direction * _LATTICE_ARROW_LENGTH * _LATTICE_LABEL_OFFSET, colour))
+        drawn += 1
+    if not drawn:
+        return None
+    assembly.AddPart(_bounds_padding_actor(_LATTICE_ARROW_LENGTH * _GIZMO_BOUNDS_PADDING))
+    return assembly
 
 
 def _unlit_actor(mesh, color: str):
@@ -2337,20 +2421,24 @@ def _axis_label_actor(text: str, position: np.ndarray, color: str):
     caption.BorderOff()
     caption.LeaderOff()
     caption.ThreeDimensionalLeaderOff()
-    caption.SetPadding(0)
+    caption.SetPadding(_LATTICE_LABEL_PADDING)
     # A caption sizes its text to its own box, so the box is what sets the glyph
-    # size; left at the default it would dwarf the arrows.
-    caption.SetWidth(_LATTICE_LABEL_BOX)
-    caption.SetHeight(_LATTICE_LABEL_BOX)
+    # size. This one is vtkAxesActor's: wide and short, which gives a bigger
+    # letter than a small square does, and justified to its lower left corner so
+    # the glyph is drawn up and to the right of the point it is tied to — clear
+    # of the arrow rather than sitting on its tip.
+    caption.SetWidth(_LATTICE_LABEL_BOX[0])
+    caption.SetHeight(_LATTICE_LABEL_BOX[1])
 
     text_property = caption.GetCaptionTextProperty()
     text_property.SetColor(*(c / 255.0 for c in _hex_to_rgb(color)))
     text_property.SetFontSize(_LATTICE_LABEL_FONT_SIZE)
     text_property.BoldOn()
-    text_property.ItalicOff()
+    # Italic, as the xyz marker has it — and as a, b and c are set in print.
+    text_property.ItalicOn()
     text_property.ShadowOff()
-    text_property.SetJustificationToCentered()
-    text_property.SetVerticalJustificationToCentered()
+    text_property.SetJustificationToLeft()
+    text_property.SetVerticalJustificationToBottom()
     caption.SetPickable(False)
     return caption
 

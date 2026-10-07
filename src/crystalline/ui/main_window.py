@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from typing import Optional, Sequence
 
 import numpy as np
-from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtCore import QEvent, QRect, Qt, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -101,7 +101,7 @@ from crystalline.ui.file_tabs import (
 )
 from crystalline.ui.viewport import Viewport
 from crystalline.ui.safety import guard
-from crystalline.ui.widgets import BusyOverlay, DropHint, Worker
+from crystalline.ui.widgets import BusyOverlay, DropHint, SlidingTabBar, Worker
 from crystalline.ui.panels.structure_panel import StructurePanel
 from crystalline.ui.panels.phonon_panel import PhononPanel
 from crystalline.ui.panels.info_panel import InfoPanel
@@ -179,6 +179,9 @@ class MainWindow(QMainWindow):
         # centre: one page per open file, each its own 3D view. Movable, so
         # files can be put side by side in the bar; closable, one at a time.
         self._file_tabs = QTabWidget(self)
+        # Before any setting below, which the tab widget hands to its bar: a
+        # swipe across the tabs moves their close buttons with them.
+        self._file_tabs.setTabBar(SlidingTabBar(self._file_tabs))
         self._file_tabs.setObjectName("fileTabs")  # centred by the theme, over the view
         self._file_tabs.setTabsClosable(True)
         self._file_tabs.setMovable(True)
@@ -368,15 +371,19 @@ class MainWindow(QMainWindow):
             self._tab = previous
         return tab
 
-    def _realise_tab(self, tab: FileTab) -> None:
+    def _realise_tab(self, tab: FileTab) -> bool:
         """Build ``tab``'s widgets, and put into them any file waiting to be shown.
 
         Called the first time a tab is shown, and only then: a tab opened
         alongside others and never looked at costs nothing but its page and the
         file it has read. Everything is built as the current tab, the same way
         and in the same order as when there was only ever one.
+
+        Returns whether the widgets were built just now, for
+        :meth:`_activate_tab` to settle them on screen (:meth:`_settle_tab`).
         """
-        if not tab.built():
+        new = not tab.built()
+        if new:
             with self._acting_on(tab):
                 self._build_tab_widgets(tab)
         pending = tab.pending
@@ -384,12 +391,41 @@ class MainWindow(QMainWindow):
             tab.pending = None
             with self._acting_on(tab):
                 self._fill_tab(tab, *pending)
+        return new
+
+    def _settle_tab(self, tab: FileTab) -> None:
+        """Lay out and draw a tab on screen, before the window next reaches it.
+
+        For a tab just built, or just given its file. Left to Qt, both happen a
+        turn of the event loop later, and the window is shown in between: the
+        Info panel with rows not laid out yet — scrollbars they will not need,
+        light bars down and across a dark dock, or the Crystallography rows
+        missing and the CRYSTAL output rows sitting where they should be — and
+        the 3D view with nothing drawn in it, which macOS shows white. Each for
+        one frame: a flash every time a tab is first looked at, whether by a
+        click on it, by closing the tab in front of it or by opening its file.
+
+        The layouts first, since the docks they settle can change the size of
+        the view; then the view, with the file in it (it is on screen already,
+        see :meth:`_build_tab_widgets`).
+        """
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        tab.viewport.draw_now()
 
     def _build_tab_widgets(self, tab: FileTab) -> None:
         """One tab's 3D view and panels, wired to each other and to the window."""
         # The 3D view, inside the tab's page, and the phonon panel driving it.
         self.viewport = Viewport(tab.page)
         tab.page.layout().addWidget(self.viewport)
+        if tab.page.isVisible():
+            # The tab is being looked at, and Qt would show the view on the next
+            # turn of the event loop: the window would reach the screen once
+            # with a bare page where the view goes. And everything below would
+            # be framed in a view that is not on screen yet, at a default size
+            # it never has — a tall view got the framing of a wide one, and the
+            # cell ran off both sides. Shown now, the page's layout gives it its
+            # real size on the way; _settle_tab draws it once its file is in.
+            self.viewport.show()
         if tab.start_settings is not None:
             self.viewport.renderer.set_settings(tab.start_settings)
         self.animator = PhononAnimator(self.viewport.renderer)
@@ -480,7 +516,7 @@ class MainWindow(QMainWindow):
         # Its page is on screen; now it needs something in it. A tab opened
         # beside others is built here, the first time it is looked at — before
         # the panels below are reached for, since this is what makes them.
-        self._realise_tab(tab)
+        new = self._realise_tab(tab)
         for name, stack in self._panel_stacks.items():
             stack.setCurrentWidget(getattr(tab, name))
         # Editing is a mode of the window, not of a file: the tab arrived at
@@ -498,6 +534,8 @@ class MainWindow(QMainWindow):
         finally:
             self._switching_tabs = False
         self._refresh_chrome()
+        if new:
+            self._settle_tab(tab)  # after everything above has had its say
         self._show_notice(tab)  # read in behind: what it could not read is said now
 
     def _take_tab_for_file(self) -> FileTab:
@@ -818,6 +856,7 @@ class MainWindow(QMainWindow):
         on = lambda slot: self._routed(tab, slot)  # noqa: E731
         viewport, selection = tab.viewport, tab.structure_panel
         phonons, geometry = tab.phonon_panel, tab.geometry_panel
+        display = tab.display_panel
         # viewport pick -> update selection (additive with Ctrl/Shift)
         viewport.atom_picked.connect(selection.select_atom)
         # dragging an atom in 3D -> update selection (keep a group drag intact)
@@ -842,6 +881,9 @@ class MainWindow(QMainWindow):
         phonons.qpoint_selected.connect(on(self._set_qpoint))
         # "Tile n×n×n" next to the q-point -> the supercell one period needs
         phonons.tile_requested.connect(on(self._tile_to_qpoint))
+        # modes loaded, dropped or restored -> the arrow controls follow them,
+        # as the ellipsoid controls follow a file's ADPs
+        phonons.modes_changed.connect(on(display.set_phonons_available))
 
         # Geometry panel: the same edit operations as the Edit menu (so undo and
         # the selection model behave identically), plus measurement overlays.
@@ -2679,6 +2721,7 @@ class MainWindow(QMainWindow):
         if front or self._tab.is_blank():
             tab = self._take_tab_for_file()
             self._fill_tab(tab, path, read)
+            self._settle_tab(tab)  # filled on screen: shown finished, not a frame early
             self._show_notice(tab)
             return
         tab = self._add_tab(show=False)

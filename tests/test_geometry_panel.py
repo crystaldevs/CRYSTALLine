@@ -19,17 +19,14 @@ def qapp():
 
 
 @pytest.fixture(autouse=True)
-def sections_remembered(monkeypatch):
-    """Which sections are open is kept in QSettings: keep the tests' in a dict,
-    out of the user's settings — and the user's out of the tests."""
-    from crystalline.ui import preferences
+def sections_remembered():
+    """Which sections are unfolded is shared by every panel in the process, so
+    each test starts from a fresh run's state: all three folded."""
+    from crystalline.ui.panels import geometry_panel
 
-    stored = {}
-    monkeypatch.setattr(preferences, "section_open",
-                        lambda name, default=True: stored.get(name, default))
-    monkeypatch.setattr(preferences, "set_section_open",
-                        lambda name, open_: stored.__setitem__(name, bool(open_)))
-    return stored
+    geometry_panel._OPEN_SECTIONS.clear()
+    yield geometry_panel._OPEN_SECTIONS
+    geometry_panel._OPEN_SECTIONS.clear()
 
 
 def _water() -> Structure:
@@ -677,10 +674,28 @@ def test_the_panel_is_three_sections_that_fold_and_are_remembered(qapp, sections
 
     panel._sections["atoms"].header.click()
     assert panel.section_open("atoms") and not panel._sections["atoms"].body.isHidden()
-    assert sections_remembered == {"geometry/atoms": True}
+    assert sections_remembered == {"atoms": True}
 
-    other = GeometryPanel(_water())                  # another tab's, or the next session's
+    other = GeometryPanel(_water())                  # another tab's panel
     assert other.section_open("atoms") and not other.section_open("measure")
+
+
+def test_the_sections_are_folded_again_the_next_time_the_program_runs(qapp):
+    """Unfolding follows you between tabs, but not into the next session: the
+    panel opens as a list of headings every time, as the Display panel does."""
+    panel = GeometryPanel(_water())
+    panel._sections["planes"].header.click()
+    assert panel.section_open("planes")
+
+    sections_of_a_new_run()                          # what starting the app does
+
+    assert not GeometryPanel(_water()).section_open("planes")
+
+
+def sections_of_a_new_run():
+    from crystalline.ui.panels import geometry_panel
+
+    geometry_panel._OPEN_SECTIONS.clear()
 
 
 def test_a_panel_shown_again_takes_up_the_sections_as_last_left(qapp):
@@ -747,6 +762,25 @@ def test_the_position_slider_moves_a_plane_along_its_normal(qapp):
     assert panel.lattice_planes()[0].offset == pytest.approx(0.5)
     assert drawn[-1][0][0].offset == pytest.approx(0.5)   # and the view was told
     assert "at 0.50 d" in panel._plane_list.item(0).text()   # and the row says so
+
+
+def test_the_position_slider_reaches_the_other_side_of_the_origin(qapp):
+    """A plane is drawn only where it cuts the cell, and with a negative index
+    the cell lies on the negative side of the plane through the origin: from 0
+    to 1, (-1 0 0) left the cell altogether and drew nothing."""
+    panel, _structure, drawn = _plane_panel()
+    _type_miller(panel, -1, 0, 0)
+    panel._add_plane_btn.click()
+
+    panel._plane_list.item(0).setSelected(True)
+    panel._plane_offset.set_value(-0.5)
+
+    assert panel.lattice_planes()[0].offset == pytest.approx(-0.5)
+    assert drawn[-1][0][0].offset == pytest.approx(-0.5)
+    assert "at -0.50 d" in panel._plane_list.item(0).text()
+    panel._plane_offset.set_value(-1.0)                   # the neighbour on that side
+    assert panel.lattice_planes()[0].offset == pytest.approx(-1.0)
+    assert panel._plane_offset.slider.value() == panel._plane_offset.slider.minimum()
 
 
 def test_picking_a_plane_shows_where_it_sits(qapp):

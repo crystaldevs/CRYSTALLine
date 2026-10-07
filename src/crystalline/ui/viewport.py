@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 import numpy as np
+from pyvista import BasePlotter
 from pyvistaqt import QtInteractor
 from PySide6.QtCore import QEvent, Qt, QTimer, Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout
@@ -71,7 +72,14 @@ class Viewport(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.interactor = QtInteractor(self)
+        # Not redrawn on a timer. pyvistaqt's default redraws every view five
+        # times a second, whether anything changed or not and whether the view
+        # is on screen or not: with several files open, every tab's scene was
+        # drawn over and over behind the one being looked at — and drawn into
+        # while hidden, which the hold below exists to prevent. Its timer holds
+        # the interactor's own render, taken before it is replaced below, so it
+        # went round that too. Everything that changes the scene asks for a draw.
+        self.interactor = QtInteractor(self, auto_update=False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.interactor)
@@ -175,7 +183,13 @@ class Viewport(QWidget):
 
     @guard()
     def _draw_held(self) -> None:
-        """Draw what was asked for while the view was held."""
+        """Draw what was asked of the view while it could not be drawn into.
+
+        Both ways that happens: hidden — a tab behind the one being looked at —
+        and held while something else drew (see :meth:`held`). Called a turn
+        after either ends, since a Show event comes before the window is up; if
+        the view went away again in between, what is owed stays owed.
+        """
         if self._render_held and self.interactor.isVisible():
             self._render_held = False
             self._render_now()
@@ -183,11 +197,41 @@ class Viewport(QWidget):
     @guard()
     def _draw_queued(self) -> None:
         """Draw, once, whatever was asked of the view since it was last drawn."""
+        if not self._render_queued:
+            return  # drawn at once in the meantime (draw_now)
         self._render_queued = False
         if self.interactor.isVisible():
             self._render_now()
         else:
             self._render_held = True  # hidden in the meantime: drawn when shown
+
+    def draw_now(self) -> None:
+        """Draw the view at once, before the window next reaches the screen.
+
+        For a view just put on screen: a tab's, the first time the tab is looked
+        at. Its own window comes up with nothing in it, which macOS fills with
+        white, and the draws asked of it so far are a turn of the event loop
+        away; in between, the window reaches the screen, and in a dark window
+        that is a white flash across the view. Drawn here, the first picture of
+        it to reach the screen is the finished one.
+
+        Not through :meth:`QtInteractor.render`, which on macOS only *asks* for
+        a draw, from a thread, so that it runs on a later turn whatever is
+        done. The plotter's own ``render`` is what that request ends up
+        calling, so it draws now, on this thread — and a draw already queued
+        has nothing left to do.
+        """
+        if self._suspended:
+            # Held: something else is drawing, and this is the one draw that
+            # would not have gone through request_render to find that out. A
+            # tab filled while an animation is being exported reaches here.
+            self._render_held = True
+            return
+        if not self.interactor.isVisible():
+            return  # not on screen: held, and drawn when it is
+        self._render_held = False
+        self._render_queued = False
+        BasePlotter.render(self.interactor)
 
     def _set_camera_busy(self, busy: bool) -> None:
         """Announce that the camera started or stopped moving (idempotent)."""
@@ -203,9 +247,10 @@ class Viewport(QWidget):
             etype = event.type()
             if etype == QEvent.Show and self._render_held:
                 # Drawn once it is on screen, on the next turn of the loop, when
-                # its window is mapped: whatever was asked of it while hidden.
-                self._render_held = False
-                QTimer.singleShot(0, self.interactor.render)
+                # its window is mapped: whatever was asked of it while hidden —
+                # unless draw_now() has drawn it by then. (The Show event comes
+                # before the window is up, so it is too early to draw here.)
+                QTimer.singleShot(0, self._draw_held)
             if etype in (QEvent.Enter, QEvent.FocusIn):
                 self._drag.reactivate()
             elif etype == QEvent.MouseButtonRelease:

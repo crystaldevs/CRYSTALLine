@@ -43,6 +43,19 @@ _ROW_SPACING = 7
 _SECTION_SPACING = 16
 
 
+def set_value_width(box) -> None:
+    """Fix a spin box to the value column — or to what it holds, if that is wider.
+
+    The column is what makes a stack of numbers read as a column, but 66 px was
+    measured against one font and one set of ranges. A box whose range runs to
+    ``-10,00`` or ``1110,0`` needs more than that, and Qt does not shrink the
+    text to fit: it draws the digits under the stepper arrows. A number that
+    cannot be read is worse than a column with one wide entry in it, so the box
+    gets the width it asks for whenever that is the larger.
+    """
+    box.setFixedWidth(max(_VALUE_WIDTH, box.sizeHint().width()))
+
+
 class _Section:
     """A collapsible block of settings: a header you can click, then rows.
 
@@ -366,7 +379,7 @@ class SliderBox(QWidget):
         self.box.setDecimals(decimals)
         self.box.setSuffix(suffix)
         self.box.setValue(value)
-        self.box.setFixedWidth(_VALUE_WIDTH)
+        set_value_width(self.box)
         self.slider = QSlider(Qt.Horizontal)
         self.slider.setRange(0, _SLIDER_STEPS)
         self.slider.setValue(self._to_slider(value))
@@ -478,7 +491,7 @@ def range_row(
         box.setDecimals(decimals)
         box.setSingleStep(step)
         box.setValue(value)
-        box.setFixedWidth(_VALUE_WIDTH)
+        set_value_width(box)
         boxes.append(box)
     low_box, high_box = boxes
 
@@ -531,5 +544,6 @@ __all__ = [
     "left",
     "plain_spin",
     "range_row",
+    "set_value_width",
     "slider_row",
 ]
