@@ -63,6 +63,21 @@ def _rows(panel: PhononPanel) -> list[str]:
     return [panel.mode_list.item(i).text() for i in range(panel.mode_list.count())]
 
 
+def test_the_panel_says_when_there_are_modes_and_when_there_are_none(qapp):
+    """The Display panel greys its arrow controls on this, the way the ellipsoid
+    controls follow a file's ADPs. A signal rather than a question, so no caller
+    has to remember to ask after every path that loads or drops the modes."""
+    panel = _panel(_structure())
+    said = []
+    panel.modes_changed.connect(said.append)
+
+    panel.set_modes(_structure().positions, _labelled_modes())
+    assert said == [True]
+
+    panel.clear()                                    # a file with no phonons
+    assert said == [True, False]
+
+
 def test_filter_narrows_the_list_to_active_modes(qapp):
     panel = _panel(_structure())
     panel.set_modes(_structure().positions, _labelled_modes())
