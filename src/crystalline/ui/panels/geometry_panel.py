@@ -50,7 +50,6 @@ from PySide6.QtWidgets import (
 from crystalline.core import lattice_planes as lp
 from crystalline.core import measure as measure_mod
 from crystalline.core.structure import Structure
-from crystalline.ui import preferences
 from crystalline.ui.panels.controls import Section, SliderBox
 from crystalline.ui.safety import guard
 from crystalline.ui.widgets.miller import MillerIndices
@@ -90,6 +89,13 @@ _THICKNESS_MIN = 0.02
 _THICKNESS_MAX = 0.50
 # The panel's sections: the key each is remembered under, and its header.
 _SECTIONS = (("measure", "Measure"), ("planes", "Lattice planes"), ("atoms", "Atoms"))
+
+
+# Which sections are unfolded. Shared by every tab's panel, so a section folded
+# in one tab is folded in the next, and deliberately not kept between runs: the
+# panel opens as three headings every time the program starts, the way the
+# Display panel's groups do.
+_OPEN_SECTIONS: dict = {}
 
 
 class GeometryPanel(QWidget):
@@ -174,12 +180,14 @@ class GeometryPanel(QWidget):
         # Folded until asked for. Three sections of tools open at once fills the
         # dock and buries whichever one is being used; a panel that opens as a
         # list of headings shows what is on offer and costs one click to use.
-        # Whatever is left open is remembered, so this is only the first run.
-        return preferences.section_open(f"geometry/{key}", default=False)
+        # Every run starts that way, as the Display panel does, and what is
+        # unfolded while working stays unfolded across the tabs — see
+        # _OPEN_SECTIONS.
+        return _OPEN_SECTIONS.get(key, False)
 
     def _remember_section(self, key: str, open_: bool) -> None:
         if not self._restoring_sections:
-            preferences.set_section_open(f"geometry/{key}", open_)
+            _OPEN_SECTIONS[key] = bool(open_)
 
     def section_open(self, key: str) -> bool:
         """Whether the section ``key`` (``"measure"``, ``"planes"``, ``"atoms"``) is open."""
