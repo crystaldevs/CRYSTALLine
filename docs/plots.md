@@ -7,7 +7,7 @@ figure.
 
 Some entries use the output file already open; the others read the data files
 written by a properties run, and their names end with `…`. Those files are
-looked for, and asked for, in the folder of the open output — see [working in
+looked for, and asked for, in the folder of the open output; see [working in
 the calculation's folder](first-steps.md#working-in-the-calculations-folder).
 **Plot → Plot font…** sets the font of the figures drawn afterwards.
 
@@ -47,9 +47,9 @@ identifies the SCF they come from; a disagreement is reported.
 **The energies.** CRYSTAL writes them relative to the Fermi level. They can be
 plotted that way or as absolute energies, in which case the Fermi energy is
 added back and the line marking it moves with the data. Units are eV or
-Hartree. The window is taken from the contents of the file — from the first
+Hartree. The window is taken from the contents of the file, from the first
 wide gap below the Fermi level, which separates the valence bands from the core
-levels, to as far above — and **Suggested window** restores it.
+levels to as far above, and **Suggested window** restores it.
 
 **The rest.** The projections of the density of states, with their names and
 colours; the treatment of the spin-down component; the labels of the path; and
@@ -86,15 +86,15 @@ anharmonic shift.
 Several curves may be selected at once, which is the usual case: the
 single-crystal Raman components on the same axes show the anisotropy, and a
 harmonic curve under its anharmonic counterpart shows the shift. The broadening
-is chosen in the same dialog — pseudo-Voigt, Lorentzian, Gaussian or a stick
-spectrum — and only the widths used by the chosen lineshape are enabled.
+is chosen in the same dialog (pseudo-Voigt, Lorentzian, Gaussian or a stick
+spectrum), and only the widths used by the chosen lineshape are enabled.
 
 ## Anharmonic calculations
 
-- **VCI states…** — the states of a VCI calculation, as a heatmap or a Sankey
+- **VCI states…**: the states of a VCI calculation, as a heatmap or a Sankey
   diagram.
-- **Anharmonic scan…** — the scanned potential.
-- **Anharmonic PES…** — one- and two-dimensional cuts of the potential energy
+- **Anharmonic scan…**: the scanned potential.
+- **Anharmonic PES…**: one- and two-dimensional cuts of the potential energy
   surface, with the wavefunctions and probability densities of a double well.
 
 ## Properties read from the output
@@ -103,15 +103,15 @@ These entries use the open output file and are enabled when it contains the
 data they need. They are drawn by
 [CRYSTALClear](https://crystaldevs.github.io/CRYSTALClear/), whose
 [notebooks](https://crystaldevs.github.io/CRYSTALClear/notebooks/index.html)
-work through each kind of plot in detail — what it is computed from, and what
-can be varied — for anyone who wants more than the dialogs here offer.
+work through each kind of plot in detail, what it is computed from and what
+can be varied, for anyone who wants more than the dialogs here offer.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
 
 :::{grid-item}
 
-- **Elastic properties** — Young's modulus, linear compressibility, shear
+- **Elastic properties**: Young's modulus, linear compressibility, shear
   modulus and Poisson's ratio, as three-dimensional surfaces and as sections
   through them.
 - **Equation of state.**
@@ -184,5 +184,5 @@ first. A field is drawn either as an **isosurface**, which opens at a level that
 clears the drawn atoms, or on a **lattice plane** given by its Miller indices in
 the conventional cell; the crystal in front of the plane is cut away and the
 atoms lying in it are marked. A colour bar can be added.
-A **second field** either colours the surface — the potential on the density,
-as above — or is subtracted from the first. 
+A **second field** either colours the surface, as with the potential on the
+density above, or is subtracted from the first. 

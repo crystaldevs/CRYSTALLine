@@ -16,7 +16,7 @@ in a tab of its own.
 **File → Import atoms into structure…** reads `.xyz`, `.pdb` and `.cif` files
 and adds their atoms to the structure already loaded, without replacing it. A
 file dropped on a window which already contains a structure is imported in the
-same way, into the tab on screen — unless it is dropped together with files that
+same way, into the tab on screen, unless it is dropped together with files that
 open tabs of their own, in which case it is left out.
 
 ## Data files read for the plots
@@ -35,7 +35,7 @@ The files a PROPERTIES (`.d3`) run leaves beside the output:
 
 These files are searched for in the folder of the output that is open, which is
 where CRYSTAL leaves them, and are recognised by their extension and their
-content — never by the rest of their name, which is rewritten freely — so that the appropriate file is proposed when a folder contains
+content, never by the rest of their name, which is rewritten freely, so that the appropriate file is proposed when a folder contains
 several runs. A
 `fort.25` file does not record the shrinking factor of the tick labels of a band
 structure; the corners of the path then keep their coordinates unless the deck

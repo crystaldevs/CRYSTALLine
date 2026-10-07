@@ -44,9 +44,9 @@ With `auto`, the smallest factor which makes every coordinate integral is used;
 any multiple of it is also accepted. A factor which would leave a coordinate
 fractional is refused.
 
-For seven of the fourteen Bravais lattices — rhombohedral, body-centred
+For seven of the fourteen Bravais lattices (rhombohedral, body-centred
 tetragonal, the three centred orthorhombic lattices and the two monoclinic
-ones — the conventional path passes through points whose coordinates depend on
+ones) the conventional path passes through points whose coordinates depend on
 the lattice parameters, and no shrinking factor represents them exactly. Two of
 the five plane lattices, the oblique and the centred rectangular, are in the
 same position. For these the proposed path runs from Γ to each of the special 
@@ -62,8 +62,8 @@ of the corresponding plane lattice, and every path lies in the plane.
 
 ## Polymers
 
-A one-dimensional zone is a segment. It has two points — Γ at its centre and X
-at its end — and therefore exactly one path, Γ to X, which is what is proposed.
+A one-dimensional zone is a segment. It has two points, Γ at its centre and X
+at its end, and therefore one path only, Γ to X, which is what is proposed.
 Written over a shrinking factor of 2, the deck reads:
 
 ```text
@@ -76,8 +76,8 @@ Band structure (G X)
 The **Path builder** draws that segment, from −b/2 to +b/2 with Γ at its centre
 and X at each end, built from the one direction that repeats. Drawn from all
 three vectors it would be a needle a five-hundredth of an inverse ångström
-across — the width of the vacuum CRYSTAL writes around the chain, and nothing
+across: the width of the vacuum CRYSTAL writes around the chain, and nothing
 about the crystal.
 
-The symmetry of a polymer is a rod group, which is not named here — see
+The symmetry of a polymer is a rod group, which is not named here; see
 [Symmetry](symmetry.md#the-info-panel).
