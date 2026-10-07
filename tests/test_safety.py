@@ -298,12 +298,13 @@ def test_a_failed_paint_leaves_no_painter_painting(qapp, monkeypatch, tmp_path):
     gc.collect()
     active = []
     for obj in gc.get_objects():
-        if not isinstance(obj, QPainter):
-            continue
+        # Dead wrappers are what the sweep is looking past, and asking one what
+        # it is raises as readily as asking it whether it is painting: the whole
+        # question goes inside the catch.
         try:
-            if obj.isActive():
+            if isinstance(obj, QPainter) and obj.isActive():
                 active.append(obj)
-        except RuntimeError:  # its C++ side is already gone, which is the point
+        except (RuntimeError, ReferenceError):  # its C++ side is gone, which is the point
             pass
     assert not active, "a painter is still painting on a widget that is about to go"
     assert shown, "the failure was not reported at all"
