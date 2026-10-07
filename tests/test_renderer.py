@@ -208,6 +208,72 @@ def test_the_gizmo_labels_are_screen_aligned_captions():
     assert all(not c.GetBorder() and not c.GetLeader() for c in captions)
 
 
+def test_both_corner_markers_are_drawn_to_one_plan():
+    """They share one corner, one at a time: the a/b/c gizmo when there is a
+    cell, x/y/z when there is not. The corner used to change its whole
+    appearance between the two — pyvista's stock marker is thin line shafts,
+    small cones and black letters — so both are built here now, and only the
+    letters tell them apart."""
+    import vtk
+
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+
+    def pieces(marker):
+        parts = marker.GetParts()
+        parts.InitTraversal()
+        props = [parts.GetNextProp() for _ in range(parts.GetNumberOfItems())]
+        arrows = [p for p in props if isinstance(p, vtk.vtkActor)]
+        captions = [p for p in props if isinstance(p, vtk.vtkCaptionActor2D)]
+        return arrows, captions
+
+    lattice_arrows, lattice_letters = pieces(renderer._lattice_marker())
+    cartesian_arrows, cartesian_letters = pieces(renderer._cartesian_marker())
+
+    # the same arrows: as many, the same size, and each in its axis's colour
+    assert len(lattice_arrows) == len(cartesian_arrows)
+    for ours, theirs in zip(lattice_arrows, cartesian_arrows):
+        assert ours.GetProperty().GetColor() == theirs.GetProperty().GetColor()
+        assert ours.GetMapper().GetInput().n_points == theirs.GetMapper().GetInput().n_points
+        assert ours.GetProperty().GetLighting() == theirs.GetProperty().GetLighting()
+
+    # the same lettering, down to the box a caption scales its text to
+    for ours, theirs in zip(lattice_letters, cartesian_letters):
+        assert (ours.GetWidth(), ours.GetHeight()) == (theirs.GetWidth(), theirs.GetHeight())
+        assert ours.GetPadding() == theirs.GetPadding()
+        mine, yours = ours.GetCaptionTextProperty(), theirs.GetCaptionTextProperty()
+        assert mine.GetFontSize() == yours.GetFontSize()
+        assert (mine.GetBold(), mine.GetItalic()) == (yours.GetBold(), yours.GetItalic())
+        assert mine.GetJustification() == yours.GetJustification()
+        assert mine.GetColor() == yours.GetColor()
+
+    # and the letters are the one thing that differs
+    assert [c.GetCaption() for c in lattice_letters] == ["a", "b", "c"]
+    assert [c.GetCaption() for c in cartesian_letters] == ["X", "Y", "Z"]
+
+
+def test_the_gizmo_letters_are_coloured_like_their_own_arrows():
+    """Where the two markers part company, and why: the stock letters are black,
+    which over a blue arrowhead is still a letter. A blue "c" over the blue
+    arrowhead is nothing at all, so a, b and c take their axis's colour — and
+    are anchored clear of the arrow rather than across it."""
+    import vtk
+
+    from crystalline.viz.renderer import _LATTICE_COLORS, _LATTICE_LABEL_OFFSET, _hex_to_rgb
+
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+    parts = renderer._lattice_marker().GetParts()
+    parts.InitTraversal()
+    captions = [part for part in (parts.GetNextProp() for _ in range(parts.GetNumberOfItems()))
+                if isinstance(part, vtk.vtkCaptionActor2D)]
+
+    for caption, colour in zip(captions, _LATTICE_COLORS):
+        assert caption.GetCaptionTextProperty().GetColor() == pytest.approx(
+            tuple(c / 255.0 for c in _hex_to_rgb(colour)))
+    assert _LATTICE_LABEL_OFFSET > 1.0      # past the tip, not on it
+
+
 def test_a_non_periodic_structure_has_no_gizmo():
     renderer = StructureRenderer(pv.Plotter(off_screen=True))
     mol = Structure.empty()
