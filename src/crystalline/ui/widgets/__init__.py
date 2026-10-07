@@ -6,6 +6,7 @@ from crystalline.ui.widgets.miller import MillerIndices
 from crystalline.ui.widgets.range_slider import RangeSlider
 from crystalline.ui.widgets.tab_bar import SlidingTabBar
 from crystalline.ui.widgets.toggle import ToggleSwitch
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 __all__ = ["BusyOverlay", "DropHint", "MillerIndices", "RangeSlider", "SlidingTabBar",
-           "ToggleSwitch", "Worker"]
+           "ToggleSwitch", "WrappedLabel", "Worker"]

@@ -34,6 +34,7 @@ from crystalline.crystalio.vci import (
     REPRESENTATIONS,
     VCIRun,
 )
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 
 class VCIDialog(QDialog):
@@ -45,17 +46,15 @@ class VCIDialog(QDialog):
         self._run = run
 
         layout = QVBoxLayout(self)
-        summary = QLabel(run.summary, self)
-        summary.setWordWrap(True)
+        summary = WrappedLabel(run.summary, self)
         layout.addWidget(summary)
         if not run.modes:
             # Without the PES scan's mode indices the labels fall back on a dense
             # 1..nmodes numbering, which is not what the Phonons dock shows.
-            note = QLabel(
+            note = WrappedLabel(
                 "The VCI-active modes could not be matched to the phonon "
                 "numbering, so configurations are labelled from 1.", self
             )
-            note.setWordWrap(True)
             note.setEnabled(False)
             layout.addWidget(note)
 

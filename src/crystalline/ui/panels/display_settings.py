@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.ui.panels.controls import (
-    VALUE_WIDTH as _VALUE_WIDTH,
     Section as _Section,
     left as _left,
+    set_value_width as _set_value_width,
 )
 from crystalline.core import elements
 from crystalline.viz.render_settings import RenderSettings
@@ -337,7 +337,7 @@ class DisplayPanel(QWidget):
         box.valueChanged.connect(on_box)
         slider.valueChanged.connect(on_slider)
 
-        box.setFixedWidth(_VALUE_WIDTH)
+        _set_value_width(box)
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
@@ -353,7 +353,7 @@ class DisplayPanel(QWidget):
         box = QSpinBox()
         box.setRange(lo, hi)
         box.setValue(value)
-        box.setFixedWidth(_VALUE_WIDTH)
+        _set_value_width(box)
         box.valueChanged.connect(self._emit_soon)
         form.add(label, _left(box))
         return box

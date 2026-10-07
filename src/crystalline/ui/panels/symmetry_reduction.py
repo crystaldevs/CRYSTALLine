@@ -35,6 +35,7 @@ from crystalline.core import symmetry_reduction as reduction
 from crystalline.core.structure import Structure
 from crystalline.ui.panels.controls import RichTextDelegate
 from crystalline.ui.safety import guard
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 
 class SymmetryReductionDialog(QDialog):
@@ -50,21 +51,19 @@ class SymmetryReductionDialog(QDialog):
         self._options: List[reduction.Subgroup] = []
 
         outer = QVBoxLayout(self)
-        note = QLabel(
+        note = WrappedLabel(
             "Untick an operator to give it up. What is left has to be a group, "
             "so others go with it — often many others, and sometimes there is "
             "more than one way to do it. The choices appear on the right; the "
             "count is how many atoms become free to move independently."
         )
-        note.setWordWrap(True)
         note.setStyleSheet("color: palette(mid);")
         outer.addWidget(note)
 
-        self._header = QLabel()
+        self._header = WrappedLabel()
         font = self._header.font()
         font.setBold(True)
         self._header.setFont(font)
-        self._header.setWordWrap(True)
         outer.addWidget(self._header)
 
         body = QHBoxLayout()
