@@ -2845,6 +2845,15 @@ class MainWindow(QMainWindow):
         if not self._editing:
             self._edit_mode_action.setChecked(True)  # toggles _set_editing(True)
         self.structure_panel.set_selection(new)
+        # Said, because an import can be invisible: a water molecule appended to
+        # a cell of thirty atoms arrives at its own coordinates, somewhere among
+        # them, and nothing else on screen announces it. Saying where they are —
+        # selected — is what turns "nothing happened" into "there they are".
+        self.statusBar().showMessage(
+            f"Imported {len(new)} atom{'' if len(new) == 1 else 's'} from "
+            f"{os.path.basename(path)}  ·  selected, and in the undo history",
+            8000,
+        )
         return True
 
     def _update_info(self, output_props: dict) -> None:
