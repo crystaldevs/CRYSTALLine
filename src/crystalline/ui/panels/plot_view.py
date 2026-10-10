@@ -14,7 +14,8 @@ pull matplotlib in for users who never open a plot.
 
 from __future__ import annotations
 
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, Optional
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtWidgets import (
@@ -40,6 +41,35 @@ from PySide6.QtWidgets import (
 from crystalline.ui.widgets.tab_bar import SlidingTabBar
 
 
+@dataclass
+class PlotRecipe:
+    """How a plot was made, kept with it so that it can be made again.
+
+    A figure arriving here is otherwise a dead end: the data it was drawn from,
+    the function that drew it and the options it was given all live in the
+    method that built it, and are gone when that returns. Nothing in the panel
+    can then offer to *change* a plot — only the menu can build another one,
+    in another tab, from a dialog that starts where the last one was left.
+
+    ``draw`` takes options and returns a new figure. ``options`` are the ones
+    this plot was drawn with, and they belong to the tab rather than to the
+    dialog: two spectra tabs can be broadened differently, which the one
+    remembered setting per dialog could never express. ``edit`` asks for new
+    options, starting from these, and returns them — or ``None`` if the user
+    changed their mind. A recipe without an ``edit`` can still be redrawn by
+    whatever else learns to ask (a control beside the figure, say).
+    """
+
+    draw: Callable[..., Any]
+    options: Dict[str, Any] = field(default_factory=dict)
+    edit: Optional[Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]] = None
+
+    def redrawn(self, options: Optional[Dict[str, Any]] = None):
+        """``(figure, options)`` for ``options``, or for the ones in hand."""
+        chosen = dict(self.options if options is None else options)
+        return self.draw(**chosen), chosen
+
+
 # Vector formats ignore raster DPI; JPEG has no alpha channel. Used to grey out
 # the controls that don't apply to the chosen format.
 _VECTOR_FORMATS = frozenset({"svg", "pdf", "eps", "ps"})
@@ -61,8 +91,10 @@ class _PlotTab(QWidget):
         title: str = "plot",
         parent: Optional[QWidget] = None,
         on_pick=None,
+        recipe: Optional[PlotRecipe] = None,
     ) -> None:
         super().__init__(parent)
+        self.recipe = recipe
 
         # Imported here (not at module load) so the UI package stays importable
         # without matplotlib, and to bind to whatever Qt binding is running.
@@ -306,6 +338,70 @@ class _PlotTab(QWidget):
         if mode and self._on_pick is not None:
             self.canvas.unsetCursor()
 
+    def set_figure(self, figure, title: Optional[str] = None) -> None:
+        """Show ``figure`` here instead, and let the old one go.
+
+        A canvas belongs to one figure, so a changed plot means a new canvas in
+        the same tab — which is the point: the plot the user is looking at
+        changes, rather than a second tab appearing beside it with one setting
+        different. Everything bound to the old canvas is rebuilt with it: the
+        hidden navigation toolbar that performs pan and zoom, the coordinate
+        readout it reports through, and the click handler that ties a peak back
+        to its mode.
+        """
+        from matplotlib.backends.backend_qtagg import (
+            FigureCanvasQTAgg,
+            NavigationToolbar2QT,
+        )
+
+        old_canvas, old_figure = self.canvas, self.figure
+        self.figure = figure
+        if title is not None:
+            self._title = title
+        try:
+            figure.set_layout_engine("tight")
+        except Exception:  # noqa: BLE001 - keep the figure's own layout if so
+            pass
+
+        self.canvas = FigureCanvasQTAgg(figure)
+        self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.canvas.setMinimumSize(200, 150)
+        self._nav = NavigationToolbar2QT(self.canvas, self)
+        self._nav.hide()
+        self._nav.set_message = self._set_coords
+        if self._on_pick is not None:
+            self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
+            self.canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
+            self.canvas.setToolTip("Click a peak to animate the mode that produced it")
+
+        self.layout().replaceWidget(old_canvas, self.canvas)
+        self._release(old_canvas, old_figure)
+        # Pan and zoom belong to the canvas that has gone; the buttons that
+        # showed them pressed are now about a canvas in its resting state.
+        self._sync_mode_buttons()
+        self.canvas.draw_idle()
+
+    @staticmethod
+    def _release(canvas, figure) -> None:
+        """Take a canvas out of the tree and close its figure.
+
+        A canvas draws lazily: a resize or a change queues the draw on a
+        zero-timer, and that timer fires on the next turn of the event loop,
+        by which time this canvas is gone — "Internal C++ object already
+        deleted", raised inside the backend, nowhere near the close that caused
+        it. The queued draw is called off first; matplotlib's handler asks
+        whether one is still wanted before it touches the widget.
+        """
+        import matplotlib.pyplot as plt
+
+        try:
+            canvas._draw_pending = False  # noqa: SLF001 - what the backend checks
+            canvas.setParent(None)
+            canvas.close()
+        except Exception:  # noqa: BLE001 - already torn down; the close below still runs
+            pass
+        plt.close(figure)
+
     def close_figure(self) -> None:
         """Release the matplotlib figure when this tab goes away.
 
@@ -315,14 +411,7 @@ class _PlotTab(QWidget):
         side may be gone. It then raises ``Internal C++ object already deleted``
         from inside the backend, nowhere near the close that caused it.
         """
-        import matplotlib.pyplot as plt
-
-        try:
-            self.canvas.setParent(None)
-            self.canvas.close()
-        except Exception:  # noqa: BLE001 - already torn down; the close below still runs
-            pass
-        plt.close(self.figure)
+        self._release(self.canvas, self.figure)
 
 
 class PlotPanel(QWidget):
@@ -358,17 +447,44 @@ class PlotPanel(QWidget):
         self._show_placeholder()
 
     # ── public API ──────────────────────────────────────────────────────
-    def add_figure(self, figure, title: str, on_pick=None) -> None:
+    def add_figure(self, figure, title: str, on_pick=None,
+                   recipe: Optional[PlotRecipe] = None) -> None:
         """Add ``figure`` as a new tab titled ``title`` and bring it to front.
 
         ``on_pick`` — when given, a callable receiving the x data coordinate of
         each plain click inside the axes. Used to tie a spectrum's peaks back to
         the modes that produced them.
+
+        ``recipe`` — how this plot was made, so that it can be made again with
+        other options (see :class:`PlotRecipe`). A tab without one can only be
+        looked at, saved and closed, which is what every tab could do before.
         """
-        tab = _PlotTab(figure, title, self, on_pick=on_pick)
+        tab = _PlotTab(figure, title, self, on_pick=on_pick, recipe=recipe)
         index = self._tabs.addTab(tab, title)
         self._tabs.setCurrentIndex(index)
         self._stack.setCurrentWidget(self._tabs)
+
+    def widget_at(self, index: int):
+        """The tab at ``index`` — its figure, its canvas and its recipe."""
+        return self._tabs.widget(index)
+
+    def tab_text(self, index: int) -> str:
+        """What the tab at ``index`` is called."""
+        return self._tabs.tabText(index)
+
+    def replace_figure(self, index: int, figure, title: Optional[str] = None) -> None:
+        """Put ``figure`` in the tab at ``index``, in place of the one there.
+
+        What makes a plot changeable rather than merely re-buildable: the tab
+        keeps its place in the bar, and the figure in front of the user becomes
+        the new one.
+        """
+        tab = self._tabs.widget(index)
+        if tab is None:
+            return
+        tab.set_figure(figure, title)
+        if title is not None:
+            self._tabs.setTabText(index, title)
 
     def count(self) -> int:
         """How many plots are open."""
