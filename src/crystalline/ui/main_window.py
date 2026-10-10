@@ -2516,6 +2516,7 @@ class MainWindow(QMainWindow):
         """
         to_open, to_import = self._dropped_files(event)
         if not to_open and not to_import:
+            self._say_if_only_atoms(self._dropped_paths(event))
             event.ignore()
             return
         event.acceptProposedAction()
@@ -2591,7 +2592,8 @@ class MainWindow(QMainWindow):
         """``(to_open, to_import)``: the dropped files the window will act on."""
         from crystalline.crystalio import file_action
 
-        to_open, to_import, _ignored = openable(self._dropped_paths(event), file_action)
+        to_open, to_import, _ignored = openable(
+            self._dropped_paths(event), file_action, can_import=len(self.structure) > 0)
         return to_open, to_import
 
     @staticmethod
@@ -2629,9 +2631,37 @@ class MainWindow(QMainWindow):
         The rest are read behind it, in order, so the file the user asked for
         first is the one they land in rather than the last to finish reading.
         """
+        from crystalline.crystalio import file_action
+
+        # An atom list is not a structure of its own: it carries coordinates and
+        # nothing else — no cell, no calculation — so it is added to a structure
+        # rather than opened as one. Caught here, which is where every route in
+        # ends up, because the reader's own complaint about an .xyz is
+        # "EXITING: a .out file needs to be specified".
+        atoms_only = [path for path in paths if file_action(path) == "import"]
+        if atoms_only:
+            self._say_if_only_atoms(atoms_only)
+        paths = [path for path in paths if path not in set(atoms_only)]
         for index, path in enumerate(paths):
             self._load_path(path, front=index == 0)
         return list(paths)
+
+    def _say_if_only_atoms(self, paths) -> None:
+        """Say why an atom list was not opened, and what to do with it instead."""
+        from crystalline.crystalio import file_action
+
+        atoms_only = [path for path in paths if file_action(path) == "import"]
+        if not atoms_only:
+            return
+        named = (os.path.basename(atoms_only[0]) if len(atoms_only) == 1
+                 else f"{len(atoms_only)} files")
+        if len(self.structure) > 0:
+            told = (f"{named} holds atoms to add to a structure, not a structure "
+                    f"of its own — File ▸ Import atoms into structure…")
+        else:
+            told = (f"{named} holds atoms to add to a structure, and there is no "
+                    f"structure open to add them to.")
+        self.statusBar().showMessage(told, 8000)
 
     def _load_path(self, path: str, front: bool = True) -> None:
         """Open ``path`` in a tab of its own, reading it off the main thread.
