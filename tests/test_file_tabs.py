@@ -609,7 +609,7 @@ def _drawing_stub(monkeypatch):
     stub = _Stub()
     stub.interactor = QWidget()
     stub._render_now = lambda: drawn.append("queued")   # QtInteractor.render: a turn later
-    stub._render_held = stub._render_queued = False
+    stub._render_held = stub._render_queued = stub._suspended = False
     return stub, drawn
 
 
@@ -629,6 +629,22 @@ def test_a_view_not_on_screen_is_not_drawn_at_once(qapp, monkeypatch):
     stub._render_held = True
     stub.draw_now()
     assert drawn == [] and stub._render_held              # still owed, for when it is shown
+
+
+def test_a_held_view_is_not_drawn_at_once_either(qapp, monkeypatch):
+    """Held means another VTK window is drawing, and on macOS the two must never
+    overlap — the export crash this was all for. Every other draw asks through
+    ``request_render``, which checks; this one goes straight to the plotter, so
+    it has to check for itself. Reached when a file lands in the tab on screen
+    while an animation is being exported from it."""
+    stub, drawn = _drawing_stub(monkeypatch)
+    stub.interactor.show()
+    stub._suspended = True
+
+    stub.draw_now()
+
+    assert drawn == []                                    # nothing drawn into the held view
+    assert stub._render_held                              # owed, and drawn when the hold ends
 
 
 def test_a_tab_looked_at_is_framed_at_the_size_it_is_seen_at():

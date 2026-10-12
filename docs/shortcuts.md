@@ -1,9 +1,8 @@
 # Menus and shortcuts
 
 :::{note}
-The shortcuts are written with {kbd}`Ctrl`, which is what they are on Linux
-and Windows. On macOS press {kbd}`⌘` wherever {kbd}`Ctrl` is written — Qt maps
-the two, so {kbd}`Ctrl+O` here is {kbd}`⌘O` on a Mac.
+The shortcuts are written with {kbd}`Ctrl`, as they are on Linux and Windows. On macOS press {kbd}`⌘` wherever {kbd}`Ctrl` is written: {kbd}`Ctrl+O`
+here means {kbd}`⌘O`.
 :::
 
 ## Mouse
@@ -22,7 +21,7 @@ the two, so {kbd}`Ctrl+O` here is {kbd}`⌘O` on a Mac.
 
 | | |
 | --- | --- |
-| Open… | {kbd}`Ctrl+O` — each file in a tab of its own |
+| Open… | {kbd}`Ctrl+O`, each file in a tab of its own |
 | Close tab | {kbd}`Ctrl+W` |
 | Import atoms into structure… | |
 | Save structure as .gui… | |
@@ -73,8 +72,7 @@ only in editing mode.
 | Next tab / Previous tab | {kbd}`Ctrl+Tab` / {kbd}`Ctrl+Shift+Tab` |
 | Along a/b/c axis, Along a\*/b\*/c\* | the same as the **VIEW** chips |
 
-On macOS the shortcuts use {kbd}`⌘` for {kbd}`Ctrl`; the tabs are stepped
-through with {kbd}`⌘⇧]` and {kbd}`⌘⇧[`.
+On macOS the tabs are stepped through with {kbd}`⌘⇧]` and {kbd}`⌘⇧[`.
 
 ## Plot
 

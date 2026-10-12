@@ -117,6 +117,39 @@ def test_ellipsoids_cannot_be_switched_on_without_adp_data(qapp):
     assert not panel._adp_temp.isEnabled()
 
 
+def test_arrows_cannot_be_switched_on_without_modes(qapp):
+    """The same as the ellipsoids, for the same reason: a length, a colour and
+    a scaling for arrows no structure can draw are controls that do nothing."""
+    emitted = []
+    panel = DisplayPanel(_TWEAKED, emitted.append)
+    assert not panel._show_arrows.isEnabled()        # nothing loaded yet
+    assert "no vibrational modes" in panel._show_arrows.toolTip()
+
+    panel.set_phonons_available(True)                # a file with modes
+
+    assert panel._show_arrows.isEnabled() and panel._arrow_scale.isEnabled()
+    assert panel._show_arrows.toolTip() == ""
+    panel._show_arrows.setChecked(True)
+    emitted.clear()
+
+    panel.set_phonons_available(False)               # ...and one without
+
+    assert not panel._show_arrows.isChecked()
+    assert emitted[-1].show_mode_arrows is False     # stale arrows taken off
+    assert not panel._arrow_scale.isEnabled()
+
+
+def test_a_panel_hands_back_the_arrow_setting_it_was_given(qapp):
+    """Greying the controls must not answer for the file: the switch carries a
+    setting, and building a panel is not the place to change it."""
+    emitted = []
+    panel = DisplayPanel(_TWEAKED, emitted.append)
+
+    assert panel._show_arrows.isChecked() is _TWEAKED.show_mode_arrows
+    panel._emit()
+    assert emitted[-1].show_mode_arrows == _TWEAKED.show_mode_arrows
+
+
 def test_the_temperature_picker_follows_the_loaded_file(qapp):
     emitted = []
     panel = DisplayPanel(_TWEAKED, emitted.append)

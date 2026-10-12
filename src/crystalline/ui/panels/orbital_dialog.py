@@ -46,6 +46,7 @@ from PySide6.QtWidgets import (
 from crystalline.core import orbitals
 from crystalline.crystalio import molden
 from crystalline.viz.renderer import DEFAULT_ORBITAL_ISOVALUE
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 # Hartree to electronvolt, so the list reads in the unit a band structure is
 # quoted in; the file itself stores Hartree.
@@ -108,8 +109,7 @@ class OrbitalDialog(QDialog):
         form.addRow("k-point", self.kpoint)
         layout.addLayout(form)
 
-        self._note = QLabel()
-        self._note.setWordWrap(True)
+        self._note = WrappedLabel()
         self._note.setStyleSheet("color: palette(mid);")
         layout.addWidget(self._note)
 

@@ -40,7 +40,7 @@ with 3.12.
 ## An example to open
 
 If you have no CRYSTAL output to hand, take this one:
-{download}`mgo-example.zip <examples/mgo-example.zip>` (29 kB) — two small
+{download}`mgo-example.zip <examples/mgo-example.zip>` (29 kB): two small
 calculations on magnesium oxide.
 
 Unpack it and, in `properties/`, open `mgo.out`. The Info panel names the space

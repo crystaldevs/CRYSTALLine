@@ -183,7 +183,13 @@ class Viewport(QWidget):
 
     @guard()
     def _draw_held(self) -> None:
-        """Draw what was asked for while the view was held."""
+        """Draw what was asked of the view while it could not be drawn into.
+
+        Both ways that happens: hidden — a tab behind the one being looked at —
+        and held while something else drew (see :meth:`held`). Called a turn
+        after either ends, since a Show event comes before the window is up; if
+        the view went away again in between, what is owed stays owed.
+        """
         if self._render_held and self.interactor.isVisible():
             self._render_held = False
             self._render_now()
@@ -198,13 +204,6 @@ class Viewport(QWidget):
             self._render_now()
         else:
             self._render_held = True  # hidden in the meantime: drawn when shown
-
-    @guard()
-    def _draw_held(self) -> None:
-        """Draw what was asked of the view while it was hidden, if nothing has yet."""
-        if self._render_held:
-            self._render_held = False
-            self.interactor.render()
 
     def draw_now(self) -> None:
         """Draw the view at once, before the window next reaches the screen.
@@ -222,6 +221,12 @@ class Viewport(QWidget):
         calling, so it draws now, on this thread — and a draw already queued
         has nothing left to do.
         """
+        if self._suspended:
+            # Held: something else is drawing, and this is the one draw that
+            # would not have gone through request_render to find that out. A
+            # tab filled while an animation is being exported reaches here.
+            self._render_held = True
+            return
         if not self.interactor.isVisible():
             return  # not on screen: held, and drawn when it is
         self._render_held = False

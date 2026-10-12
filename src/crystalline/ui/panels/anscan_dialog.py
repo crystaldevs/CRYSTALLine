@@ -22,14 +22,14 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QLabel,
     QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from crystalline.ui.panels.controls import Section, VALUE_WIDTH, left, slider_row
+from crystalline.ui.panels.controls import Section, left, set_value_width, slider_row
 from crystalline.crystalio.anscan import AnscanRun
+from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 
 def _scale_bounds(value: float) -> tuple:
@@ -53,8 +53,7 @@ class AnscanDialog(QDialog):
         self._run = run
 
         layout = QVBoxLayout(self)
-        summary = QLabel(run.summary, self)
-        summary.setWordWrap(True)
+        summary = WrappedLabel(run.summary, self)
         layout.addWidget(summary)
 
         overlays = Section(layout, "Overlays")
@@ -89,7 +88,7 @@ class AnscanDialog(QDialog):
         self.nstates = QSpinBox(self)
         self.nstates.setRange(1, max(run.nwf, 1))
         self.nstates.setValue(max(run.nwf, 1))
-        self.nstates.setFixedWidth(VALUE_WIDTH)
+        set_value_width(self.nstates)
         self.nstates.setToolTip(
             f"Counting up from the ground state. CRYSTAL wrote {run.nwf} "
             "wavefunctions for this run."

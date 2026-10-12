@@ -37,7 +37,7 @@ panel says so; undoing that edit brings them back.
 :class: only-dark
 ```
 
-Above: MOF-5 seen down a cube axis, in the lowest optical mode at 17 cm⁻¹ —
+Above: MOF-5 seen down a cube axis, in the lowest optical mode at 17 cm⁻¹,
 the terephthalate linkers twisting between the Zn₄O clusters. The
 crystallographic cell is shown: 424 atoms, animated live.
 
@@ -78,7 +78,7 @@ the original cell when pressed again.
 ```
 
 Above: diamond at q = (0, 0, ½), the transverse acoustic mode at 537 cm⁻¹,
-with the cell repeated six times along **c** — three wavelengths of the wave.
+with the cell repeated six times along **c**: three wavelengths of the wave.
 
 In a static image the displacement arrows can be scaled by the magnitude of the
 displacement and coloured by the phase of the cell in which they are drawn,

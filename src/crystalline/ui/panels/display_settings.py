@@ -32,9 +32,9 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.ui.panels.controls import (
-    VALUE_WIDTH as _VALUE_WIDTH,
     Section as _Section,
     left as _left,
+    set_value_width as _set_value_width,
 )
 from crystalline.core import elements
 from crystalline.viz.render_settings import RenderSettings
@@ -235,6 +235,11 @@ class DisplayPanel(QWidget):
             "Replaces the colour below; nothing to show at Γ."
         )
         self._color_row(arrows, "Colour", "_mode_arrow_color")
+        self._arrows_group = arrows
+        # Greyed until a file says otherwise. Only the greying here: the switch
+        # itself carries a setting, and construction must hand it back as it
+        # found it.
+        self._enable_arrow_controls(False)
 
         # ── Overlays ── (what the Geometry and Point symmetry panels draw)
         overlays = self._group(layout, "Measurements & symmetry", collapsed=True)
@@ -337,7 +342,7 @@ class DisplayPanel(QWidget):
         box.valueChanged.connect(on_box)
         slider.valueChanged.connect(on_slider)
 
-        box.setFixedWidth(_VALUE_WIDTH)
+        _set_value_width(box)
         row = QWidget()
         h = QHBoxLayout(row)
         h.setContentsMargins(0, 0, 0, 0)
@@ -353,7 +358,7 @@ class DisplayPanel(QWidget):
         box = QSpinBox()
         box.setRange(lo, hi)
         box.setValue(value)
-        box.setFixedWidth(_VALUE_WIDTH)
+        _set_value_width(box)
         box.valueChanged.connect(self._emit_soon)
         form.add(label, _left(box))
         return box
@@ -489,6 +494,29 @@ class DisplayPanel(QWidget):
             self._show_adp.setChecked(False)
         elif available and autoshow and not self._show_adp.isChecked():
             self._show_adp.setChecked(True)
+
+    # ── phonon arrows (only for a file that has modes) ──────────────────
+    def set_phonons_available(self, available: bool) -> None:
+        """Offer the arrow controls only for a file with modes to draw them for.
+
+        Disabled rather than hidden, as the ellipsoids are: the controls stay
+        where they were learnt, greyed out with a reason. The switch goes off
+        with them, so a file with no modes cannot leave arrows asked for.
+        """
+        available = bool(available)
+        self._enable_arrow_controls(available)
+        # Emits, which is the point: arrows asked for by the file before are
+        # taken off the view with the modes they described.
+        if not available and self._show_arrows.isChecked():
+            self._show_arrows.setChecked(False)
+
+    def _enable_arrow_controls(self, available: bool) -> None:
+        """Grey the arrow group, or let it be used, without touching the switch."""
+        self._arrows_group.set_enabled(available)
+        self._show_arrows.setEnabled(available)
+        self._show_arrows.setToolTip(
+            "" if available else "This structure has no vibrational modes to draw"
+        )
 
     def set_background(self, color: str) -> None:
         """Set the 3D ground from outside the panel, and show it in the swatch.

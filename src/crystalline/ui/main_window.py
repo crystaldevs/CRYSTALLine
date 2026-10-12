@@ -856,6 +856,7 @@ class MainWindow(QMainWindow):
         on = lambda slot: self._routed(tab, slot)  # noqa: E731
         viewport, selection = tab.viewport, tab.structure_panel
         phonons, geometry = tab.phonon_panel, tab.geometry_panel
+        display = tab.display_panel
         # viewport pick -> update selection (additive with Ctrl/Shift)
         viewport.atom_picked.connect(selection.select_atom)
         # dragging an atom in 3D -> update selection (keep a group drag intact)
@@ -880,6 +881,9 @@ class MainWindow(QMainWindow):
         phonons.qpoint_selected.connect(on(self._set_qpoint))
         # "Tile n×n×n" next to the q-point -> the supercell one period needs
         phonons.tile_requested.connect(on(self._tile_to_qpoint))
+        # modes loaded, dropped or restored -> the arrow controls follow them,
+        # as the ellipsoid controls follow a file's ADPs
+        phonons.modes_changed.connect(on(display.set_phonons_available))
 
         # Geometry panel: the same edit operations as the Edit menu (so undo and
         # the selection model behave identically), plus measurement overlays.
