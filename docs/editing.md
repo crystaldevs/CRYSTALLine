@@ -55,8 +55,9 @@ that of the current structure.
 ## Measurements
 
 The **Geometry** panel is in three sections, **Measure**, **Lattice planes**
-and **Atoms**, each folded or unfolded with a click on its title. The ones left
-open stay open in every tab and the next time the program is started.
+and **Atoms**, each folded or unfolded with a click on its title. All three
+start folded each time the program is started, and one unfolded stays unfolded
+in every tab.
 
 **Measure** measures the current selection:
 
@@ -99,7 +100,7 @@ coordinate's local mode beside the measured value:
 A measurement is recognised by its atoms and by where they are relative to one
 another, so it can be taken in any cell on screen, and from either end: an
 angle keeps its vertex in the middle, as LOCMODES has it. An internal coordinate
-whose atoms lie in neighbouring cells is found on the images drawn there —
+whose atoms lie in neighbouring cells is found on the images drawn there:
 boundary atoms, or a supercell. A near-linear angle, which LOCMODES treats as
 two bends over the same three atoms, shows both, separated by a slash, as do
 two coordinates LOCMODES defines over the same four atoms. Hovering
