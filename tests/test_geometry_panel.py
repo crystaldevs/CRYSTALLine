@@ -63,6 +63,33 @@ def test_measuring_three_atoms_gives_an_angle(qapp):
     assert panel.measurements()[-1].value == pytest.approx(104.5, abs=0.05)
 
 
+def test_an_angle_is_measured_at_the_atom_picked_second(qapp):
+    """The selection arrives sorted by index, a click at a time: H1, then O0,
+    then H2 comes as [1], [0, 1], [0, 1, 2]. Taken as it came, the angle was
+    O–H–H (37.7°) at the H in the middle of the list, not H–O–H at the O
+    picked second."""
+    def _measured(panel):
+        panel._measure_selection()
+        return panel.measurements()[-1]
+
+    panel = GeometryPanel(_water())
+    for selection in ([1], [0, 1], [0, 1, 2]):
+        panel.set_selection(selection)
+    angle = _measured(panel)
+    assert angle.indices == (1, 0, 2) and angle.value == pytest.approx(104.5, abs=0.05)
+
+    panel.set_selection([1, 2])                      # O0 unpicked, then picked again:
+    panel.set_selection([0, 1, 2])                   # it goes last now
+    assert _measured(panel).indices == (1, 2, 0)
+    panel.set_selection([2])                          # a fresh pick starts a fresh order
+    panel.set_selection([0, 2])
+    assert _measured(panel).indices == (2, 0)
+    panel.set_selection([0, 1, 2])                    # all at once: in index order, as before
+    panel.set_selection([])
+    panel.set_selection([0, 1, 2])
+    assert _measured(panel).indices == (0, 1, 2)
+
+
 def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
     from ase.build import molecule
 
@@ -876,7 +903,14 @@ def _locmodes_panel():
 
 
 def _measure(panel, *atoms):
-    panel.set_selection(list(atoms))
+    """Pick ``atoms`` one at a time, as in the 3D view, then measure them.
+
+    The selection model hands the panel each pick's selection sorted by index,
+    so that is what is given here: the order is the panel's to keep.
+    """
+    panel.set_selection([])
+    for picked in range(1, len(atoms) + 1):
+        panel.set_selection(sorted(atoms[:picked]))
     panel._measure_selection()
     return panel.measurements()[-1]
 

@@ -68,6 +68,9 @@ in every tab.
 | 3              | an angle                 |
 | 4              | a dihedral angle         |
 
+The atoms are taken in the order they were picked: the second is the vertex
+of an angle, and the second and third are the central bond of a dihedral.
+
 Measurements are listed in a table, the value beside the atoms. A new
 measurement is listed unticked, and is drawn in the view only once its tick is
 set; unticked again, it stays in the table. A click on a heading sorts the table by that
