@@ -2672,10 +2672,14 @@ class MainWindow(QMainWindow):
         self._update_reading_status()
 
         def shown(read) -> None:
+            tab = None
             try:
-                self._show_read_file(path, read, front)
+                tab = self._show_read_file(path, read, front)
             finally:
-                self._read_next()
+                if tab is not None and getattr(read, "output_props", {}) is None:
+                    self._read_output_rows(tab, path, read)  # then the next file
+                else:
+                    self._read_next()
 
         def failed(exc) -> None:
             # A file that will not read opens no tab, and stops nothing queued
@@ -2692,6 +2696,52 @@ class MainWindow(QMainWindow):
         self._reader.failed.connect(failed)
         self._reader.start()
 
+    def _read_output_rows(self, tab: FileTab, path: str, read: "_ReadFile") -> None:
+        """Read the Info panel's rows about the run for ``tab``, now that it is up.
+
+        The second half of reading a file (:func:`_read_output_props`), left
+        until its tab was shown — the panel says they are coming — and done
+        before the next file is started, so the tab in front is not kept
+        waiting behind a batch. Still on the reader, as the rest of the file
+        was: the status bar goes on saying the file is being read.
+        """
+        def done(props) -> None:
+            try:
+                self._show_output_rows(tab, read, props)
+            finally:
+                self._read_next()
+
+        def failed(_exc) -> None:
+            try:
+                self._show_output_rows(tab, read, {})
+            finally:
+                self._read_next()
+
+        self._reader = Worker(lambda: _read_output_props(path))
+        self._reader.finished.connect(done)
+        self._reader.failed.connect(failed)
+        self._reader.start()
+
+    def _show_output_rows(self, tab: FileTab, read: "_ReadFile", props: dict) -> None:
+        """Give ``tab`` the rows about its run, wherever it has got to.
+
+        A tab read in behind the one on screen and not looked at yet holds its
+        file as it was read (``tab.pending``, the same ``read``): the rows go in
+        there, and the tab is filled with them when it is first shown. A filled
+        tab has its Info panel told — just those rows, the crystallography is
+        not worked out again — and, on screen, laid out at once, so the window
+        does not show the group half laid out for a frame (as with
+        :meth:`_settle_tab`). A tab closed in the meantime takes nothing.
+        """
+        read.output_props = dict(props or {})
+        if tab not in self._tabs or not tab.built() or tab.pending is not None:
+            return
+        with self._acting_on(tab):
+            self._output_props = read.output_props
+            self.info_panel.set_output_props(self._output_props)
+        if tab is self._tab:
+            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+
     def _update_reading_status(self) -> None:
         """Say in the status bar which file is being read, and how many are to come."""
         label = getattr(self, "_reading_status", None)
@@ -2699,14 +2749,19 @@ class MainWindow(QMainWindow):
             return
         if not self._reading:
             label.hide()
-            return
-        text = f"Reading {os.path.basename(self._reading_path)}…"
-        if self._pending_reads:
-            text += f"  {len(self._pending_reads)} more to come"
-        label.setText(text)
-        label.show()
+        else:
+            text = f"Reading {os.path.basename(self._reading_path)}…"
+            if self._pending_reads:
+                text += f"  {len(self._pending_reads)} more to come"
+            label.setText(text)
+            label.show()
+        # Laid out now, not a turn later: the status bar moved the atom count
+        # into the label's place one frame after the label went — a jump in a
+        # still window, now that reading ends after the tab is up (the Info
+        # panel's rows come last).
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
 
-    def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> None:
+    def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> FileTab:
         """Put a file that has been read into a tab.
 
         In front — the tab on screen, if that one is empty (the window opens on
@@ -2717,17 +2772,21 @@ class MainWindow(QMainWindow):
         (:meth:`_realise_tab`). Putting a file into widgets is the part that
         has to happen on this thread, and doing it for a tab nobody has turned
         to yet is the one cost reading in the background does not remove.
+
+        Returns the tab, for the rows about the run that are read after it
+        (:meth:`_read_output_rows`).
         """
         if front or self._tab.is_blank():
             tab = self._take_tab_for_file()
             self._fill_tab(tab, path, read)
             self._settle_tab(tab)  # filled on screen: shown finished, not a frame early
             self._show_notice(tab)
-            return
+            return tab
         tab = self._add_tab(show=False)
         tab.path = path
         tab.pending = (path, read)
         self._update_tab_labels()
+        return tab
 
     def _show_notice(self, tab: FileTab) -> None:
         """Say what opening ``tab``'s file had to leave out — once, when it is seen.
@@ -2794,7 +2853,9 @@ class MainWindow(QMainWindow):
         # After the view exists (and its ADP tensors have been pushed), so
         # switching the ellipsoids on draws them straight away.
         self._update_adp_controls(autoshow=True)
-        self._update_info(read.output_props)
+        # The rows about the run may not be read yet (see _read_output_rows):
+        # the panel then says they are coming.
+        self._update_info(read.output_props, reading=read.output_props is None)
         self._update_plot_actions()  # enable only the plots this file supports
         self._update_density_actions()  # the grids are looked for beside this file
         self._update_orbital_actions()  # and the orbitals, if the run wrote any
@@ -2855,16 +2916,18 @@ class MainWindow(QMainWindow):
         self.structure_panel.set_selection(new)
         return True
 
-    def _update_info(self, output_props: dict) -> None:
+    def _update_info(self, output_props: Optional[dict], reading: bool = False) -> None:
         """Refresh the crystallographic info panel for the loaded system.
 
         ``output_props`` are the rows the CRYSTAL output gives about its own run
-        (read by :func:`_read_file`). The crystallography is described on the
-        cell on screen, folded to one cell — not on the file's primitive cell —
-        so that "as in the file" means the cell the 3D view draws, and so that
-        the panel says the same thing before an edit as after one.
+        (read by :func:`_read_output_props`); ``reading``, that they are still
+        to come. The crystallography is described on the cell on screen, folded
+        to one cell — not on the file's primitive cell — so that "as in the
+        file" means the cell the 3D view draws, and so that the panel says the
+        same thing before an edit as after one.
         """
         self._output_props = output_props or {}
+        self.info_panel.set_output_props(self._output_props, reading=reading)
         self.info_panel.show_structure(self._analysis_cell(), self._output_props)
 
     def _refresh_info(self) -> None:
@@ -3393,7 +3456,10 @@ class _ReadFile:
     loaded: object                  # crystalio.LoadedFile: the structure, and modes if any
     output_path: Optional[str]      # the CRYSTAL output; None for a geometry-only file
     adps: Optional[ADPSet]          # thermal ellipsoids, when the run has them
-    output_props: dict              # the run's own rows for the Info panel
+    # The run's own rows for the Info panel: ``None`` until they are read, which
+    # is after the tab is up (MainWindow._read_output_rows); ``{}`` for a file
+    # with no output behind it.
+    output_props: Optional[dict]
     capabilities: dict              # probe key → what _probe found
     # A LOCMODES run's internal coordinates and their local modes, for the
     # Measure section; and, when the run has them and they would not read, why.
@@ -3406,11 +3472,15 @@ def _read_file(path: str) -> _ReadFile:
 
     Only the structure is required — a file that will not read raises, and opens
     no tab. The rest is best effort, as it was when the window read it itself:
-    most runs carry no ADPs, not every output has the rows the Info panel shows,
-    and a probe that fails here is simply left for the window to ask again.
+    most runs carry no ADPs, and a probe that fails here is simply left for the
+    window to ask again.
+
+    All but the Info panel's rows about the run (:func:`_read_output_props`),
+    which are read once the tab is up: on a large output they are half the
+    reading — DAFADNP's LOCMODES run, 0.47 s of 0.94 — and nothing else in
+    the tab waits for them.
     """
-    from crystalline.crystalio import (LocalModesError, load, load_adp, output_properties,
-                                       read_local_modes)
+    from crystalline.crystalio import LocalModesError, load, load_adp, read_local_modes
 
     loaded = load(path)
     # Geometry-only files (.gui/.f34/.cif) carry no results to plot.
@@ -3419,10 +3489,7 @@ def _read_file(path: str) -> _ReadFile:
         adps = load_adp(path)
     except Exception:  # noqa: BLE001 - never let this break loading a file
         adps = None
-    try:
-        output_props = output_properties(path) or {}
-    except Exception:  # noqa: BLE001 - never let output parsing break loading
-        output_props = {}
+    output_props = None if output_path else {}  # still to read, or nothing to read
     capabilities = {}
     for key in _PROBES:
         try:
@@ -3440,6 +3507,22 @@ def _read_file(path: str) -> _ReadFile:
         local_modes_note = f"the LOCMODES section could not be read ({exc})"
     return _ReadFile(loaded, output_path, adps, output_props, capabilities,
                      local_modes, local_modes_note)
+
+
+def _read_output_props(path: str) -> dict:
+    """The Info panel's rows about the run in the output at ``path``.
+
+    What the run was (code, task, functional, basis, SCF settings) and what it
+    found (energy, band gap, Fermi energy). Best effort: an output without
+    them, or one CRYSTALClear cannot read them from, gives none, and the tab
+    simply shows none.
+    """
+    from crystalline.crystalio import output_properties
+
+    try:
+        return output_properties(path) or {}
+    except Exception:  # noqa: BLE001 - never let output parsing break a tab
+        return {}
 
 
 def _no_title_bar(dock: QDockWidget) -> QWidget:

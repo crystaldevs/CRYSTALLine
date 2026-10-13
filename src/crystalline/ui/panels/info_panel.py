@@ -42,6 +42,8 @@ _CELL_TOOLTIP = (
     "different setting of the same group, with other lattice parameters."
 )
 _CELL_TOOLTIP_NA = "Only a 3D crystal has a choice of cell to describe it in."
+# The CRYSTAL-output group's one row while its rows are still being read.
+_READING = "Reading the output…"
 
 
 class InfoPanel(QWidget):
@@ -54,6 +56,10 @@ class InfoPanel(QWidget):
         super().__init__(parent)
         self._structure: Optional[Structure] = None
         self._props: dict = {}
+        # Whether the CRYSTAL-output rows are still being read: they come a
+        # moment after the structure (see set_output_props), and until then the
+        # group says so rather than being missing.
+        self._reading = False
         # A CRYSTAL run reports a couple of dozen rows between the two groups —
         # more than a dock is tall — so the whole summary scrolls rather than
         # forcing the dock wider or clipping the last rows.
@@ -120,6 +126,18 @@ class InfoPanel(QWidget):
         self._props = dict(output_props or {})
         self._render()
 
+    def set_output_props(self, output_props: Optional[dict], reading: bool = False) -> None:
+        """Show the CRYSTAL-output rows alone, without analysing the structure again.
+
+        They are read after the structure, so that a tab comes up without
+        waiting for them: on a large output they are half the reading. With
+        ``reading``, they are still on their way, and the group holds one row
+        saying so — through edits too — until they are given.
+        """
+        self._props = dict(output_props or {})
+        self._reading = bool(reading)
+        self._render_output()
+
     def cell_choice(self) -> str:
         """``"computed"`` or ``"standard"`` — what the Cell box is set to."""
         return str(self._cell.currentData())
@@ -137,6 +155,7 @@ class InfoPanel(QWidget):
     def clear(self) -> None:
         self._structure = None
         self._props = {}
+        self._reading = False
         _fill(self._crystal_form, [("", "No structure loaded")])
         self._output_group.setVisible(False)
         self._sync_cell_box()
@@ -153,8 +172,14 @@ class InfoPanel(QWidget):
             return
         info = analyze(structure, cell=self.cell_choice())
         _fill(self._crystal_form, _with_reduction(info.rows(), structure))
-        _fill(self._output_form, list(self._props.items()))
-        self._output_group.setVisible(bool(self._props))
+        self._render_output()
+
+    def _render_output(self) -> None:
+        rows = list(self._props.items())
+        if not rows and self._reading:
+            rows = [("", _READING)]
+        _fill(self._output_form, rows)
+        self._output_group.setVisible(bool(rows))
 
     def _sync_cell_box(self) -> None:
         """Offer the choice only where there is one: a 3D crystal."""

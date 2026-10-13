@@ -3,11 +3,13 @@
 With no loading screen: the first of several files comes to the front to be
 worked in, and the rest are set behind it as they are read.
 
-The window itself needs a real display (VTK), so these exercise the parts
-apart: :func:`_read_file`, which is Qt-free and does all the reading; the
-queue in :meth:`MainWindow._load_path`; and where a read file lands
+Most of these exercise the parts apart: :func:`_read_file`, which is Qt-free
+and does all the reading but the Info panel's rows about the run
+(:func:`_read_output_props`, read once the tab is up); the queue in
+:meth:`MainWindow._load_path`; and where a read file lands
 (:meth:`MainWindow._show_read_file`) — on stand-ins carrying the window's own
-methods, with the tab-building stubbed out.
+methods, with the tab-building stubbed out. The last few open files on the
+real window (``_window.py``), with only its 3D views stood in for.
 """
 
 import threading
@@ -31,7 +33,9 @@ def qapp():
 # ── reading ───────────────────────────────────────────────────────────────
 def test_an_output_is_read_whole_for_its_tab():
     """The structure, and everything the window used to read again afterwards:
-    the Info panel's rows and what each menu needs to know about the output."""
+    what each menu needs to know about the output. The Info panel's rows about
+    the run are read apart, once the tab is up: half the reading on a large
+    output, and nothing else waits for them."""
     path = sample.path("coesite/coesite_ela.out")
     if path is None:
         pytest.skip("sample output not available")
@@ -40,7 +44,8 @@ def test_an_output_is_read_whole_for_its_tab():
 
     assert len(read.loaded.structure) > 0
     assert read.output_path == path
-    assert read.output_props                                 # the run's own rows
+    assert read.output_props is None                         # still to read...
+    assert mw._read_output_props(path)                       # ...and there to be read
     assert set(read.capabilities) == set(mw._PROBES)
     for key, found in read.capabilities.items():             # the window's own answer
         assert found == mw._probe(key, path), key
@@ -60,6 +65,7 @@ def test_a_geometry_file_has_no_output_behind_it(tmp_path):
     assert set(read.loaded.structure.symbols) == {"Mg", "O"}
     assert read.output_path is None                          # nothing to plot from
     assert read.adps is None
+    assert read.output_props == {}                           # and no rows to wait for
 
 
 def test_a_file_that_will_not_read_raises_rather_than_opening_a_tab(tmp_path):
@@ -106,16 +112,19 @@ class _Label:
         self.visible = False
 
 
-def _window():
+def _window(events=None):
     """The window's queue, with the tab-building recorded instead.
 
     No busy overlay, no worker list, no tab bar: reading must use none of them —
-    the user goes on working in the window while files are read.
+    the user goes on working in the window while files are read. With
+    ``events``, a file shown is handed a tab (its path), and what happens is
+    recorded there in order — the rows about the run among it.
     """
 
     class _Stub:
         _load_path = MainWindow._load_path
         _read_next = MainWindow._read_next
+        _read_output_rows = MainWindow._read_output_rows
         _update_reading_status = MainWindow._update_reading_status
 
         def __init__(self):
@@ -128,6 +137,12 @@ def _window():
 
         def _show_read_file(self, path, read, front):
             self.shown.append((path, read, front, threading.current_thread()))
+            if events is not None:
+                events.append(("shown", path))
+                return path
+
+        def _show_output_rows(self, tab, read, props):
+            events.append(("rows shown", tab, props))
 
     return _Stub()
 
@@ -194,6 +209,60 @@ def test_a_file_opened_while_another_is_read_waits_its_turn(qapp, qtbot, monkeyp
     release.set()
     qtbot.waitUntil(lambda: not window._reading, timeout=5000)
     assert [p for p, *_rest in window.shown] == ["/runs/first.out", "/runs/second.out"]
+
+
+def test_the_rows_about_a_run_are_read_after_its_tab_is_up_and_before_the_next_file(
+        qapp, qtbot, monkeypatch):
+    """A file's tab is shown as soon as its structure is read; its Info rows
+    are read next, still off the main thread, and only then the next file —
+    so the tab in front is not left waiting behind the rest of a batch."""
+    events = []
+
+    class _Read:
+        def __init__(self, path):
+            self.output_props = None                         # still to read
+
+    def fake_read(path):
+        events.append(("read", path))
+        return _Read(path)
+
+    def fake_rows(path):
+        on_worker = threading.current_thread() is not threading.main_thread()
+        events.append(("rows read", path, on_worker))
+        return {"Code": path}
+
+    monkeypatch.setattr(mw, "_read_file", fake_read)
+    monkeypatch.setattr(mw, "_read_output_props", fake_rows)
+    window = _window(events)
+    window._load_path("/runs/a.out", front=True)
+    window._load_path("/runs/b.out", front=False)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+    assert events == [
+        ("read", "/runs/a.out"), ("shown", "/runs/a.out"),
+        ("rows read", "/runs/a.out", True), ("rows shown", "/runs/a.out", {"Code": "/runs/a.out"}),
+        ("read", "/runs/b.out"), ("shown", "/runs/b.out"),
+        ("rows read", "/runs/b.out", True), ("rows shown", "/runs/b.out", {"Code": "/runs/b.out"}),
+    ]
+
+
+def test_rows_that_will_not_read_leave_the_tab_without_them(qapp, qtbot, monkeypatch):
+    events = []
+
+    class _Read:
+        output_props = None
+
+    def broken(_path):
+        raise ValueError("no SCF block")
+
+    monkeypatch.setattr(mw, "_read_file", lambda path: _Read())
+    monkeypatch.setattr(mw, "_read_output_props", broken)
+    window = _window(events)
+    window._load_path("/runs/a.out")
+    window._load_path("/runs/b.out", front=False)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+    assert ("rows shown", "/runs/a.out", {}) in events          # none, and no message
+    assert ("shown", "/runs/b.out") in events                   # nor does it stop the queue
 
 
 # ── where a file that has been read goes ──────────────────────────────────
@@ -299,3 +368,91 @@ def test_a_tab_read_in_behind_says_what_it_left_out_when_first_shown(qapp, warni
     window._show_notice(tab)                                 # once, not every visit
     assert warnings_said == [("Modes not read", "b.out:\nmodes could not be read")]
     assert "self._show_notice(tab)" in inspect.getsource(MainWindow._activate_tab)
+
+
+# ── on the real window ────────────────────────────────────────────────────
+_THIOUREA = "thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out"
+_COESITE = "coesite/coesite_ela.out"
+_COMING = [("", "Reading the output…")]
+
+
+@pytest.fixture
+def window(monkeypatch, tmp_path):
+    from _window import close_window, make_window
+
+    made = make_window(monkeypatch, tmp_path)
+    yield made
+    close_window(made)
+
+
+def _rows(info_panel):
+    """The Info panel's CRYSTAL-output rows as (label, value); [] while hidden."""
+    from PySide6.QtWidgets import QFormLayout
+
+    if info_panel._output_group.isHidden():
+        return []
+    form = info_panel._output_form
+    rows = []
+    for row in range(form.rowCount()):
+        label = form.itemAt(row, QFormLayout.LabelRole)
+        value = form.itemAt(row, QFormLayout.FieldRole)
+        rows.append((label.widget().text() if label else "", value.widget().text()))
+    return rows
+
+
+def _held_rows(monkeypatch):
+    """Hold the rows about a run back until the event returned is set."""
+    release = threading.Event()
+    real = mw._read_output_props
+    monkeypatch.setattr(mw, "_read_output_props", lambda path: release.wait(10) and real(path))
+    return release, real
+
+
+def test_a_tab_comes_up_before_the_rows_about_its_run(window, qtbot, monkeypatch):
+    """Opened as File ▸ Open does: the tab is up with its structure while the
+    rows are read — the panel says they are coming, the status bar that the
+    file is still being read — and they come in when they are."""
+    release, real = _held_rows(monkeypatch)
+    path = sample.path(_THIOUREA)
+    window._load_path(path)
+    qtbot.waitUntil(lambda: window._tab.path == path and window._tab.built(), timeout=10000)
+
+    assert window._reading and window._reading_status.text().startswith("Reading thiourea")
+    assert _rows(window.info_panel) == _COMING
+    assert len(window.structure) > 0
+    release.set()
+    qtbot.waitUntil(lambda: not window._reading, timeout=10000)
+    assert _rows(window.info_panel) == [(f"{k}:", str(v)) for k, v in real(path).items()]
+
+
+def test_rows_read_for_a_tab_behind_are_there_when_it_is_first_shown(window, qtbot):
+    """Read into the tab's waiting file, and filled in with it on the first look."""
+    from _window import show_tab
+
+    front, behind = sample.path(_THIOUREA), sample.path(_COESITE)
+    window._load_path(front)
+    window._load_path(behind, front=False)
+    qtbot.waitUntil(lambda: not window._reading, timeout=20000)
+    tab = next(t for t in window._tabs if t.path == behind)
+    assert not tab.built() and tab.pending[1].output_props    # waiting with the file
+
+    show_tab(window, tab)
+    rows = _rows(window.info_panel)
+    assert rows != _COMING and len(rows) == len(mw._read_output_props(behind))
+
+
+def test_a_tab_closed_before_its_rows_are_read_takes_nothing(window, qtbot, monkeypatch):
+    """The rows arrive for a tab that has gone; the next file is read all the same."""
+    release, _ = _held_rows(monkeypatch)
+    first, second = sample.path(_THIOUREA), sample.path(_COESITE)
+    window._load_path(first)
+    qtbot.waitUntil(lambda: window._tab.path == first, timeout=10000)
+    window._load_path(second)                                # queued behind the rows
+    closed = window._tab
+    window._close_current_tab()
+    release.set()
+    qtbot.waitUntil(lambda: not window._reading, timeout=20000)
+
+    assert closed not in window._tabs
+    assert window._tab.path == second
+    assert _rows(window.info_panel) and _rows(window.info_panel) != _COMING

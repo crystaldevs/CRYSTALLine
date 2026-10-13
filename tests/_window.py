@@ -158,13 +158,18 @@ def open_file(window, path, read=None, front=True):
 
     ``read`` is what the reader made of it — :func:`main_window._read_file`
     unless given — and the rest is the window's own: a tab taken or added, and
-    filled, at the front or behind the tab on screen.
+    filled, at the front or behind the tab on screen; then, as the reading
+    queue does, the Info panel's rows about the run, if they are still to read.
+    Returns the tab.
     """
     from crystalline.ui import main_window
 
-    window._show_read_file(path, read if read is not None else main_window._read_file(path),
-                           front=front)
+    read = read if read is not None else main_window._read_file(path)
+    tab = window._show_read_file(path, read, front=front)
+    if read.output_props is None:
+        window._show_output_rows(tab, read, main_window._read_output_props(path))
     QApplication.processEvents()
+    return tab
 
 
 def show_tab(window, tab):
