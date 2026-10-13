@@ -242,7 +242,8 @@ class ElectronicDialog(QDialog):
         self._dos_section = dos
 
     def _build_appearance(self, column) -> None:
-        look = Section(column, "Appearance")
+        # Folded, as beside the plot: set once, if at all.
+        look = Section(column, "Appearance", collapsed=True)
         self.band_colour = ColourButton(el.BAND_COLOUR, "Band colour", self)
         look.add("Bands", _row(self.band_colour))
 

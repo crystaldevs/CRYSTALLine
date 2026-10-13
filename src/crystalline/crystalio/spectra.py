@@ -73,6 +73,22 @@ DEFAULT_STDEV = 3.0   # Gaussian standard deviation, cm^-1
 DEFAULT_ETA = 0.5     # Lorentzian fraction of a pseudo-Voigt, 0 to 1
 DEFAULT_LINEWIDTH = 2.0   # plot_cry_spec_multi's own, in points
 
+# How the curves are coloured: (label, name). The default is matplotlib's own
+# cycle, which is what every spectrum was drawn in before there was a choice.
+# Okabe and Ito's eight are told apart under every common colour-vision
+# deficiency (the yellow, faint on white, comes last); viridis runs dark to
+# light along the curves, which suits a series — temperatures, pressures — read
+# in order; greys are for print, stopping short of the white of the page.
+COLOUR_SCHEMES = (
+    ("Default", "default"),
+    ("Colour-blind safe", "colourblind"),
+    ("Viridis (a series)", "viridis"),
+    ("Greys (for print)", "greys"),
+)
+DEFAULT_COLOURS = "default"
+_OKABE_ITO = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
+              "#000000", "#F0E442")
+
 
 @dataclass(frozen=True)
 class SpectrumKind:
@@ -208,6 +224,7 @@ def plot_spectra(
     offset: float = 0.0,
     legend: bool = True,
     linewidth: float = DEFAULT_LINEWIDTH,
+    colours: str = DEFAULT_COLOURS,
     title: Optional[str] = None,
 ):
     """Overlay ``datasets`` — ``(label, (N, 2) array)`` pairs — on one figure.
@@ -237,6 +254,9 @@ def plot_spectra(
     be right for both; ``plot_cry_spec_multi``, which does the stacking, is
     handed the fraction converted to the units of the data in hand (see
     :func:`_tallest_peak`).
+
+    ``colours`` names one of :data:`COLOUR_SCHEMES`, applied to the curves in
+    the order they were given.
     """
     from crystalline.crystalio.plotting import _plot_module
 
@@ -276,9 +296,49 @@ def plot_spectra(
         linewidth=linewidth,
         figsize=(9, 5),
     )
+    _colour_curves(axes, colours)
     if title:
         axes.set_title(title)
     return figure
+
+
+def scheme_colours(scheme: str, count: int) -> Optional[List[str]]:
+    """``count`` colours of ``scheme``, or ``None`` to keep matplotlib's own."""
+    if scheme == "colourblind":
+        return [_OKABE_ITO[i % len(_OKABE_ITO)] for i in range(count)]
+    if scheme in ("viridis", "greys"):
+        from matplotlib import colormaps
+        from matplotlib.colors import to_hex
+
+        # Short of the light end of either map: viridis' last yellow and
+        # anything past a mid grey vanish into a white page.
+        low, high = (0.0, 0.85) if scheme == "viridis" else (0.0, 0.6)
+        cmap = colormaps["viridis" if scheme == "viridis" else "Greys_r"]
+        if count == 1:
+            return [to_hex(cmap(low))]
+        return [to_hex(cmap(low + (high - low) * i / (count - 1))) for i in range(count)]
+    return None
+
+
+def _colour_curves(axes, scheme: str) -> None:
+    """Recolour the drawn curves, and the legend that names them.
+
+    CRYSTALClear draws each curve as one line, in the order it was handed
+    them, and takes no colours of its own; so they are set here, afterwards.
+    The legend keeps copies of the lines it was made from, so its handles are
+    recoloured too rather than left naming curves by their old colours.
+    """
+    lines = axes.get_lines()
+    colours = scheme_colours(scheme, len(lines))
+    if colours is None:
+        return
+    for line, colour in zip(lines, colours):
+        line.set_color(colour)
+    legend = axes.get_legend()
+    if legend is not None:
+        handles = getattr(legend, "legend_handles", None) or legend.legendHandles
+        for handle, colour in zip(handles, colours):
+            handle.set_color(colour)
 
 
 # How many points the tallest peak is looked for at in one go: a (points x
@@ -348,6 +408,8 @@ def _gaussian(squared, stdev):
 
 __all__ = [
     "BROADENING_PARAMETERS",
+    "COLOUR_SCHEMES",
+    "DEFAULT_COLOURS",
     "DEFAULT_ETA",
     "DEFAULT_HWHM",
     "DEFAULT_LINEWIDTH",
@@ -357,4 +419,5 @@ __all__ = [
     "available_spectra",
     "load_spectra",
     "plot_spectra",
+    "scheme_colours",
 ]

@@ -23,10 +23,12 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QComboBox, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QHBoxLayout, QSizePolicy,
+                               QVBoxLayout, QWidget)
 
 from crystalline.crystalio import electronic as el
-from crystalline.ui.panels.controls import Section, range_row, set_span, slider_row
+from crystalline.ui.panels.controls import (ColourButton, Section, range_row, set_span,
+                                            slider_row)
 
 #: What the dialog's tracks were, carried with a plot's options for these
 #: controls and not handed to the plotter.
@@ -110,13 +112,27 @@ class ElectronicControls(QWidget):
         dos.add_wide(self.overlay)
         self._dos_section = dos
 
-        look = Section(layout, "Appearance")
-        self.linewidth = slider_row(look, "Line width", 1.0, 0.3, 4.0, 0.1,
-                                    decimals=1, on_change=announce)
-        self.show_fermi = QCheckBox("Fermi level")
+        # Folded until wanted: what is looked for beside a plot is the window
+        # and the DOS axis, and the look is settled once. The colours are the
+        # dialog's, in the same rows, so a plot can be recoloured without
+        # being made again from it.
+        look = Section(layout, "Appearance", collapsed=True)
+        self.band_colour = ColourButton(el.BAND_COLOUR, "Band colour", self)
+        self.band_colour.colourChanged.connect(announce)
+        look.add("Bands", self.band_colour)
+        self._band_row = look.row_widgets("Bands")
+        self.beta_colour = ColourButton(el.BETA_COLOUR, "Spin-down band colour", self)
+        self.beta_colour.colourChanged.connect(announce)
+        look.add("Spin-down bands", self.beta_colour)
+        self._beta_row = look.row_widgets("Spin-down bands")
+        self.show_fermi = QCheckBox("Draw")
         self.show_fermi.setChecked(True)
         self.show_fermi.toggled.connect(announce)
-        look.add_wide(self.show_fermi)
+        self.fermi_colour = ColourButton(el.FERMI_COLOUR, "Fermi level colour", self)
+        self.fermi_colour.colourChanged.connect(announce)
+        look.add("Fermi level", _row(self.show_fermi, self.fermi_colour))
+        self.linewidth = slider_row(look, "Line width", 1.0, 0.3, 4.0, 0.1,
+                                    decimals=1, on_change=announce)
         # As on every other plot: named by default, off when the box gets in
         # the way of what it names.
         self.legend = QCheckBox("Legend")
@@ -143,6 +159,9 @@ class ElectronicControls(QWidget):
             "overlay_projections": self.overlay.isChecked(),
             "linewidth": self.linewidth.value(),
             "show_fermi": self.show_fermi.isChecked(),
+            "band_colour": self.band_colour.colour(),
+            "beta_colour": self.beta_colour.colour(),
+            "fermi_colour": self.fermi_colour.colour(),
             "legend": self.legend.isChecked(),
         }
 
@@ -172,6 +191,9 @@ class ElectronicControls(QWidget):
                     getattr(self, name).setChecked(bool(options[key]))
             if options.get("linewidth") is not None:
                 self.linewidth.setValue(float(options["linewidth"]))
+            for name in ("band_colour", "beta_colour", "fermi_colour"):
+                if options.get(name):
+                    getattr(self, name).setColour(options[name])
         finally:
             self.blockSignals(blocked)
         self._show_what_applies(options)
@@ -186,6 +208,11 @@ class ElectronicControls(QWidget):
         """
         mode = options.get("mode", el.BANDS)
         self._dos_section.set_visible(mode in (el.DOS, el.BANDS_AND_DOS))
+        bands = mode in (el.BANDS, el.BANDS_AND_DOS)
+        for widget in self._band_row:
+            widget.setVisible(bands)
+        for widget in self._beta_row:
+            widget.setVisible(bands and bool(options.get("bands_polarised")))
         for widget in self._spin_row:
             widget.setVisible(bool(options.get("dos_polarised")))
         self.overlay.setVisible(mode == el.DOS)
@@ -214,6 +241,18 @@ class ElectronicControls(QWidget):
         """A DOS range is only worth setting when it is not being fitted."""
         for widget in self._dos_range_row:
             widget.setEnabled(not self.dos_auto.isChecked())
+
+
+def _row(*widgets) -> QWidget:
+    """Controls side by side at the left of a row, as the dialog sets them."""
+    holder = QWidget()
+    line = QHBoxLayout(holder)
+    line.setContentsMargins(0, 0, 0, 0)
+    line.setSpacing(8)
+    for widget in widgets:
+        line.addWidget(widget, 0)
+    line.addStretch(1)
+    return holder
 
 
 __all__ = ["BANDS_AND_DOS_ASPECT", "EXTENT_KEYS", "ElectronicControls", "PATH_KEYS",

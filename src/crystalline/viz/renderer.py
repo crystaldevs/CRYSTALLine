@@ -19,6 +19,7 @@ Design notes
 from __future__ import annotations
 
 import itertools
+import weakref
 from functools import lru_cache
 from typing import Optional
 
@@ -357,6 +358,7 @@ class StructureRenderer:
         self._slice_plane = None       # (reference cell, LatticePlane) of a drawn slice
         self._surface_cache = None     # (key, pieces) of the last contoured field
         self._density_bar = None       # title of the field's colour bar, if one is shown
+        self._bar_watch = None         # observer spacing that bar's title, once there is one
         self._cutaway = None
 
     # ── public API ──────────────────────────────────────────────────────
@@ -1891,7 +1893,8 @@ class StructureRenderer:
             bar = self.plotter.add_scalar_bar(
                 title=title, mapper=actor.mapper, vertical=True, n_labels=5, fmt="%.3g",
                 position_x=0.86, position_y=0.18, width=0.07, height=0.64,
-                title_font_size=14, label_font_size=12, color=colour, render=False,
+                title_font_size=14, label_font_size=_BAR_LABEL_SIZE, color=colour,
+                render=False,
             )
         except Exception:  # noqa: BLE001 - a bar is a nicety; never break the drawing
             return
@@ -1901,6 +1904,43 @@ class StructureRenderer:
                 text.SetFontFamily(VTK_FONT_FILE)
                 text.SetFontFile(font)
         self._density_bar = title
+        self._watch_bar_title()
+
+    def _watch_bar_title(self) -> None:
+        """Space the colour bar's title off its top label before every render.
+
+        VTK stacks the title straight on the bar, and the top label is centred
+        on the bar's top edge, so half of it rises into the title: a wide one
+        such as "V (hartree/e)" ran into "0.79". VTK has a separation for this,
+        but in pixels of the window, which a 2x export does not scale while it
+        doubles the text. So it is set at each render from what the text will
+        be drawn at then. Watched once per renderer, through a weak reference,
+        since the renderer outlives every bar and must not keep this alive.
+        """
+        if self._bar_watch is not None:
+            return
+        me = weakref.ref(self)
+
+        def before_render(renderer, _event) -> None:
+            this = me()
+            if this is not None:
+                this._space_bar_title(renderer)
+
+        self._bar_watch = self.plotter.renderer.AddObserver("StartEvent", before_render)
+
+    def _space_bar_title(self, renderer) -> None:
+        """Room above the bar for half the top label, and a clear gap past it."""
+        bars = self.plotter.scalar_bars        # pyvista's own mapping: no .get
+        bar = bars[self._density_bar] if self._density_bar in bars.keys() else None
+        window = renderer.GetRenderWindow()
+        if bar is None or window is None:
+            return
+        # Text is drawn at size x DPI / 72, and a tiled export draws it again
+        # that much larger for each tile scale.
+        pixels = _BAR_LABEL_SIZE * window.GetDPI() / 72.0 * window.GetTileScale()[1]
+        separation = int(round(_BAR_TITLE_GAP * pixels))
+        if bar.GetVerticalTitleSeparation() != separation:
+            bar.SetVerticalTitleSeparation(separation)
 
     def _scene_bounds(self, margin: float = 0.0) -> Optional[tuple]:
         """The drawn extent as ``(xmin, xmax, …)``, padded by ``margin`` Angstrom.
@@ -3062,6 +3102,13 @@ def _polyline_tube(points: np.ndarray, radius: float) -> pv.PolyData:
     poly.lines = np.hstack([[2, k, k + 1] for k in range(segments)]).astype(np.int64)
     return poly.tube(radius=radius)
 
+
+# The colour bar's label size, in points: also what the gap above the bar is
+# measured in (see StructureRenderer._space_bar_title).
+_BAR_LABEL_SIZE = 12
+# Between the title and the bar, in label heights: half of one is taken by the
+# top label rising above the bar, and the rest is the gap that is seen.
+_BAR_TITLE_GAP = 1.6
 
 def _readable_on(background) -> str:
     """Black or white, whichever reads on ``background``."""

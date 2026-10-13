@@ -410,6 +410,44 @@ def test_the_view_sizes_its_labels_and_places_their_subscripts_for_its_screen():
         plotter.close()
 
 
+
+def test_a_view_told_of_its_screen_before_it_has_a_plotter_waits_for_one():
+    """Making the interactor's native window on a Retina screen tells the view
+    its pixel ratio changed — from inside its own constructor, before
+    ``plotter`` exists. Opening the Brillouin zone failed on exactly that."""
+    import pyvistaqt
+    from PySide6.QtCore import QEvent
+    from PySide6.QtWidgets import QApplication, QWidget
+
+    changed = getattr(QEvent, "DevicePixelRatioChange", None)
+    if changed is None:
+        pytest.skip("Qt older than 6.6 sends no such event")
+    QApplication.instance() or QApplication([])
+
+    class Interactor(QWidget):
+        """Enough of a QtInteractor to build the view, without a render window
+        (a real one does not survive the offscreen platform)."""
+
+        def __init__(self, parent=None, **_kwargs):
+            parent.event(QEvent(changed))       # what a Retina screen does here
+            super().__init__(parent)
+            self.interactor = QWidget(self)
+
+        def set_background(self, *_args):
+            pass
+
+        def enable_parallel_projection(self):
+            pass
+
+    real = pyvistaqt.QtInteractor
+    pyvistaqt.QtInteractor = Interactor
+    try:
+        view = zone_picker._ZoneView()          # strict in tests: would raise
+    finally:
+        pyvistaqt.QtInteractor = real
+    assert isinstance(view.plotter, Interactor)
+    view.deleteLater()
+
 # ── the path's colours ────────────────────────────────────────────────────
 def test_each_leg_of_the_path_gets_its_own_colour():
     colours = [zone_picker.segment_colour(i) for i in range(4)]

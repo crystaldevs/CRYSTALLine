@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QSizePolicy, QVBoxLayout,
 
 from crystalline.crystalio.spectra import (
     BROADENING_PARAMETERS,
+    COLOUR_SCHEMES,
+    DEFAULT_COLOURS,
     DEFAULT_ETA,
     DEFAULT_HWHM,
     DEFAULT_LINEWIDTH,
@@ -108,8 +110,20 @@ class SpectraOptions(QWidget):
         self._curves = curves
 
         # How the lines look, as on a band structure: the same section, with
-        # the same two things in it.
-        look = Section(layout, "Appearance")
+        # the same things in it. Folded until wanted, there as on the band
+        # structure: what is tuned by eye is the broadening, and this is set
+        # once, if at all.
+        look = Section(layout, "Appearance", collapsed=True)
+        self.colours = QComboBox(self)
+        for label, name in COLOUR_SCHEMES:
+            self.colours.addItem(label, name)
+        self.colours.setCurrentIndex(self.colours.findData(DEFAULT_COLOURS))
+        self.colours.setToolTip(
+            "How the curves are coloured, in the order they are listed.\n"
+            "Viridis runs dark to light, for a series read in order; greys\n"
+            "are for print.")
+        self.colours.currentIndexChanged.connect(lambda _index: self.changed.emit())
+        look.add("Colours", self.colours)
         self.linewidth = slider_row(
             look, "Line width", DEFAULT_LINEWIDTH, 0.3, 4.0, 0.1, decimals=1,
             on_change=lambda _value: self.changed.emit(),
@@ -151,6 +165,7 @@ class SpectraOptions(QWidget):
             "offset": self.offset.value(),
             "legend": self.legend.isChecked(),
             "linewidth": self.linewidth.value(),
+            "colours": self.colours.currentData(),
             # An inverted or zero-width range means "don't clip".
             "frequency_range": None if low == high else (low, high),
         }
@@ -169,6 +184,9 @@ class SpectraOptions(QWidget):
                     getattr(self, name).setValue(float(options[name]))
             if options.get("legend") is not None:
                 self.legend.setChecked(bool(options["legend"]))
+            index = self.colours.findData(options.get("colours"))
+            if index >= 0:
+                self.colours.setCurrentIndex(index)
             span = options.get("frequency_range")
             if span:
                 self.fmin.setValue(float(span[0]))

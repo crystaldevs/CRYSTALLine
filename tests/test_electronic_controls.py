@@ -204,17 +204,17 @@ def test_one_projection_draws_no_legend_whatever_is_asked():
 def test_the_tick_beside_the_plot_is_offered_only_then(qapp, plot, offered):
     knobs, _ = _knobs(plot)
 
-    assert knobs.legend.isVisibleTo(knobs) is offered
+    assert (not knobs.legend.isHidden()) is offered
 
 
 def test_splitting_a_spin_polarised_dos_into_panels_brings_the_tick_back(qapp):
     knobs, _ = _knobs({"mode": el.DOS, "projections": [1], "dos_projections": 5,
                        "dos_polarised": True, "overlay_projections": True})
-    assert not knobs.legend.isVisibleTo(knobs)
+    assert knobs.legend.isHidden()
 
     knobs.overlay.setChecked(False)
 
-    assert knobs.legend.isVisibleTo(knobs)
+    assert not knobs.legend.isHidden()
 
 
 def test_bands_beside_a_dos_ask_for_a_wider_window():
@@ -222,3 +222,34 @@ def test_bands_beside_a_dos_ask_for_a_wider_window():
     along the bottom until 2:1."""
     assert ec.aspect({"mode": el.BANDS_AND_DOS}) == ec.BANDS_AND_DOS_ASPECT == 2.0
     assert ec.aspect({"mode": el.BANDS}) is None             # the window's own 4:3
+
+
+def test_the_colours_beside_the_plot_are_the_plots_and_show_where_they_apply():
+    """The dialog's colours, so a plot can be recoloured where it is drawn;
+    a band colour means nothing to a DOS, nor a spin-down one to a
+    spin-restricted run. Folded until wanted, as in the dialog."""
+    knobs, moves = _knobs({"mode": el.BANDS, "bands_polarised": True,
+                           "band_colour": "#112233", "fermi_colour": "#445566"})
+
+    assert moves == []                                    # taken quietly
+    options = knobs.options()
+    assert (options["band_colour"], options["fermi_colour"]) == ("#112233", "#445566")
+    assert not knobs.band_colour.isVisibleTo(knobs)       # folded
+    assert not knobs.band_colour.isHidden() and not knobs.beta_colour.isHidden()
+
+    knobs.fermi_colour.setColour("#000000")
+    assert moves and moves[-1]["fermi_colour"] == "#000000"
+
+    dos, _moves = _knobs({"mode": el.DOS})
+    assert dos.band_colour.isHidden() and dos.beta_colour.isHidden()
+    restricted, _moves = _knobs({"mode": el.BANDS, "bands_polarised": False})
+    assert not restricted.band_colour.isHidden() and restricted.beta_colour.isHidden()
+
+
+def test_the_colours_reach_the_plotter():
+    _bands, _dos, options = ec.plot_arguments(
+        {"mode": el.BANDS, "band_colour": "#112233", "beta_colour": "#223344",
+         "fermi_colour": "#445566"})
+
+    assert (options.band_colour, options.beta_colour, options.fermi_colour) == (
+        "#112233", "#223344", "#445566")

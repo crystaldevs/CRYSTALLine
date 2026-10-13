@@ -1337,7 +1337,14 @@ class _ZoneView(QWidget):
 
         The DPI first: the subscripts are placed by measuring their bases at the
         DPI the window has, which is the one just set.
+
+        Not yet while the view is being built: making the interactor's native
+        window on a Retina screen tells this widget its pixel ratio changed,
+        before ``plotter`` has been assigned. ``showEvent`` comes later and does
+        the job then.
         """
+        if getattr(self, "plotter", None) is None:
+            return
         resized = match_screen_dpi(self.plotter.ren_win, self.plotter.devicePixelRatioF())
         moved = place_subscripts(self.plotter)
         if resized or moved:

@@ -167,6 +167,7 @@ def test_options_are_ready_to_pass_to_the_plotter(qapp):
         "offset": 0.0,                  # flat by default: curves share a baseline
         "legend": True,                 # and named, until that gets in the way
         "linewidth": 2.0,               # plot_cry_spec_multi's own
+        "colours": "default",           # matplotlib's cycle, as before there was a choice
         "frequency_range": (400.0, 1800.0),
     }
 
@@ -299,13 +300,13 @@ def test_curves_are_offered_only_once_two_are_ticked(qapp):
     dialog.show()
     leaves = list(dialog._leaves())
 
-    assert not knobs.offset.isVisible() and not knobs.legend.isVisible()   # nothing ticked
+    assert not knobs.offset.isVisible() and knobs.legend.isHidden()   # nothing ticked
 
     leaves[0].setCheckState(0, Qt.Checked)
     assert not knobs.offset.isVisible()                                     # one curve
 
     leaves[1].setCheckState(0, Qt.Checked)
-    assert knobs.offset.isVisible() and knobs.legend.isVisible()           # two
+    assert knobs.offset.isVisible() and not knobs.legend.isHidden()           # two
 
     leaves[1].setCheckState(0, Qt.Unchecked)
     assert not knobs.offset.isVisible()                                     # one again
@@ -334,7 +335,7 @@ def test_beside_a_plot_they_follow_the_curves_it_was_drawn_with(qapp):
     assert not knobs.offset.isVisible()
 
     knobs.set_options({"curves": kinds, "lineshape": "lorentz"})
-    assert knobs.offset.isVisible() and knobs.legend.isVisible()
+    assert knobs.offset.isVisible() and not knobs.legend.isHidden()
     knobs.hide()
 
 
@@ -352,8 +353,9 @@ def test_the_line_width_reaches_the_curves(qapp):
 
     dialog = _dialog(["IR_HO_0K"])
     dialog.show()
-    assert dialog.options_widget.linewidth.isVisible()
-    assert not dialog.options_widget.legend.isVisible()     # one curve: nothing to name
+    # Offered or not, whether or not Appearance is unfolded.
+    assert not dialog.options_widget.linewidth.isHidden()
+    assert dialog.options_widget.legend.isHidden()          # one curve: nothing to name
     dialog.hide()
 
     dialog.options_widget.linewidth.setValue(0.8)
@@ -395,3 +397,88 @@ def test_opening_the_spectra_reads_the_output_once():
     source = inspect.getsource(MainWindow._open_spectra)
     assert source.count("load_spectra(") == 1
     assert "available_spectra(" not in source
+
+
+# ── colours ──────────────────────────────────────────────────────────────
+def _drawn_colours(colours, count=3, legend=True):
+    pytest.importorskip("CRYSTALClear")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import to_hex
+
+    from crystalline.crystalio.spectra import plot_spectra
+
+    datasets = [(f"curve {i}", np.array([[500.0 + 100 * i, 1.0]])) for i in range(count)]
+    figure = plot_spectra(datasets, colours=colours, legend=legend)
+    axes = figure.axes[0]
+    lines = [to_hex(line.get_color()) for line in axes.lines]
+    named = axes.get_legend()
+    handles = [] if named is None else [
+        to_hex(handle.get_color())
+        for handle in (getattr(named, "legend_handles", None) or named.legendHandles)]
+    plt.close(figure)
+    return lines, handles
+
+
+def test_a_colour_scheme_colours_the_curves_in_order_and_the_legend_with_them(qapp):
+    """CRYSTALClear picks no colours of its own, so they are set afterwards —
+    and a legend left naming the curves by their old colours would be wrong."""
+    from crystalline.crystalio.spectra import scheme_colours
+
+    lines, handles = _drawn_colours("colourblind")
+
+    assert lines == [c.lower() for c in scheme_colours("colourblind", 3)]
+    assert handles == lines
+
+
+def test_the_default_scheme_is_the_colours_spectra_always_had(qapp):
+    from matplotlib import rcParams
+    from matplotlib.colors import to_hex
+
+    lines, _handles = _drawn_colours("default")
+
+    cycle = [to_hex(c) for c in rcParams["axes.prop_cycle"].by_key()["color"]]
+    assert lines == cycle[:3]
+
+
+def test_a_series_runs_dark_to_light_and_never_reaches_the_page(qapp):
+    """Viridis and the greys are for curves read in order; their light ends
+    vanish on white, so neither is used."""
+    from matplotlib.colors import to_rgb
+
+    from crystalline.crystalio.spectra import scheme_colours
+
+    for scheme in ("viridis", "greys"):
+        brightness = [sum(to_rgb(c)) for c in scheme_colours(scheme, 5)]
+        assert brightness == sorted(brightness)
+        assert max(brightness) < 2.7          # short of white's 3.0
+
+
+def test_appearance_starts_folded_and_its_colours_round_trip(qapp):
+    """Set once, if at all, so it is out of the way until wanted — but a plot's
+    colours still come back with it, quietly, like everything else."""
+    from crystalline.ui.panels.spectra_options import SpectraOptions
+
+    knobs = SpectraOptions()
+    moves = []
+    knobs.changed.connect(lambda: moves.append(True))
+
+    assert not knobs.colours.isVisibleTo(knobs)          # folded
+    knobs.set_options({"colours": "greys"})
+    assert knobs.options()["colours"] == "greys" and moves == []
+
+    knobs.colours.setCurrentIndex(knobs.colours.findData("viridis"))
+    assert moves                                          # a choice redraws
+
+
+def test_the_dialog_remembers_the_colours_too(qapp):
+    from crystalline.ui.panels.dialog_state import capture, restore
+
+    first = _dialog(["IR_HO_0K", "IR_VCI_0K"])
+    first.colours.setCurrentIndex(first.colours.findData("colourblind"))
+    again = _dialog(["IR_HO_0K", "IR_VCI_0K"])
+    restore(again, capture(first))
+
+    assert again.options()["colours"] == "colourblind"

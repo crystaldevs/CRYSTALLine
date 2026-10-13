@@ -101,6 +101,7 @@ class SpectraDialog(QDialog):
         self.offset = self.options_widget.offset
         self.legend = self.options_widget.legend
         self.linewidth = self.options_widget.linewidth
+        self.colours = self.options_widget.colours
 
         self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self._buttons.accepted.connect(self.accept)
