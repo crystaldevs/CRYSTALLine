@@ -401,6 +401,9 @@ def sync_panel_actions(window) -> None:
         action = window._panel_actions.get(title)
         if action is not None:
             action.setChecked(not dock.isHidden())
+            # A panel the open file has nothing to put in — the modes of a
+            # geometry — is greyed rather than offered empty.
+            action.setEnabled(window._panel_available(title))
 
 
 def _build_view_menu(window) -> None:

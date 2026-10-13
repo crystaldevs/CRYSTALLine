@@ -16,7 +16,6 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -24,21 +23,19 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QListWidget,
     QListWidgetItem,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
-from crystalline.ui.panels.controls import Section, left, set_value_width, slider_row
-from crystalline.crystalio.pes import (
-    DEFAULT_NSTATES,
-    DEFAULT_RANGE,
-    DIMENSIONS,
-    QUANTITIES,
-    PESRun,
-    representations,
-)
+from crystalline.ui.panels.controls import Section, chooser_size
+from crystalline.ui.panels.pes_options import PESOptions
+from crystalline.crystalio.pes import DIMENSIONS, PESRun
 from crystalline.ui.widgets.wrapped_label import WrappedLabel
+
+
+# A floor for the lists: the controls above them have a minimum height of
+# their own, and the modes are the thing being chosen from.
+_LIST_MIN_HEIGHT = 180
 
 
 class PESDialog(QDialog):
@@ -53,7 +50,7 @@ class PESDialog(QDialog):
         summary = WrappedLabel(run.summary, self)
         layout.addWidget(summary)
 
-        cut = Section(layout, "Cut")
+        which = Section(layout, "Cut")
         self.dimension = QComboBox(self)
         for label, key in DIMENSIONS:
             self.dimension.addItem(label, key)
@@ -61,21 +58,29 @@ class PESDialog(QDialog):
         if not run.pairs:
             self.dimension.model().item(1).setEnabled(False)
         self.dimension.currentIndexChanged.connect(self._sync)
-        cut.add("Dimension", self.dimension)
+        which.add("Dimension", self.dimension)
 
-        self.span = slider_row(
-            cut, "Range ±ξ", DEFAULT_RANGE, 0.5, 10.0, 0.5, decimals=1,
-        )
-        self.span.setToolTip(
-            "Half-width of the window, in classical ground state amplitudes.\n"
-            "CRYSTAL fits the constants over less than one of them, so a wide "
-            "window extrapolates a quartic."
-        )
+        # How the cut is drawn, in the same widget the plot itself carries, so
+        # that tuning it here and tuning it there cannot drift apart. What is
+        # *not* here is which mode or which pair: that decides what the plot
+        # is, and it stays with the lists below.
+        self.options_widget = PESOptions(run.scale_wf, self)
+        layout.addWidget(self.options_widget)
+        # Named here too: dialog_state remembers a dialog by walking the
+        # widgets it holds, and these names are what the tests reach for.
+        self.span = self.options_widget.span
+        self.harmonic = self.options_widget.harmonic
+        self.levels = self.options_widget.levels
+        self.nstates = self.options_widget.nstates
+        self.quantity = self.options_widget.quantity
+        self.representation = self.options_widget.representation
+        self.levels.toggled.connect(self._sync)
 
         # ── one mode ──
         self._mode_box = QGroupBox("Mode", self)
         mode_layout = QVBoxLayout(self._mode_box)
         self.modes = QListWidget(self)
+        self.modes.setMinimumHeight(_LIST_MIN_HEIGHT)
         for entry in run.modes:
             item = QListWidgetItem(f"{entry.label}    ({entry.detail})")
             item.setData(Qt.UserRole, entry.mode)
@@ -83,26 +88,8 @@ class PESDialog(QDialog):
         if run.modes:
             self.modes.setCurrentRow(0)
         mode_layout.addWidget(self.modes)
-
-        mode_options = Section(mode_layout, "Overlays")
-        self.harmonic = QCheckBox("Harmonic potential", self)
-        self.harmonic.setChecked(True)
-        self.harmonic.setToolTip("The parabola of the mode, for comparison.")
-        mode_options.add_wide(self.harmonic)
-        self.levels = QCheckBox("Vibrational states", self)
-        self.levels.setToolTip(
-            "Solve this one-mode potential and draw its levels and "
-            "wavefunctions.\nThey are the states of this cut alone — a VSCF or "
-            "VCI step couples the modes and lands elsewhere."
-        )
-        self.levels.toggled.connect(self._sync)
-        mode_options.add_wide(self.levels)
-        self.nstates = QSpinBox(self)
-        self.nstates.setRange(1, 30)
-        self.nstates.setValue(DEFAULT_NSTATES)
-        set_value_width(self.nstates)
-        mode_options.add("States", left(self.nstates))
-        layout.addWidget(self._mode_box)
+        # The list is what wants the room: it is the thing being chosen from.
+        layout.addWidget(self._mode_box, 1)
 
         # ── two modes ──
         self._pair_box = QGroupBox("Pair", self)
@@ -116,30 +103,13 @@ class PESDialog(QDialog):
         self.filter.currentIndexChanged.connect(self._fill_pairs)
         pair_form.addRow("Involving", self.filter)
 
-        self.quantity = QComboBox(self)
-        for label, key in QUANTITIES:
-            self.quantity.addItem(label, key)
-        self.quantity.setToolTip(
-            "The harmonic bowl is one to two orders of magnitude deeper than "
-            "anything the\nanharmonic constants add, so contours of the total "
-            "surface are plain ellipses."
-        )
-        pair_form.addRow("Show", self.quantity)
-
-        self.representation = QComboBox(self)
-        for label, key in representations():
-            self.representation.addItem(label, key)
-        self.representation.setToolTip(
-            "A map can be read off; a surface shows the shape.\n"
-            "Once it is in the dock a surface can be turned with the mouse."
-        )
-        pair_form.addRow("Draw as", self.representation)
         pair_layout.addLayout(pair_form)
 
         self.pairs = QListWidget(self)
+        self.pairs.setMinimumHeight(_LIST_MIN_HEIGHT)
         self.pairs.setToolTip("Ordered by how strongly the two modes couple.")
         pair_layout.addWidget(self.pairs)
-        layout.addWidget(self._pair_box)
+        layout.addWidget(self._pair_box, 1)
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self
@@ -150,6 +120,7 @@ class PESDialog(QDialog):
 
         self._fill_pairs()
         self._sync()
+        self.resize(*chooser_size(self, (self.modes, self.pairs)))
 
     # ── state ───────────────────────────────────────────────────────────
     def _fill_pairs(self) -> None:
@@ -168,11 +139,14 @@ class PESDialog(QDialog):
         key = self.dimension.currentData()
         self._mode_box.setVisible(key == "1D")
         self._pair_box.setVisible(key == "2D")
-        self.nstates.setEnabled(self.levels.isChecked())
+        self.options_widget.set_dimension(key)
         ready = (self.modes.currentItem() is not None if key == "1D"
                  else self.pairs.currentItem() is not None)
         self._buttons.button(QDialogButtonBox.Ok).setEnabled(bool(ready))
-        self.adjustSize()
+        # Deliberately not adjustSize(): this runs on every change of cut, and
+        # a window that resizes itself under the hand is both startling and a
+        # way to lose whatever size the user had chosen. The layout gives the
+        # freed room to the list that is now showing.
 
     # ── results ─────────────────────────────────────────────────────────
     def _chosen_mode(self) -> Optional[int]:
@@ -183,20 +157,38 @@ class PESDialog(QDialog):
         item = self.pairs.currentItem()
         return (None, None) if item is None else item.data(Qt.UserRole)
 
+    def selection_state(self) -> dict:
+        """The cut that was chosen, named — what :mod:`dialog_state` keeps.
+
+        A list's *row* means nothing to the next run, which scanned other
+        modes; the mode numbers do, so those are what travel. The same rule as
+        a combo, whose choice is kept by its data and never by its index.
+        """
+        modei, modej = self._chosen_pair()
+        return {"mode": self._chosen_mode(), "pair": [modei, modej],
+                "filter": self.filter.currentData()}
+
+    def set_selection_state(self, chosen) -> None:
+        """Pick those modes again, as far as this run has them."""
+        if not isinstance(chosen, dict):
+            return
+        index = self.filter.findData(chosen.get("filter"))
+        if index >= 0:
+            self.filter.setCurrentIndex(index)   # refills the pairs
+        _select(self.modes, chosen.get("mode"))
+        pair = chosen.get("pair") or [None, None]
+        _select(self.pairs, tuple(pair) if None not in pair else None)
+        self._sync()
+
     def options(self) -> dict:
         """The chosen settings, as :func:`plot_pes` keyword arguments."""
         modei, modej = self._chosen_pair()
         return {
             "dimension": self.dimension.currentData(),
-            "representation": self.representation.currentData() or "map",
             "mode": self._chosen_mode(),
             "modei": modei,
             "modej": modej,
-            "span": self.span.value(),
-            "harmonic": self.harmonic.isChecked(),
-            "levels": self.levels.isChecked(),
-            "nstates": self.nstates.value(),
-            "quantity": self.quantity.currentData(),
+            **self.options_widget.options(),
         }
 
     def title(self) -> str:
@@ -206,6 +198,16 @@ class PESDialog(QDialog):
         modei, modej = self._chosen_pair()
         surface = "" if self.representation.currentData() == "map" else " 3D"
         return f"PES {modei} × {modej}{surface}"
+
+
+def _select(listing, wanted) -> None:
+    """Make the row carrying ``wanted`` the current one, if this run has it."""
+    if wanted is None:
+        return
+    for row in range(listing.count()):
+        if listing.item(row).data(Qt.UserRole) == wanted:
+            listing.setCurrentRow(row)
+            return
 
 
 __all__ = ["PESDialog"]

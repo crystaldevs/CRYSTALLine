@@ -337,6 +337,79 @@ def test_the_width_is_measured_in_the_pixels_the_glyphs_are_drawn_in():
     assert zone_picker._text_width("k", 14, 144) > zone_picker._text_width("k", 14, 72)
 
 
+# ── the size the labels are drawn at ──────────────────────────────────────
+def _label_height(pixel_ratio: float) -> int:
+    """How tall a Γ comes out, in *points*, in a window with ``pixel_ratio``.
+
+    The window is as many pixels as a Retina one would be for the same widget:
+    twice as many each way at a ratio of 2. Whatever the screen, a label that
+    looks the same size measures the same number of points.
+    """
+    pv = pytest.importorskip("pyvista")
+    from crystalline.viz.fonts import match_screen_dpi
+
+    plotter = pv.Plotter(off_screen=True,
+                         window_size=(int(240 * pixel_ratio), int(160 * pixel_ratio)))
+    try:
+        plotter.set_background("black")
+        zone_picker._draw_label(plotter, (0.0, 0.0, 0.0), "G", "#ffffff", 15)
+        match_screen_dpi(plotter.ren_win, pixel_ratio)
+        image = plotter.screenshot(return_img=True)
+    finally:
+        plotter.close()
+    rows = np.nonzero(image.max(axis=2).max(axis=1) > 100)[0]
+    assert rows.size, "the label was not drawn at all"
+    return int(round((rows.max() - rows.min() + 1) / pixel_ratio))
+
+
+def test_a_label_is_the_same_size_on_a_retina_screen_as_on_an_ordinary_one():
+    """VTK sizes text as ``font size x DPI / 72`` and leaves every window at 72,
+    so on a Retina screen — two pixels to the point — each k-point label came
+    out half the size it is on an ordinary one."""
+    ordinary, retina = _label_height(1.0), _label_height(2.0)
+    assert abs(retina - ordinary) <= 1
+
+
+def test_the_window_is_told_the_dpi_of_its_screen():
+    from crystalline.viz.fonts import match_screen_dpi
+
+    window = _Window(72)
+    window.SetDPI = lambda dpi: setattr(window, "dpi", dpi)
+    assert match_screen_dpi(window, 2.0) and window.dpi == 144
+    assert not match_screen_dpi(window, 2.0)        # nothing to draw again
+    assert match_screen_dpi(window, 1.0) and window.dpi == 72   # dragged to a 1x screen
+
+
+def test_the_view_sizes_its_labels_and_places_their_subscripts_for_its_screen():
+    """The DPI is set before the subscripts are measured: placed for 72 and drawn
+    at 144, a subscript sits on top of the letter it belongs to."""
+    from types import SimpleNamespace
+
+    pv = pytest.importorskip("pyvista")
+    plotter = pv.Plotter(off_screen=True)
+    try:
+        zone_picker._draw_label(plotter, (0.0, 0.0, 0.0), "k_y", "#101010", 14)
+        drawn = []
+        # The QtInteractor is the widget too; this one is on a Retina screen.
+        pv.set_new_attribute(plotter, "devicePixelRatioF", lambda: 2.0)
+        plotter.render = lambda: drawn.append(True)
+        view = SimpleNamespace(plotter=plotter)
+
+        zone_picker._ZoneView._place_labels(view)
+
+        assert plotter.ren_win.GetDPI() == 144
+        subscript = next(a for a in plotter.renderer.GetViewProps()
+                         if hasattr(a, "GetInput") and a.GetInput() == "y")
+        assert subscript.GetDisplayOffset()[0] >= zone_picker._text_width("k", 14, 144)
+        assert drawn                                     # drawn again at the new size
+
+        drawn.clear()
+        zone_picker._ZoneView._place_labels(view)        # a resize on the same screen
+        assert not drawn
+    finally:
+        plotter.close()
+
+
 # ── the path's colours ────────────────────────────────────────────────────
 def test_each_leg_of_the_path_gets_its_own_colour():
     colours = [zone_picker.segment_colour(i) for i in range(4)]

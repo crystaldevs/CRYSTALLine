@@ -227,7 +227,8 @@ def test_viewport_eventfilter_routes_the_delete_key(qapp):
 
     interactor = object()
     for key in (Qt.Key_Delete, Qt.Key_Backspace):
-        stub = types.SimpleNamespace(interactor=interactor, _drag=Mock(), delete_requested=Mock())
+        stub = types.SimpleNamespace(interactor=interactor, _drag=Mock(), delete_requested=Mock(),
+                                     _watched_window=None)
         event = types.SimpleNamespace(type=lambda: QEvent.KeyPress, key=lambda k=key: k)
         consumed = Viewport.eventFilter(stub, interactor, event)
         assert consumed is True  # event is eaten so VTK doesn't also act on it
@@ -250,7 +251,7 @@ def test_viewport_eventfilter_nudges_selection_while_editing(qapp):
     )
     editing = types.SimpleNamespace(
         interactor=interactor, _drag=Mock(), _editing=True, nudge_requested=Mock(),
-        _nudge_vector=lambda key, mods: "VEC",
+        _nudge_vector=lambda key, mods: "VEC", _watched_window=None,
     )
     assert Viewport.eventFilter(editing, interactor, event) is True  # consumed
     editing.nudge_requested.emit.assert_called_once_with("VEC")

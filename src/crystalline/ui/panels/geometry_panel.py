@@ -26,6 +26,7 @@ identically whichever route the user takes.
 from __future__ import annotations
 
 import dataclasses
+import math
 from typing import List, Optional, Sequence
 
 import numpy as np
@@ -50,7 +51,7 @@ from PySide6.QtWidgets import (
 from crystalline.core import lattice_planes as lp
 from crystalline.core import measure as measure_mod
 from crystalline.core.structure import Structure
-from crystalline.ui.panels.controls import Section, SliderBox
+from crystalline.ui.panels.controls import PANEL_MARGINS, Section, SliderBox
 from crystalline.ui.safety import guard
 from crystalline.ui.widgets.miller import MillerIndices
 
@@ -140,7 +141,7 @@ class GeometryPanel(QWidget):
         scroll.setWidget(body)
 
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(14, 4, 14, 18)  # the Display panel's
+        layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(0)  # sections space themselves
         # Each a header that folds the section away, as in the Display panel:
         # someone who only ever measures need not scroll past the atom tools.
@@ -377,20 +378,23 @@ class GeometryPanel(QWidget):
         box.addLayout(_labelled("Opacity", self._plane_opacity))
 
         # Where the plane sits along its own normal, in units of d(hkl): 0 is the
-        # plane through the origin, and 1 and -1 are its neighbours on either
-        # side. Both sides, because a plane is drawn only where it cuts the cell
-        # on screen, and with a negative index the cell lies partly or wholly on
-        # the negative side of the origin's plane: (-1 0 0) moved anywhere from 0
-        # to 1 left the cell altogether and drew nothing, and (1 -1 0) could
-        # reach only half of it. Live, like the opacity above it — a plane is
-        # placed by eye against the atoms far more often than it is calculated.
+        # plane through the origin, 1 the next one of the family. The track is
+        # the plane's own (see _sync_offset_range): a plane is drawn only where
+        # it cuts the cell on screen, and where that is depends on the indices.
+        # A fixed -1 to 1 was half wasted on (100), which is in the cell only
+        # from 0 to 1, and too short for (111), which crosses it from 0 to 3 —
+        # a single (111) plane could not be taken past the first third of the
+        # cell. Live, like the opacity above it — a plane is placed by eye
+        # against the atoms far more often than it is calculated.
         self._plane_offset = SliderBox(0.0, -1.0, 1.0, 0.01)
         self._plane_offset.setToolTip(
             "Position of the selected plane(s) — of every plane when none is "
-            "selected — along the normal, in units of d(hkl). 0 is the plane "
-            "through the origin, 1 and -1 its neighbours on either side of it, "
-            "and 0.5 lies halfway to the next one."
+            "selected — along the normal, in units of d(hkl): 0 is the plane "
+            "through the origin, 1 the next one. The track runs from where the "
+            "plane enters the cell on screen to where it leaves it; for a whole "
+            "family it runs from 0 to 1, since the family repeats every d."
         )
+        self._plane_span = None   # (miller, cell) -> (low, high), from the view
         self._plane_offset.changed.connect(self._set_plane_offset)
         self._plane_list.itemSelectionChanged.connect(self._show_plane_offset)
         box.addLayout(_labelled("Position (d)", self._plane_offset))
@@ -893,6 +897,7 @@ class GeometryPanel(QWidget):
 
     def _show_plane_offset(self) -> None:
         """Show the picked plane's position, and offer the slider only if it has one."""
+        self._sync_offset_range()   # the track is the picked planes' own
         picked = [self._planes[row] for row in self._selected_rows(self._plane_list)]
         lattice = [p for p in picked if not isinstance(p, lp.FittedPlane)]
         self._plane_offset.setEnabled(bool(lattice) or not picked)
@@ -964,6 +969,54 @@ class GeometryPanel(QWidget):
 
     def _emit_planes(self) -> None:
         self.lattice_planes_changed.emit(self.shown_lattice_planes(), self.miller_cell())
+        # After the view has the planes and, on a new cell, its new region.
+        self._sync_offset_range()
+
+    def set_plane_span(self, span) -> None:
+        """Where a single plane cuts the cell on screen: ``(miller, cell) -> (low, high)``.
+
+        The view's to say (see StructureRenderer.lattice_plane_span), since it
+        is the view that knows which cell is drawn — a supercell, the primitive
+        cell — while the indices stay those of the conventional one.
+        """
+        self._plane_span = span
+        self._sync_offset_range()
+
+    def _sync_offset_range(self) -> None:
+        """Put the Position track over the planes it moves.
+
+        Those selected, or every plane when none is; across all of them, so any
+        position on the track does something to at least one. A single plane's
+        track is where it cuts the cell on screen; a family's is 0 to 1, since
+        the family looks the same a whole d further on. A plane already placed
+        outside — kept from before a smaller supercell, say — widens the track
+        rather than being moved by it.
+        """
+        picked = [self._planes[row] for row in self._selected_rows(self._plane_list)]
+        planes = [p for p in (picked or self._planes) if not isinstance(p, lp.FittedPlane)]
+        lows, highs = [], []
+        for plane in planes:
+            span = (0.0, 1.0) if plane.family else self._span_of(plane.miller)
+            if span is None:
+                continue
+            lows.append(min(span[0], plane.offset))
+            highs.append(max(span[1], plane.offset))
+        if not lows:
+            return   # nothing to place, or no lattice: the track stays as it is
+        # Outward to the box's two decimals, so both ends can be typed.
+        low = math.floor(min(lows) * 100 + 1e-9) / 100
+        high = math.ceil(max(highs) * 100 - 1e-9) / 100
+        if high - low < 0.01:
+            high = low + 1.0
+        self._plane_offset.set_range(low, high)
+
+    def _span_of(self, miller):
+        if self._plane_span is None or self._miller_cell is None:
+            return None
+        try:
+            return self._plane_span(tuple(miller), self._miller_cell)
+        except Exception:  # noqa: BLE001 - a track is a convenience, never a failure
+            return None
 
     # ── editing ─────────────────────────────────────────────────────────
     def _on_editing_toggled(self, enabled: bool) -> None:

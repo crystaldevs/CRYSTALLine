@@ -31,7 +31,6 @@ from vtkmodules.vtkCommonCore import VTK_FONT_FILE
 from vtkmodules.vtkRenderingAnnotation import vtkCaptionActor2D
 from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkPropAssembly
 from ase.data import chemical_symbols
-from scipy.spatial import cKDTree
 
 from crystalline.core import elements
 from crystalline.core import lattice_planes as lp
@@ -543,6 +542,8 @@ class StructureRenderer:
             return None
         if actor is not self._atom_actor and actor is not self._adp_actor:
             return None
+        from scipy.spatial import cKDTree  # see _bonded_pairs: not at import time
+
         _dist, index = cKDTree(self._positions).query(np.asarray(world_pos, dtype=float))
         return int(index)
 
@@ -1348,6 +1349,25 @@ class StructureRenderer:
             origin = origin + low * direction
             vectors[axis] = direction * (high - low)
         return origin, vectors
+
+    def lattice_plane_span(self, miller, miller_cell=None):
+        """``(low, high)``: the positions, in units of d, at which a single plane
+        ``miller`` cuts the region planes are drawn across, or ``None``.
+
+        A point at fractional coordinates (x, y, z) of the reference cell lies
+        on the plane at hx + ky + lz, so a plane cuts the region between the
+        least and the greatest of that over the region's corners: 0 to 1 for
+        (100), -1 to 0 for (-100), 0 to 3 for (111) — and twice as far across
+        a 2x2x2 supercell. ``None`` for a molecule, which has no lattice.
+        """
+        region = self.lattice_region()
+        reference = self._miller_reference(
+            None if miller_cell is None else np.asarray(miller_cell, dtype=float))
+        if region is None or reference is None:
+            return None
+        values = (np.asarray(lp.region_corners(*region), dtype=float)
+                  @ lp.reciprocal_vector(reference, miller))
+        return float(values.min()), float(values.max())
 
     def _miller_reference(self, cell):
         """The cell Miller indices are read in: ``cell`` — the conventional cell,
@@ -2923,6 +2943,11 @@ def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     positions = np.asarray(positions, dtype=float)
     if len(positions) < 2:
         return np.empty(0, int), np.empty(0, int)
+    # Imported here, not with the module: scipy.spatial is a quarter of a
+    # second of startup for a window that opens with nothing in it, and the
+    # application warms it on a thread once the window is up (see app.py).
+    from scipy.spatial import cKDTree
+
     radii = elements.radii(numbers)
     max_bond = tolerance * 2.0 * float(radii.max())
     candidate_pairs = cKDTree(positions).query_pairs(r=max_bond, output_type="ndarray")

@@ -51,7 +51,7 @@ from crystalline.ui import menus, theme, wheel_zoom
 from crystalline.ui.safety import guard
 from vtkmodules.vtkCommonCore import VTK_FONT_FILE
 
-from crystalline.viz.fonts import unicode_font
+from crystalline.viz.fonts import match_screen_dpi, unicode_font
 
 # Special points are halves, thirds, quarters, sixths and eighths, and every
 # one of those has a glyph of its own — which reads as the number it is rather
@@ -989,7 +989,7 @@ def _subscripts(plotter) -> list:
 
     Kept so they can be placed again: where a subscript goes depends on how
     wide its base is *in pixels*, and that is not known until the window it
-    will be drawn in says what DPI it has. See :func:`place_subscripts`.
+    will be drawn in is told what DPI its screen has. See :func:`place_subscripts`.
     """
     labels = getattr(plotter, "_zone_subscripts", None)
     if labels is None:
@@ -1009,13 +1009,14 @@ def place_subscripts(plotter) -> bool:
 
     A text actor's glyphs are drawn at ``font size x DPI / 72``, and the offset
     that puts the subscript beside the base is in pixels — so the two only agree
-    when the width is measured at the DPI the window actually draws at. A window
-    reports 72 until it has one, which is while the scene is built: measured
-    then, a Retina window drew every subscript half a letter to the left, on top
-    of the k it belongs to. So the offsets are set again whenever they might
-    have changed — when the view is shown, and when it is resized, which is what
-    moving the window to a screen of another density amounts to. Returns whether
-    anything moved, since what moved has to be drawn again.
+    when the width is measured at the DPI the window actually draws at. That is
+    not known while the scene is built: the view is told its screen's DPI (see
+    :func:`~crystalline.viz.fonts.match_screen_dpi`) only once it is on one, and
+    measured at VTK's 72 before then, a Retina window drew every subscript half
+    a letter to the left, on top of the k it belongs to. So the offsets are set
+    again whenever they might have changed — when the view is shown, and when it
+    is resized or moved to a screen of another density. Returns whether anything
+    moved, since what moved has to be drawn again.
     """
     dpi = _dpi_of(plotter)
     if getattr(plotter, "_zone_subscript_dpi", None) == dpi:
@@ -1296,14 +1297,16 @@ class _ZoneView(QWidget):
 
     @guard()
     def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        """Place the subscripts once there is a window to measure them for.
+        """Size the labels for the screen the view is on, now that it is on one.
 
-        The scene is built before the dialog is shown, when the render window
-        still reports the default 72 DPI; on a Retina screen it draws at twice
-        that, and a subscript placed for 72 lands on top of its own letter.
+        The scene is built before the dialog is shown, and the render window is
+        left at VTK's 72 DPI whatever the screen: on a Retina one every label
+        came out at half its size, and a subscript placed for 72 lands on top of
+        its own letter once the window is told otherwise.
 
-        Twice: a widget is shown before its VTK window is made, so the DPI may
-        still be the default here, and is certainly right a turn later.
+        Twice: a widget is shown before its window is settled on a screen, so the
+        ratio may still be the primary screen's here, and is certainly right a
+        turn later.
         """
         super().showEvent(event)
         self._place_labels()
@@ -1315,10 +1318,29 @@ class _ZoneView(QWidget):
         super().resizeEvent(event)
         self._place_labels()
 
+    @guard(default=False)
+    def event(self, event) -> bool:
+        """And when the screen under the view changes density without a resize.
+
+        A window dragged from a Retina screen to an ordinary one keeps its size
+        in points, so there is no resize to catch; Qt says so with an event of
+        its own (from Qt 6.6, hence the lookup).
+        """
+        changed = getattr(QEvent, "DevicePixelRatioChange", None)
+        if changed is not None and event.type() == changed:
+            self._place_labels()
+        return super().event(event)
+
     @guard()
     def _place_labels(self) -> None:
-        """Put the subscripts where this window's DPI says, and draw if they moved."""
-        if place_subscripts(self.plotter):
+        """Size the text for this screen, place the subscripts to match, and draw.
+
+        The DPI first: the subscripts are placed by measuring their bases at the
+        DPI the window has, which is the one just set.
+        """
+        resized = match_screen_dpi(self.plotter.ren_win, self.plotter.devicePixelRatioF())
+        moved = place_subscripts(self.plotter)
+        if resized or moved:
             self.plotter.render()
 
     @guard(default=False)

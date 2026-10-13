@@ -108,13 +108,22 @@ from crystalline.ui.panels.info_panel import InfoPanel
 from crystalline.ui.panels.display_settings import DisplayPanel
 from crystalline.ui.panels.geometry_panel import GeometryPanel
 from crystalline.ui.panels.symmetry_panel import SymmetryPanel
-from crystalline.ui.panels.plot_view import PlotPanel
+from crystalline.ui.panels.plot_view import PlotPanel, PlotRecipe
 
 _APPLICATION_TITLE = "CRYSTALLine — CRYSTAL structure & phonon viewer"
 
 # Geometry of the floating Plots window on the first plot: a fraction of the main
 # window's width (never below the minimum), 4:3, inset from its lower-right corner.
 _PLOT_FLOAT_WIDTH_FRACTION = 0.55
+# How long an output's details wait after a file is shown: long enough for its
+# 3D view to settle at its size — the Phonons panel coming in narrows it — and
+# draw, which a worker busy in Python holds up; short enough that the Info
+# panel's rows still arrive a moment after the structure (see _read_next).
+_DETAILS_PAUSE_MS = 300
+
+# The figure's shape, width over height, unless its recipe asks for another:
+# matplotlib's own default, which gives the axes room in both directions.
+_PLOT_ASPECT = 4 / 3
 _PLOT_FLOAT_MIN_WIDTH = 640
 _PLOT_FLOAT_MARGIN = 24
 
@@ -167,6 +176,10 @@ class MainWindow(QMainWindow):
         # Files waiting to be read, as (path, comes to the front), and the one
         # being read now: read one at a time, off the main thread (see _load_path).
         self._pending_reads: list = []
+        # And outputs whose details are still to be read, as (path, its tab):
+        # the Info panel's rows, which cost more than the structure and are
+        # read after it, once no file is waiting (see _read_next).
+        self._pending_details: list = []
         self._reading = False
         self._reading_path: Optional[str] = None
         self._reader: Optional[Worker] = None
@@ -182,7 +195,7 @@ class MainWindow(QMainWindow):
         # Before any setting below, which the tab widget hands to its bar: a
         # swipe across the tabs moves their close buttons with them.
         self._file_tabs.setTabBar(SlidingTabBar(self._file_tabs))
-        self._file_tabs.setObjectName("fileTabs")  # centred by the theme, over the view
+        self._file_tabs.setObjectName("fileTabs")  # set at the left by the theme, over the view
         self._file_tabs.setTabsClosable(True)
         self._file_tabs.setMovable(True)
         self._file_tabs.setElideMode(Qt.ElideMiddle)  # keep both ends of a long run name
@@ -270,6 +283,13 @@ class MainWindow(QMainWindow):
         self._editing_status.hide()
 
         self._settle_docks()
+        # Only now is the Phonons panel put away (it is shown again by
+        # :meth:`_sync_phonon_dock`, for a file that has modes). Not before:
+        # Qt does not count a hidden dock as tabified with anything, so
+        # _settle_docks would leave this one its title bar, and it would come
+        # back named along the top while every other panel is named by a tab
+        # along the bottom.
+        self._phonon_dock.hide()
         # After _settle_docks, which pins every tab bar it finds: this one is
         # the user's to reorder and to close tabs from.
         self._file_tabs.tabBar().setMovable(True)
@@ -524,7 +544,8 @@ class MainWindow(QMainWindow):
         self.viewport.set_editing_enabled(self._editing)
         self.structure_panel.set_editing_enabled(self._editing)
         self.geometry_panel.set_editing_enabled(self._editing)
-        # Each tab's plots come and go with it.
+        # The Phonons panel and the plots both come and go with the tab.
+        self._sync_phonon_dock()
         self._switching_tabs = True
         try:
             if tab.plots_open and tab.plot_panel.count() > 0:
@@ -699,6 +720,38 @@ class MainWindow(QMainWindow):
         for tab in self._tabs:
             if tab is not self._tab and tab.built():
                 tab.info_panel.set_cell_choice(choice)
+
+    def _phonons_available(self) -> bool:
+        """Whether the tab on screen has modes for the Phonons panel to show."""
+        tab = self._tab
+        return tab is not None and tab.built() and tab.phonon_panel.has_modes()
+
+    def _sync_phonon_dock(self) -> None:
+        """Show the Phonons panel only where there are frequencies to show.
+
+        The panel is a list of modes and the controls that animate one, so for
+        anything that is only a geometry — an input file, an optimisation, a
+        structure built here — there is nothing to put in it. An empty list
+        beside the structure is worse than no list: it reads as a frequency run
+        whose modes could not be read, which is a thing that happens and is
+        said in its own words (see :meth:`_show_notice`).
+
+        So it comes and goes with the file, as the Plots window does. Nothing is
+        remembered across the change the way ``plots_open`` is: these docks have
+        no close button of their own (:meth:`_dock` leaves them no features), so
+        the only way to put this one away is the View menu, and that entry is
+        greyed for a file with no modes rather than hiding one that has them.
+        """
+        self._phonon_dock.setVisible(self._phonons_available())
+
+    def _panel_available(self, title: str) -> bool:
+        """Whether a panel has anything to show, for its View ▸ Panels entry.
+
+        Only the Phonons panel can be empty through no fault of the user's: a
+        menu entry that brings back a panel with nothing in it is worse than one
+        that is greyed while there is nothing to bring back.
+        """
+        return self._phonons_available() if title == "Phonons" else True
 
     def _on_plot_dock_visibility(self, visible: bool) -> None:
         """The user opening or shutting the Plots window, for the tab on screen."""
@@ -884,6 +937,12 @@ class MainWindow(QMainWindow):
         # modes loaded, dropped or restored -> the arrow controls follow them,
         # as the ellipsoid controls follow a file's ADPs
         phonons.modes_changed.connect(on(display.set_phonons_available))
+        # ...and the panel is only there at all for a file that has modes
+        phonons.modes_changed.connect(on(lambda _available: self._sync_phonon_dock()))
+        # Edit on a plot -> its own settings, and the plot drawn again in place
+        tab.plot_panel.edit_requested.connect(on(self._edit_plot))
+        # a knob beside a plot coming to rest -> the plot, as it now says
+        tab.plot_panel.redraw_requested.connect(on(self._redraw_plot))
 
         # Geometry panel: the same edit operations as the Edit menu (so undo and
         # the selection model behave identically), plus measurement overlays.
@@ -898,6 +957,8 @@ class MainWindow(QMainWindow):
         # Lattice planes (hkl), indices in the conventional cell; "Select atoms"
         # on a plane goes through the shared selection like a pick would.
         geometry.lattice_planes_changed.connect(viewport.set_lattice_planes)
+        # The Position track of a plane is where it cuts the cell this view draws.
+        geometry.set_plane_span(viewport.renderer.lattice_plane_span)
         geometry.select_atoms_requested.connect(selection.set_selection)
         with self._acting_on(tab):
             geometry.set_miller_cell(self._miller_cell())
@@ -1212,8 +1273,7 @@ class MainWindow(QMainWindow):
         and several can be overlaid at once — which is how the components are
         actually read.
         """
-        from crystalline.crystalio import available_spectra, load_spectra, plot_spectra
-        from crystalline.ui.panels.spectra_dialog import SpectraDialog
+        from crystalline.crystalio import load_spectra
 
         path = self._output_path
         if not path:
@@ -1222,7 +1282,20 @@ class MainWindow(QMainWindow):
                 "Load a CRYSTAL .out from a frequency calculation to plot its spectra.",
             )
             return
-        kinds = available_spectra(path)
+        # Read once, for the list and for the plot alike. The list used to come
+        # from a read of its own and the plot from another after OK: the whole
+        # output parsed twice, with the window frozen for both — 560 ms on a
+        # 3.5 MB anharmonic run, and it grows with the output.
+        self._read_for_dialog("spectra", (path,), lambda: load_spectra(path),
+                              "Reading the spectra…",
+                              lambda data: self._show_spectra(path, data), "Spectra failed")
+
+    def _show_spectra(self, path: str, data: dict) -> None:
+        """The spectra dialog, and the plot it asks for, on curves already read."""
+        from crystalline.crystalio import plot_spectra
+        from crystalline.ui.panels.spectra_dialog import SpectraDialog
+
+        kinds = sorted(data, key=lambda kind: kind.sort_key)
         if not kinds:
             QMessageBox.information(
                 self, "No spectra in this output",
@@ -1238,21 +1311,165 @@ class MainWindow(QMainWindow):
             return
         self._remember_dialog(dialog, "spectra")
         chosen = dialog.selected_kinds()
-        try:
-            data = load_spectra(path)
-            figure = plot_spectra(
-                [(kind.label, data[kind]) for kind in chosen],
-                title=chosen[0].label if len(chosen) == 1 else None,
-                **dialog.options(),
+
+        # The data is read once and drawn from thereafter: broadening a
+        # spectrum again is arithmetic on curves already in hand, which is what
+        # makes this the plot worth being able to change in place.
+        def draw(*, curves, **options):
+            return plot_spectra(
+                [(kind.label, data[kind]) for kind in curves],
+                title=curves[0].label if len(curves) == 1 else None,
+                **options,
             )
+
+        def name(options) -> str:
+            curves = options["curves"]
+            return curves[0].label if len(curves) == 1 else f"Spectra ({len(curves)})"
+
+        # Which curves are ticked is not an argument of plot_spectra — it
+        # decides the datasets it is given — so it travels with the options
+        # that are, and the two together are what this tab is.
+        #
+        # Editing starts from *this plot's* settings, kept here, not from the
+        # ones the dialog was last accepted with: those belong to the next new
+        # plot, and starting an edit from another tab's broadening is the same
+        # surprise as starting it from none at all.
+        from crystalline.ui.panels.dialog_state import capture as capture_dialog
+
+        mine = {"state": capture_dialog(dialog)}
+
+        def ask(options):
+            again = SpectraDialog(kinds, self)
+            self._restore_dialog(again, "spectra", state=mine["state"])
+            # From what is drawn, which is the authority on what this tab is.
+            again.set_selection_state([kind.attribute for kind in options["curves"]])
+            if again.exec() != QDialog.Accepted:
+                return None
+            mine["state"] = capture_dialog(again)
+            self._remember_dialog(again, "spectra")  # the next new plot, too
+            return {"curves": again.selected_kinds(), **again.options()}
+
+        # The broadening and the range go beside the plot, where a width can be
+        # judged against the peaks it merges. Which curves are drawn stays in
+        # the dialog: that is a tree of everything the output holds, and it
+        # decides what the plot is rather than how it looks.
+        from crystalline.ui.panels.spectra_options import SpectraOptions
+
+        recipe = PlotRecipe(draw=draw, edit=ask, title=name, controls=SpectraOptions,
+                            options={"curves": chosen, **dialog.options()})
+        try:
+            figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any read/plot error
             QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
             return
 
-        title = chosen[0].label if len(chosen) == 1 else f"Spectra ({len(chosen)})"
+        title = name(recipe.options)
         # The x axis is a wavenumber, so clicking a peak still selects its mode.
-        self.plot_panel.add_figure(figure, title, on_pick=self._select_mode_near)
+        self.plot_panel.add_figure(figure, title, on_pick=self._select_mode_near,
+                                   recipe=recipe)
         self._reveal_plot_dock()
+
+    def _edit_plot(self, tab) -> None:
+        """Put a plot's own settings back to the user, and draw it again in place.
+
+        Its own: the options this tab was drawn with, not the dialog's last-used
+        ones, so changing one spectrum does not start from another's broadening.
+        The drawing goes to a thread like every other plot — some of them take
+        seconds — and the tab is found again by identity, since tabs can be
+        dragged along the bar while one is being redrawn.
+        """
+        recipe = getattr(tab, "recipe", None)
+        if recipe is None or recipe.edit is None:
+            return
+        # From what the controls beside it last asked for, if that has not
+        # reached the screen yet: the dialog describes the plot being edited.
+        live = self._live_redraws()
+        options = recipe.edit({**recipe.options, **live.wanted(tab)})
+        if options is None:
+            return  # the user changed their mind
+
+        def build():
+            return recipe.redrawn(options)
+
+        def show(drawn) -> None:
+            figure, chosen = drawn
+            index = self.plot_panel.index_of(tab)
+            if index < 0:
+                import matplotlib.pyplot as plt
+
+                plt.close(figure)  # the tab was closed while it was being drawn
+                return
+            # What the dialog set outranks a redraw from the controls that
+            # was still under way, or waiting, when it was opened.
+            live.withdraw(tab)
+            recipe.options = chosen
+            title = recipe.title(chosen) if recipe.title is not None else None
+            self.plot_panel.replace_figure(index, figure, title)
+            self._widen_plot_window(tab)  # an edit can ask for another shape
+            # The knobs beside the plot describe the plot, so they follow what
+            # the dialog just changed; otherwise they sit there asserting the
+            # settings of a figure that is no longer on screen. set_options
+            # does not announce itself, so this cannot start a redraw.
+            if tab.controls is not None:
+                tab.controls.set_options(chosen)
+
+        self._run_busy(build, "Drawing the plot again…", show, "Plot failed")
+
+    def _dialog_recipe(self, key: str, make_dialog, draw, accepted,
+                       controls=None, name=None) -> PlotRecipe:
+        """A recipe for a plot whose options come from one of the plot dialogs.
+
+        They are all the same shape — build the dialog, restore it, ask,
+        remember, draw with ``options()`` and name the tab with ``title()`` —
+        so the only things that differ are how to build one and how to draw.
+
+        The name is taken from the dialog rather than worked out from the
+        options, because the dialog is what knows how to say "Mode 7, 1D cut":
+        it is kept from each accepted dialog and handed back unchanged. Unless
+        ``name`` is given, ``options -> str``: for a plot whose controls beside
+        it can change what the name says — a VCI tab names its representation,
+        which is switched there — the name has to follow what is drawn.
+        """
+        from crystalline.ui.panels.dialog_state import capture as capture_dialog
+
+        mine = {"state": capture_dialog(accepted), "title": accepted.title()}
+
+        def ask(_options):
+            again = make_dialog()
+            # This plot's own settings, not the ones the dialog was last
+            # accepted with: those are where the next new plot starts.
+            self._restore_dialog(again, key, state=mine["state"])
+            if again.exec() != QDialog.Accepted:
+                return None
+            mine["state"] = capture_dialog(again)
+            mine["title"] = again.title()
+            self._remember_dialog(again, key)
+            return again.options()
+
+        return PlotRecipe(draw=draw, edit=ask, controls=controls,
+                          options=dict(accepted.options()),
+                          title=name or (lambda _options: mine["title"]))
+
+    def _redraw_plot(self, tab, options: dict) -> None:
+        """Draw a plot again as its own controls now describe it.
+
+        On a worker, and not through :meth:`_run_busy`: this is a knob coming
+        to rest, and neither a scrim over the window for each one nor a window
+        frozen until the figure is drawn leaves the controls usable. See
+        :class:`~crystalline.ui.panels.plot_view.LiveRedraws` for the rest —
+        the newest request wins, one figure is drawn at a time, and a failure
+        is said in the status bar.
+        """
+        self._live_redraws().request(tab, options)
+
+    def _live_redraws(self):
+        """The scheduler of every redraw asked for beside a plot, made once."""
+        live = getattr(self, "_live", None)
+        if live is None:
+            from crystalline.ui.panels.plot_view import LiveRedraws
+
+            live = self._live = LiveRedraws(self.statusBar())
+        return live
 
     # ── electronic bands and DOS ────────────────────────────────────────
     def _open_electronic(self) -> None:
@@ -1295,17 +1512,47 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         self._remember_dialog(dialog, "electronic")
-        bands_path, dos_path, options = dialog.request()
-        title = dialog.plot_title()
 
-        def build():
-            return plot_electronic(bands_path, dos_path, options)
+        import dataclasses
 
-        def show(figure) -> None:
-            self.plot_panel.add_figure(figure, title)
+        from crystalline.ui.panels import electronic_controls as controls
+
+        # A plot's options are the dialog's whole answer — the files, every
+        # option, and the tracks the window and the DOS range were chosen on,
+        # which the controls beside the plot offer again.
+        def answer(accepted) -> dict:
+            bands_path, dos_path, options = accepted.request()
+            return {"bands_path": bands_path, "dos_path": dos_path,
+                    **dataclasses.asdict(options), **accepted.extent()}
+
+        def ask(options):
+            again = ElectronicDialog(structure=structure, folder=folder,
+                                     parent=self, efermi=efermi)
+            self._restore_dialog(again, "electronic")
+            # This plot's own files and choices, not the folder's best guess:
+            # a file browsed for elsewhere, projections renamed, a window
+            # dragged — all of it is what this tab is.
+            again.set_request(*controls.plot_arguments(options))
+            if again.exec() != QDialog.Accepted:
+                return None
+            self._remember_dialog(again, "electronic")
+            return answer(again)
+
+        # Drawn from the files each time rather than from data read once: a
+        # read costs a few milliseconds, and each draw starting from its own
+        # read is what lets plot_electronic shift and split what it read.
+        recipe = PlotRecipe(
+            draw=lambda **options: plot_electronic(*controls.plot_arguments(options)),
+            edit=ask, title=controls.title, controls=controls.ElectronicControls,
+            aspect=controls.aspect, options=answer(dialog))
+
+        def show(drawn) -> None:
+            figure, _options = drawn
+            self.plot_panel.add_figure(figure, controls.title(recipe.options), recipe=recipe)
             self._reveal_plot_dock()
 
-        self._run_busy(build, "Building the electronic structure plot…", show, "Plot failed")
+        self._run_busy(recipe.redrawn, "Building the electronic structure plot…", show,
+                       "Plot failed")
 
     def _update_spectra_action(self) -> None:
         """Enable the spectra entry only for an output that has any."""
@@ -1321,8 +1568,7 @@ class MainWindow(QMainWindow):
         figure to show: the dialog is where which states — and how much mixing
         to keep — get decided.
         """
-        from crystalline.crystalio import plot_vci, vci_run
-        from crystalline.ui.panels.vci_dialog import VCIDialog
+        from crystalline.crystalio import vci_run
 
         path = self._output_path
         if not path:
@@ -1333,13 +1579,15 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Parsing a large run takes a moment, and it happens before any dialog
-        # appears, so say so with the cursor rather than looking hung.
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            run, out = vci_run(path)
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._read_for_dialog("vci", (path,), lambda: vci_run(path),
+                              "Reading the VCI states…",
+                              lambda found: self._show_vci(*found), "VCI failed")
+
+    def _show_vci(self, run, out) -> None:
+        """The VCI dialog, and the plot it asks for, on a run already read."""
+        from crystalline.crystalio import plot_vci
+        from crystalline.ui.panels.vci_dialog import VCIDialog
+
         if run is None:
             QMessageBox.information(
                 self, "No VCI states in this output",
@@ -1354,15 +1602,24 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         self._remember_dialog(dialog, "vci")
+        # All of it beside the plot too: which states are drawn is a window
+        # pulled until the columns that matter are in it, which is done by
+        # looking. The tab's name follows the representation, switched there.
+        from crystalline.ui.panels import vci_options
+
+        recipe = self._dialog_recipe(
+            "vci", lambda: VCIDialog(run, self), lambda **o: plot_vci(out, **o), dialog,
+            controls=lambda: vci_options.VCIOptions(run),
+            name=lambda options: vci_options.title(run, options))
         try:
-            figure = plot_vci(out, **dialog.options())
+            figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
             QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: neither representation is drawn against a wavenumber
         # axis — the states sit on a categorical axis, one column each.
-        self.plot_panel.add_figure(figure, dialog.title())
+        self.plot_panel.add_figure(figure, dialog.title(), recipe=recipe)
         self._reveal_plot_dock()
 
     # ── anharmonic scan ─────────────────────────────────────────────────
@@ -1373,13 +1630,7 @@ class MainWindow(QMainWindow):
         ANSCANWF.DAT, so the file next to it is used when there is one and the
         user is asked only when there is not.
         """
-        from crystalline.crystalio import (
-            WF_FILTER,
-            anscan_run,
-            find_wavefunctions,
-            plot_anscan,
-        )
-        from crystalline.ui.panels.anscan_dialog import AnscanDialog
+        from crystalline.crystalio import WF_FILTER, anscan_run, find_wavefunctions
 
         path = self._output_path
         if not path:
@@ -1398,13 +1649,17 @@ class MainWindow(QMainWindow):
             if not wavefunctions:
                 return
 
-        # get_anscan re-reads the phonon block on its way through, which is not
-        # instant on a large run, and it happens before any dialog appears.
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            run, out = anscan_run(path, wavefunctions)
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Remembered by both files: the scan is the output and its wavefunctions.
+        self._read_for_dialog("anscan", (path, wavefunctions),
+                              lambda: anscan_run(path, wavefunctions),
+                              "Reading the anharmonic scan…",
+                              lambda found: self._show_anscan(*found), "Scan failed")
+
+    def _show_anscan(self, run, out) -> None:
+        """The scan's dialog, and the plot it asks for, on a run already read."""
+        from crystalline.crystalio import plot_anscan
+        from crystalline.ui.panels.anscan_dialog import AnscanDialog
+
         if run is None:
             QMessageBox.information(
                 self, "No anharmonic scan in this output",
@@ -1420,15 +1675,25 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         self._remember_dialog(dialog, "anscan")
+        # Everything the dialog offers goes beside the plot as well: the scan is
+        # the run's one mode, so there is nothing left to choose that decides
+        # what the figure is, and a ψ scale is right when the states sit between
+        # their neighbours — which is seen, not typed.
+        from crystalline.ui.panels.anscan_options import AnscanOptions
+
+        recipe = self._dialog_recipe(
+            "anscan", lambda: AnscanDialog(run, self),
+            lambda **o: plot_anscan(out, **o), dialog,
+            controls=lambda: AnscanOptions(run))
         try:
-            figure = plot_anscan(out, **dialog.options())
+            figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
             QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: the abscissa is the displacement the mode was scanned
         # along, not a wavenumber, so there is no mode under the cursor.
-        self.plot_panel.add_figure(figure, dialog.title())
+        self.plot_panel.add_figure(figure, dialog.title(), recipe=recipe)
         self._reveal_plot_dock()
 
     def _update_anscan_action(self) -> None:
@@ -1448,8 +1713,7 @@ class MainWindow(QMainWindow):
         The surface spans every mode the run was given, so there is no single
         figure: which mode, or which pair of them, is the dialog's job.
         """
-        from crystalline.crystalio import pes_run, plot_pes
-        from crystalline.ui.panels.pes_dialog import PESDialog
+        from crystalline.crystalio import pes_run
 
         path = self._output_path
         if not path:
@@ -1460,13 +1724,17 @@ class MainWindow(QMainWindow):
             )
             return
 
-        # Two parses — the PES constants and the harmonic frequencies — before
-        # any dialog appears, and neither is instant on a large run.
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            run, out = pes_run(path)
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Two parses — the PES constants and the harmonic frequencies — and
+        # neither is instant on a large run.
+        self._read_for_dialog("pes", (path,), lambda: pes_run(path),
+                              "Reading the PES constants…",
+                              lambda found: self._show_pes(*found), "PES failed")
+
+    def _show_pes(self, run, out) -> None:
+        """The PES dialog, and the plot it asks for, on a run already read."""
+        from crystalline.crystalio import plot_pes
+        from crystalline.ui.panels.pes_dialog import PESDialog
+
         if run is None:
             QMessageBox.information(
                 self, "No PES constants in this output",
@@ -1481,14 +1749,24 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
         self._remember_dialog(dialog, "pes")
+        # The window, the overlays and how a surface is drawn go beside the
+        # plot; which mode or which pair stays in the dialog, since that is
+        # what the plot *is* rather than how it looks.
+        from crystalline.ui.panels.pes_options import PESOptions
+
+        recipe = self._dialog_recipe(
+            "pes", lambda: PESDialog(run, self), lambda **o: plot_pes(out, **o), dialog,
+            # The run's own level spacing, so the ψ scale beside the plot opens
+            # where the dialog's does rather than at a number from nowhere.
+            controls=lambda: PESOptions(run.scale_wf))
         try:
-            figure = plot_pes(out, **dialog.options())
+            figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
             QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: both axes are normal coordinates, not wavenumbers.
-        self.plot_panel.add_figure(figure, dialog.title())
+        self.plot_panel.add_figure(figure, dialog.title(), recipe=recipe)
         self._reveal_plot_dock()
 
     def _update_pes_action(self) -> None:
@@ -1641,6 +1919,32 @@ class MainWindow(QMainWindow):
         self._set_supercell(reps)
         self._apply_cell_view()
         return reps
+
+    def _read_for_dialog(self, kind: str, paths: tuple, reader, message: str,
+                         then, failed_title: str) -> None:
+        """``then(result)`` with what ``reader()`` read from ``paths``.
+
+        At once, if this version of the files has been read for ``kind``
+        before (see :mod:`~crystalline.crystalio.remembered`): opening the same
+        dialog on the same output again is how a second plot is made, and it
+        used to read the whole output again. Otherwise on a worker, behind the
+        spinner — no longer with the window frozen and a wait cursor, which on
+        a large output looked like a hang.
+        """
+        from crystalline.crystalio import remembered
+
+        read_key = remembered.key(kind, *paths)
+        found = remembered.get(read_key)
+        if found is not remembered.MISSING:
+            then(found)
+            return
+
+        def work():
+            value = reader()
+            remembered.put(read_key, value)
+            return value
+
+        self._run_busy(work, message, then, failed_title)
 
     def _run_busy(self, work, message: str, done, failed_title: str) -> None:
         """Run ``work`` off the main thread behind the busy overlay.
@@ -1975,11 +2279,48 @@ class MainWindow(QMainWindow):
             self._plot_dock.show()
             screen = self.screen()
             where = _floating_plot_geometry(
-                self.frameGeometry(), screen.availableGeometry() if screen else None
+                self.frameGeometry(), screen.availableGeometry() if screen else None,
+                beside=self.plot_panel.controls_width(),
+                aspect=self._figure_aspect(self.plot_panel.current_tab()),
             )
             self._plot_dock.setGeometry(where)
-        self._plot_dock.show()
+            self._plot_dock.show()
+        else:
+            self._plot_dock.show()
+            self._widen_plot_window(self.plot_panel.current_tab())
         self._plot_dock.raise_()
+
+    def _figure_aspect(self, tab) -> float:
+        """The shape ``tab``'s figure wants, width over height."""
+        recipe = getattr(tab, "recipe", None)
+        wanted = recipe.aspect(recipe.options) if recipe and recipe.aspect else None
+        return float(wanted or _PLOT_ASPECT)
+
+    def _widen_plot_window(self, tab) -> None:
+        """Make the floating Plots window wide enough for ``tab``'s figure.
+
+        For a plot that wants a wider shape than the window has — a band
+        structure beside its DOS, whose path labels collide at 4:3. Only ever
+        wider, at the same height and kept on the screen: never narrower, since
+        the window's size may be the user's own, and a window that shrank
+        whenever a 4:3 plot followed would be one that jumps about.
+        """
+        dock = self._plot_dock
+        if tab is None or not dock.isFloating() or not dock.isVisible():
+            return
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        canvas = tab.canvas
+        short = int(round(canvas.height() * self._figure_aspect(tab))) - canvas.width()
+        if short <= 0:
+            return
+        frame = dock.geometry()
+        width, x = frame.width() + short, frame.x()
+        screen = dock.screen()
+        if screen is not None:
+            room = screen.availableGeometry()
+            width = min(width, room.width())
+            x = max(room.x(), min(x, room.right() - width + 1))
+        dock.setGeometry(x, frame.y(), width, frame.height())
 
     def _show_display_panel(self) -> None:
         """Reveal and raise the (dockable) display-settings panel."""
@@ -2048,9 +2389,12 @@ class MainWindow(QMainWindow):
         A dock the user dragged out and then closed would otherwise reappear
         floating off-screen if the window has since moved, so anything being
         restored is re-docked on the way.
+
+        A panel with nothing to show is not restored: "all panels" means the
+        ones this file has, so a geometry does not get an empty list of modes.
         """
-        for _title, dock in self._panel_docks():
-            if dock.isHidden():
+        for title, dock in self._panel_docks():
+            if dock.isHidden() and self._panel_available(title):
                 dock.setFloating(False)
                 dock.show()
         self._info_dock.raise_()
@@ -2690,20 +3034,50 @@ class MainWindow(QMainWindow):
             self._update_reading_status()
 
     def _read_next(self) -> None:
-        """Start reading the next queued file, if there is one."""
-        if not self._pending_reads:
+        """Start reading what is next: a file, or else an output's details.
+
+        Files first, each only as far as its tab needs to be shown — the
+        structure, the modes, what the menus need to know. An output's own
+        account of its run, the Info panel's rows, is read afterwards: it costs
+        more than the structure (four passes over the output against one: 380
+        ms against 230 on a 3.5 MB anharmonic run, and more with every MB), and
+        the structure is what was asked for. So it is read once nothing else
+        is waiting, and arrives in the panel a moment after the structure.
+        """
+        details = self._details_queue()
+        if not self._pending_reads and not details:
             self._reading = False
             self._reader = None
+            self._reading_path = None
             self._update_reading_status()
             return
         self._reading = True
+        if not self._pending_reads:
+            # A pause first, for the file just shown to settle on screen. The
+            # details are read by CRYSTALClear in Python on a worker, and while
+            # they are this thread waits its turn for the interpreter: macOS's
+            # confirmation that the 3D view had narrowed for the Phonons panel
+            # came 400 ms late, and the structure was shown stretched until it
+            # did. A file asked for meanwhile still goes first.
+            if not getattr(self, "_details_paused", False):
+                self._details_paused = True
+                self._reading_path = None          # the file is shown: no "Reading" over it
+                self._update_reading_status()
+                QTimer.singleShot(_DETAILS_PAUSE_MS, self._read_next)
+                return
+            self._details_paused = False
+            self._read_details_next(details)
+            return
+        self._details_paused = False   # a file read now earns its own pause after
         path, front = self._pending_reads.pop(0)
         self._reading_path = path
         self._update_reading_status()
 
         def shown(read) -> None:
             try:
-                self._show_read_file(path, read, front)
+                tab = self._show_read_file(path, read, front)
+                if tab is not None and getattr(read, "output_path", None):
+                    self._details_queue().append((read.output_path, tab))
             finally:
                 self._read_next()
 
@@ -2722,21 +3096,80 @@ class MainWindow(QMainWindow):
         self._reader.failed.connect(failed)
         self._reader.start()
 
+    def _details_queue(self) -> list:
+        """The outputs whose details are still to be read (see :meth:`_read_next`)."""
+        queue = getattr(self, "_pending_details", None)
+        if queue is None:
+            queue = self._pending_details = []
+        return queue
+
+    def _read_details_next(self, details: list) -> None:
+        """Read the next output's details, and hand them to the tab it is in.
+
+        Quietly: its structure is already on screen, and a status bar saying
+        "Reading" over a file that is open would say it is not. A failure is
+        quiet too — the rows are best effort, as they always were.
+        """
+        path, tab = details.pop(0)
+        self._reading_path = None
+        self._update_reading_status()
+
+        def done(props) -> None:
+            try:
+                self._deliver_details(tab, path, props)
+            finally:
+                self._read_next()
+
+        self._reader = Worker(lambda: _read_details(path))
+        self._reader.finished.connect(done)
+        self._reader.failed.connect(lambda _exc: self._read_next())
+        self._reader.start()
+
+    def _deliver_details(self, tab: FileTab, path: str, props: dict) -> None:
+        """Put an output's details into ``tab``, if it still holds that output.
+
+        A tab read in behind and not looked at yet keeps them with the rest of
+        what was read, for when it is built. One that has been closed, or has
+        taken another file since, is left alone.
+        """
+        if tab not in self._tabs:
+            return
+        if tab.pending is not None:
+            pending_path, read = tab.pending
+            if pending_path == path:
+                read.output_props = props
+            return
+        if tab.path != path:
+            return
+        self._routed(tab, self._set_output_props)(props)
+
+    def _set_output_props(self, props: dict) -> None:
+        """Show the output's own rows, with the crystallography left as it is."""
+        self._output_props = props or {}
+        self.info_panel.set_output_props(self._output_props)
+
     def _update_reading_status(self) -> None:
-        """Say in the status bar which file is being read, and how many are to come."""
+        """Say in the status bar which file is being read, and how many are to come.
+
+        Files only: an output's details are read without a word, and while they
+        are, a file asked for since is named as the one coming next.
+        """
         label = getattr(self, "_reading_status", None)
         if label is None:
             return
-        if not self._reading:
+        current, waiting = self._reading_path, len(self._pending_reads)
+        if current is None and waiting:
+            current, waiting = self._pending_reads[0][0], waiting - 1
+        if not self._reading or current is None:
             label.hide()
             return
-        text = f"Reading {os.path.basename(self._reading_path)}…"
-        if self._pending_reads:
-            text += f"  {len(self._pending_reads)} more to come"
+        text = f"Reading {os.path.basename(current)}…"
+        if waiting:
+            text += f"  {waiting} more to come"
         label.setText(text)
         label.show()
 
-    def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> None:
+    def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> FileTab:
         """Put a file that has been read into a tab.
 
         In front — the tab on screen, if that one is empty (the window opens on
@@ -2753,11 +3186,12 @@ class MainWindow(QMainWindow):
             self._fill_tab(tab, path, read)
             self._settle_tab(tab)  # filled on screen: shown finished, not a frame early
             self._show_notice(tab)
-            return
+            return tab
         tab = self._add_tab(show=False)
         tab.path = path
         tab.pending = (path, read)
         self._update_tab_labels()
+        return tab
 
     def _show_notice(self, tab: FileTab) -> None:
         """Say what opening ``tab``'s file had to leave out — once, when it is seen.
@@ -2991,8 +3425,12 @@ class MainWindow(QMainWindow):
         PropertiesBuilderDialog(structure, self).exec()
 
     # ── remembered plot-dialog settings ─────────────────────────────────
-    def _restore_dialog(self, dialog, key: str) -> None:
+    def _restore_dialog(self, dialog, key: str, state: Optional[dict] = None) -> None:
         """Reopen a plot dialog on the settings it was last accepted with.
+
+        ``state`` overrides those: a plot being edited is reopened on its own
+        settings, which are the plot's, while the remembered ones are where the
+        next *new* plot starts.
 
         Also tidies its forms. Every plot dialog is opened through here, so it is
         the one place that reaches all of them — see :func:`theme.tidy_forms` for
@@ -3002,7 +3440,7 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.dialog_state import restore
 
         theme.tidy_forms(dialog)
-        restore(dialog, self._plot_dialog_state.get(key))
+        restore(dialog, state if state is not None else self._plot_dialog_state.get(key))
 
     def _remember_dialog(self, dialog, key: str) -> None:
         """Keep an accepted dialog's settings for the next time it is opened.
@@ -3420,7 +3858,8 @@ class _ReadFile:
     loaded: object                  # crystalio.LoadedFile: the structure, and modes if any
     output_path: Optional[str]      # the CRYSTAL output; None for a geometry-only file
     adps: Optional[ADPSet]          # thermal ellipsoids, when the run has them
-    output_props: dict              # the run's own rows for the Info panel
+    output_props: Optional[dict]    # the run's own rows for the Info panel: None
+                                    # until _read_details has read them
     capabilities: dict              # probe key → what _probe found
 
 
@@ -3432,7 +3871,7 @@ def _read_file(path: str) -> _ReadFile:
     most runs carry no ADPs, not every output has the rows the Info panel shows,
     and a probe that fails here is simply left for the window to ask again.
     """
-    from crystalline.crystalio import load, load_adp, output_properties
+    from crystalline.crystalio import load, load_adp
 
     loaded = load(path)
     # Geometry-only files (.gui/.f34/.cif) carry no results to plot.
@@ -3441,17 +3880,30 @@ def _read_file(path: str) -> _ReadFile:
         adps = load_adp(path)
     except Exception:  # noqa: BLE001 - never let this break loading a file
         adps = None
-    try:
-        output_props = output_properties(path) or {}
-    except Exception:  # noqa: BLE001 - never let output parsing break loading
-        output_props = {}
     capabilities = {}
     for key in _PROBES:
         try:
             capabilities[key] = _probe(key, output_path)
         except Exception:  # noqa: BLE001 - asked again, and reported, by the window
             pass
-    return _ReadFile(loaded, output_path, adps, output_props, capabilities)
+    # The run's own rows are not read here: see _read_details.
+    return _ReadFile(loaded, output_path, adps, None, capabilities)
+
+
+def _read_details(path: str) -> dict:
+    """An output's account of its own run, for the Info panel.
+
+    Read after its structure, not with it (see :meth:`MainWindow._read_next`):
+    the setup, the energy, the gap and the Fermi level are each a pass over the
+    whole output in CRYSTALClear, and together they cost more than the
+    structure the user is waiting to see.
+    """
+    from crystalline.crystalio import output_properties
+
+    try:
+        return output_properties(path) or {}
+    except Exception:  # noqa: BLE001 - never let output parsing break anything
+        return {}
 
 
 def _no_title_bar(dock: QDockWidget) -> QWidget:
@@ -3470,16 +3922,22 @@ def _no_title_bar(dock: QDockWidget) -> QWidget:
     return bar
 
 
-def _floating_plot_geometry(window: QRect, screen: Optional[QRect]) -> QRect:
+def _floating_plot_geometry(window: QRect, screen: Optional[QRect],
+                            beside: int = 0, aspect: float = _PLOT_ASPECT) -> QRect:
     """Where the floating Plots window should sit, given the main window's frame.
 
-    A 4:3 panel — matplotlib's own default figure ratio, so axes get room in both
-    directions instead of the letterbox a bottom dock imposes — sized against the
-    main window and tucked towards its lower right so the 3D view stays visible.
+    The 4:3 is the *figure's* — matplotlib's own default ratio, so axes get room
+    in both directions instead of the letterbox a bottom dock imposes — and
+    ``beside`` is anything standing next to it, the live controls among them,
+    which is added on top rather than taken out of the plot. A figure that
+    wants another ``aspect`` keeps the 4:3's height and takes the width it
+    needs. Sized against the main window and tucked towards its lower right so
+    the 3D view stays visible.
     Clamped to ``screen`` (when known) so it can't open partly off-display.
     """
     width = max(_PLOT_FLOAT_MIN_WIDTH, int(window.width() * _PLOT_FLOAT_WIDTH_FRACTION))
-    height = int(round(width * 3 / 4))
+    height = int(round(width / _PLOT_ASPECT))
+    width = int(round(height * aspect)) + max(0, int(beside))
     if screen is not None and not screen.isEmpty():
         width = min(width, screen.width())
         height = min(height, screen.height())
