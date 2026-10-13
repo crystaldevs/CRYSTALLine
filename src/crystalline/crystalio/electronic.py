@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -113,7 +113,21 @@ class DosInfo:
 
 
 def describe_bands(path: str) -> BandsInfo:
-    """Read a band file (``BAND.DAT``, ``*.BAND``, ``fort.25``) for the dialog."""
+    """Read a band file (``BAND.DAT``, ``*.BAND``, ``fort.25``) for the dialog.
+
+    Remembered for this version of the file (see
+    :mod:`~crystalline.crystalio.remembered`): the dialog reads every band
+    file in the folder to rank them, then the chosen one again to pair it and
+    again to set itself up, and opening it again read them all once more.
+    The plot does not come through here: it modifies what it reads, so it
+    reads afresh.
+    """
+    from crystalline.crystalio import remembered
+
+    return remembered.read("bands-info", (path,), lambda: _describe_bands(path), light=True)
+
+
+def _describe_bands(path: str) -> BandsInfo:
     bands = _read_bands(path)
     energies = np.asarray(bands.bands, dtype=float)
     return BandsInfo(path=path, spin=int(bands.spin), efermi=float(bands.efermi),
@@ -124,7 +138,16 @@ def describe_bands(path: str) -> BandsInfo:
 
 
 def describe_dos(path: str) -> DosInfo:
-    """Read a DOS file (``DOSS.DAT``, ``*.DOSS``, ``fort.25``) for the dialog."""
+    """Read a DOS file (``DOSS.DAT``, ``*.DOSS``, ``fort.25``) for the dialog.
+
+    Remembered, as :func:`describe_bands` is.
+    """
+    from crystalline.crystalio import remembered
+
+    return remembered.read("dos-info", (path,), lambda: _describe_dos(path), light=True)
+
+
+def _describe_dos(path: str) -> DosInfo:
     doss = _read_dos(path)
     data = np.asarray(doss.doss, dtype=float)
     energies, values = data[:, 0, ...], data[:, 1:, ...]
@@ -316,8 +339,14 @@ def pair_files(bands: Sequence[str], doss: Sequence[str],
 
 
 def _efermi_of(reader, path: str) -> Optional[float]:
+    """The Fermi level ``path`` records, read through its remembered description.
+
+    So that ranking a folder, pairing its files and setting the dialog up all
+    share one read of each file, rather than one each.
+    """
+    describe = describe_bands if reader is _read_bands else describe_dos
     try:
-        return float(reader(path).efermi)
+        return float(describe(path).efermi)
     except Exception:  # noqa: BLE001 - an unreadable file simply pairs with nothing
         return None
 
@@ -561,6 +590,32 @@ class ElectronicOptions:
     _extra: dict = field(default_factory=dict)
 
 
+def legend_names_anything(mode: str, projections: int, bands_polarised: bool,
+                          dos_polarised: bool, overlay: bool = True) -> bool:
+    """Whether a legend on this plot would tell anything apart.
+
+    Only then is one drawn, and only then is it offered. A band structure on
+    its own is one set of lines, with nothing to name until it is
+    spin-polarised and α has to be told from β. A DOS names its projections,
+    which takes two of them; its spins are told apart only when the
+    projections are split into panels — on one axis CRYSTALClear names α and β
+    alike, so the spin adds nothing there. Beside the bands, either: several
+    projections, or the bands' two spins.
+    """
+    several = projections > 1
+    if mode == BANDS:
+        return bool(bands_polarised)
+    if mode == DOS:
+        return several or (bool(dos_polarised) and not overlay)
+    return several or bool(bands_polarised)
+
+
+def plot_title(mode: str) -> str:
+    """What a tab drawn in ``mode`` is called."""
+    return {BANDS: "Band structure", DOS: "Density of states",
+            BANDS_AND_DOS: "Bands + DOS"}[mode]
+
+
 def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = None,
                     options: Optional[ElectronicOptions] = None):
     """Draw a band structure, a DOS, or the two side by side. Returns a Figure."""
@@ -577,6 +632,12 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
 
     bands = _read_bands(bands_path) if need_bands else None
     doss = _read_dos(dos_path) if need_dos else None
+    # A legend of one entry, or of none, is not drawn whatever was asked: it
+    # names the one thing on the plot, which its tab already does.
+    drawn = len(_projections(options.projections, doss.n_proj)) if doss is not None else 0
+    options = replace(options, legend=options.legend and legend_names_anything(
+        options.mode, drawn, bands is not None and int(bands.spin) == 2,
+        doss is not None and int(doss.spin) == 2, options.overlay_projections))
 
     # Everything is read in eV, relative to E_F. An absolute plot moves the data
     # up by E_F *before* CRYSTALClear converts units, so the shift and the unit
@@ -827,7 +888,9 @@ __all__ = [
     "deck_labels",
     "name_ticks",
     "pair_files",
+    "legend_names_anything",
     "path_labels",
+    "plot_title",
     "read_band_decks",
     "plot_electronic",
     "suggest_window",

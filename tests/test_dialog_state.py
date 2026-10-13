@@ -128,3 +128,55 @@ def test_the_real_spectra_dialog_round_trips(qapp):
     restore(second, capture(first))
 
     assert second.options() == wanted
+
+
+# ── what a dialog has selected ────────────────────────────────────────────
+class _Picky:
+    """A dialog that knows what "selected" means for it, as the spectra one does."""
+
+    def __init__(self, available):
+        self.available = list(available)
+        self.chosen = []
+
+    def selection_state(self):
+        return list(self.chosen)
+
+    def set_selection_state(self, names):
+        # Only what this one actually holds, as a different run holds different
+        # curves — the same rule as a combo entry that is no longer offered.
+        self.chosen = [name for name in (names or ()) if name in self.available]
+
+
+def test_what_was_selected_is_remembered_and_put_back():
+    """Reopening a dialog to find the ticks gone is what sends people back to
+    the menu to build the plot again."""
+    first = _Picky(["IR_HO_0K", "Ram_HO_0K_tot"])
+    first.chosen = ["Ram_HO_0K_tot"]
+
+    state = capture(first)
+    again = _Picky(["IR_HO_0K", "Ram_HO_0K_tot"])
+    restore(again, state)
+
+    assert again.chosen == ["Ram_HO_0K_tot"]
+
+
+def test_a_selection_the_next_file_does_not_hold_is_dropped():
+    """By name, never by position: another output has other curves, and its
+    third row is not this one's third row."""
+    first = _Picky(["IR_HO_0K", "Ram_VCI_T_comp_zz"])
+    first.chosen = ["Ram_VCI_T_comp_zz"]
+    state = capture(first)
+
+    harmonic_only = _Picky(["IR_HO_0K"])
+    restore(harmonic_only, state)
+
+    assert harmonic_only.chosen == []          # not ticked, and nothing raised
+
+
+def test_a_dialog_without_a_selection_is_untouched():
+    class _Plain:
+        pass
+
+    state = capture(_Plain())
+    restore(_Plain(), state)      # neither captured nor restored
+    assert "__selection__" not in state

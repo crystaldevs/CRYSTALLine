@@ -12,7 +12,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QRect, Qt  # noqa: E402
-from PySide6.QtWidgets import QApplication, QDockWidget, QMainWindow  # noqa: E402
+from PySide6.QtWidgets import QApplication, QDockWidget, QMainWindow, QWidget  # noqa: E402
 
 from crystalline.ui.main_window import MainWindow, _floating_plot_geometry  # noqa: E402
 
@@ -47,13 +47,39 @@ def test_floating_plot_geometry_is_clamped_to_a_small_screen():
 class _StubWindow(QMainWindow):
     """Only what ``_reveal_plot_dock`` touches, so no VTK is needed."""
 
-    def __init__(self) -> None:
+    def __init__(self, controls: int = 0) -> None:
         super().__init__()
         self.resize(1200, 800)
         self._plot_dock = QDockWidget("Plots", self)
         self.addDockWidget(Qt.BottomDockWidgetArea, self._plot_dock)
         self._plot_dock.hide()
         self._plot_dock_floated = False
+        self.plot_panel = type("_Panel", (), {"controls_width": lambda _s: controls,
+                                              "current_tab": lambda _s: None})()
+
+    _figure_aspect = MainWindow._figure_aspect
+    _widen_plot_window = MainWindow._widen_plot_window
+
+
+def test_the_four_by_three_is_the_figure_s_not_the_window_s():
+    """A column of controls beside the plot came out of the plot's own width,
+    which left the figure letterboxed in a window that measured 4:3."""
+    frame = QRect(0, 0, 1200, 800)
+    plain = _floating_plot_geometry(frame, _SCREEN)
+    with_controls = _floating_plot_geometry(frame, _SCREEN, beside=378)
+
+    assert with_controls.width() - plain.width() == 378   # added, not taken out
+    assert with_controls.height() == plain.height()       # the figure keeps its shape
+    assert plain.width() / plain.height() == pytest.approx(4 / 3, abs=0.01)
+
+
+def test_the_window_asks_the_panel_how_much_its_controls_want(qapp):
+    plain, with_controls = _StubWindow(), _StubWindow(controls=200)
+
+    MainWindow._reveal_plot_dock(plain)
+    MainWindow._reveal_plot_dock(with_controls)
+
+    assert with_controls._plot_dock.width() > plain._plot_dock.width()
 
 
 def test_first_plot_floats_the_dock_then_leaves_it_alone(qapp):
@@ -258,3 +284,76 @@ def test_the_toolbar_sits_below_the_figure(qapp):
     assert canvas_at < len(widgets) - 1, "the toolbar should follow the canvas"
 
     panel.clear()   # and closing it must not leave a draw queued on a dead canvas
+
+
+# ── a figure that wants another shape ────────────────────────────────────
+def test_a_wider_figure_keeps_the_height_and_takes_the_width():
+    """Bands beside a DOS: two panels in one figure, whose path labels ran into
+    each other at 4:3. The window opens as tall as ever, and wider."""
+    frame = QRect(0, 0, 1200, 800)
+    plain = _floating_plot_geometry(frame, _SCREEN, beside=300)
+    wide = _floating_plot_geometry(frame, _SCREEN, beside=300, aspect=2.0)
+
+    assert wide.height() == plain.height()
+    assert (wide.width() - 300) / wide.height() == pytest.approx(2.0, abs=0.01)
+    assert _SCREEN.contains(wide)
+
+
+class _Tab:
+    """A plot tab: its canvas, and the recipe that says what shape it wants."""
+
+    def __init__(self, parent, aspect=None):
+        from crystalline.ui.panels.plot_view import PlotRecipe
+
+        self.canvas = QWidget(parent)
+        self.canvas.setGeometry(0, 0, 300, 225)          # a 4:3 figure
+        self.recipe = PlotRecipe(draw=lambda **o: None,
+                                 aspect=(lambda _o: aspect) if aspect else None)
+
+
+def _floating(window):
+    dock = window._plot_dock
+    dock.setFloating(True)
+    dock.setGeometry(0, 50, 500, 400)
+    dock.show()
+    return dock
+
+
+def test_a_plot_that_wants_more_width_widens_the_open_window(qapp):
+    window = _StubWindow()
+    window.show()
+    dock = _floating(window)
+    before = dock.geometry()
+
+    window._widen_plot_window(_Tab(dock, aspect=2.0))
+
+    assert dock.width() == before.width() + (450 - 300)  # the figure's 300 -> 2 x 225
+    assert dock.height() == before.height()
+    window.close()
+
+
+def test_widening_stops_at_the_edge_of_the_screen(qapp):
+    window = _StubWindow()
+    window.show()
+    dock = _floating(window)
+    screen = dock.screen().availableGeometry()
+
+    window._widen_plot_window(_Tab(dock, aspect=8.0))    # far more than there is
+
+    assert dock.width() == screen.width()
+    assert screen.contains(dock.geometry())
+    window.close()
+
+
+def test_the_window_is_never_narrowed_under_the_user(qapp):
+    """Its size may be the user's own, and one that shrank whenever a 4:3 plot
+    followed a wide one would jump about."""
+    window = _StubWindow()
+    window.show()
+    dock = _floating(window)
+    before = dock.geometry()
+
+    window._widen_plot_window(_Tab(dock))                # 4:3, and it already is
+
+    assert dock.geometry() == before
+    window.close()

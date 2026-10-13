@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import math
 import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence
@@ -70,6 +71,23 @@ BROADENING_PARAMETERS = {
 DEFAULT_HWHM = 5.0    # Lorentzian half-width at half-maximum, cm^-1
 DEFAULT_STDEV = 3.0   # Gaussian standard deviation, cm^-1
 DEFAULT_ETA = 0.5     # Lorentzian fraction of a pseudo-Voigt, 0 to 1
+DEFAULT_LINEWIDTH = 2.0   # plot_cry_spec_multi's own, in points
+
+# How the curves are coloured: (label, name). The default is matplotlib's own
+# cycle, which is what every spectrum was drawn in before there was a choice.
+# Okabe and Ito's eight are told apart under every common colour-vision
+# deficiency (the yellow, faint on white, comes last); viridis runs dark to
+# light along the curves, which suits a series — temperatures, pressures — read
+# in order; greys are for print, stopping short of the white of the page.
+COLOUR_SCHEMES = (
+    ("Default", "default"),
+    ("Colour-blind safe", "colourblind"),
+    ("Viridis (a series)", "viridis"),
+    ("Greys (for print)", "greys"),
+)
+DEFAULT_COLOURS = "default"
+_OKABE_ITO = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9",
+              "#000000", "#F0E442")
 
 
 @dataclass(frozen=True)
@@ -203,6 +221,10 @@ def plot_spectra(
     stdev: float = DEFAULT_STDEV,
     eta: float = DEFAULT_ETA,
     frequency_range: Optional[tuple] = None,
+    offset: float = 0.0,
+    legend: bool = True,
+    linewidth: float = DEFAULT_LINEWIDTH,
+    colours: str = DEFAULT_COLOURS,
     title: Optional[str] = None,
 ):
     """Overlay ``datasets`` — ``(label, (N, 2) array)`` pairs — on one figure.
@@ -218,45 +240,184 @@ def plot_spectra(
     pure Lorentzian and ``eta = 0`` pure Gaussian. A plain Lorentzian uses only
     ``hwhm``, a plain Gaussian only ``stdev``, and a stick spectrum none of them;
     the unused ones are passed anyway and ignored downstream.
+
+    ``legend`` names the curves on the figure. Off, they keep their colours and
+    the panel's own list says which is which; a legend sits over the plot, and
+    on a crowded spectrum it hides the peaks it is there to name.
+
+    ``offset`` stacks the curves instead of laying them on top of one another,
+    each one raised above the one before: six Raman components overlaid exactly
+    are six curves sharing every baseline, and which is which stops being
+    readable long before the sixth. It is given here as a *fraction of the
+    tallest peak drawn*, not as an intensity, because what the intensities mean
+    differs between an IR spectrum and a Raman one and no absolute number could
+    be right for both; ``plot_cry_spec_multi``, which does the stacking, is
+    handed the fraction converted to the units of the data in hand (see
+    :func:`_tallest_peak`).
+
+    ``colours`` names one of :data:`COLOUR_SCHEMES`, applied to the curves in
+    the order they were given.
     """
     from crystalline.crystalio.plotting import _plot_module
 
     CCplt = _plot_module()  # imports CRYSTALClear with a non-interactive backend
-    import matplotlib.pyplot as plt
 
     if not datasets:
         raise ValueError("no spectra selected")
 
     fmin, fmax = (None, None) if frequency_range is None else frequency_range
-    figure, axes = plt.subplots(figsize=(9, 5))
-    for label, data in datasets:
-        CCplt.plot_cry_spec(
-            np.asarray(data, dtype=float),
-            typeS=lineshape,
-            bwidth=hwhm,
-            stdev=stdev,
-            eta=eta,
-            fmin=fmin,
-            fmax=fmax,
-            label=label,
-            fig=figure,
-            ax=axes,
-        )
-    if len(datasets) > 1:
-        axes.legend(loc="best", fontsize="small")
+    curves = [np.asarray(data, dtype=float) for _label, data in datasets]
+    if lineshape == "bars" and frequency_range is not None:
+        # plot_cry_spec draws every stick it is handed, whatever fmin and fmax
+        # say — the window only bounds the zero baseline they stand on — so a
+        # stick spectrum asked for 200-1200 cm-1 ran out to the O-H stretch.
+        # A broadened one is left whole: lines outside the window still have
+        # tails inside it.
+        low, high = sorted(float(bound) for bound in frequency_range)
+        curves = [curve[(curve[:, 0] >= low) & (curve[:, 0] <= high)] for curve in curves]
+    labels = [label for label, _data in datasets]
+    figure, axes = CCplt.plot_cry_spec_multi(
+        curves,
+        typeS=lineshape,
+        bwidth=hwhm,
+        stdev=stdev,
+        eta=eta,
+        fmin=fmin,
+        fmax=fmax,
+        # A legend of one entry names the thing its own title already names,
+        # so one curve never has one; past that it is the figure's owner who
+        # decides, since a legend over a crowded spectrum hides the peaks it
+        # is there to name.
+        label=labels if (legend and len(curves) > 1) else None,
+        offset=float(offset) * _tallest_peak(
+            curves, lineshape=lineshape, hwhm=hwhm, stdev=stdev, eta=eta,
+            frequency_range=frequency_range,
+        ) if offset else 0.0,
+        linewidth=linewidth,
+        figsize=(9, 5),
+    )
+    _colour_curves(axes, colours)
     if title:
         axes.set_title(title)
     return figure
 
 
+def scheme_colours(scheme: str, count: int) -> Optional[List[str]]:
+    """``count`` colours of ``scheme``, or ``None`` to keep matplotlib's own."""
+    if scheme == "colourblind":
+        return [_OKABE_ITO[i % len(_OKABE_ITO)] for i in range(count)]
+    if scheme in ("viridis", "greys"):
+        from matplotlib import colormaps
+        from matplotlib.colors import to_hex
+
+        # Short of the light end of either map: viridis' last yellow and
+        # anything past a mid grey vanish into a white page.
+        low, high = (0.0, 0.85) if scheme == "viridis" else (0.0, 0.6)
+        cmap = colormaps["viridis" if scheme == "viridis" else "Greys_r"]
+        if count == 1:
+            return [to_hex(cmap(low))]
+        return [to_hex(cmap(low + (high - low) * i / (count - 1))) for i in range(count)]
+    return None
+
+
+def _colour_curves(axes, scheme: str) -> None:
+    """Recolour the drawn curves, and the legend that names them.
+
+    CRYSTALClear draws each curve as one line, in the order it was handed
+    them, and takes no colours of its own; so they are set here, afterwards.
+    The legend keeps copies of the lines it was made from, so its handles are
+    recoloured too rather than left naming curves by their old colours.
+    """
+    lines = axes.get_lines()
+    colours = scheme_colours(scheme, len(lines))
+    if colours is None:
+        return
+    for line, colour in zip(lines, colours):
+        line.set_color(colour)
+    legend = axes.get_legend()
+    if legend is not None:
+        handles = getattr(legend, "legend_handles", None) or legend.legendHandles
+        for handle, colour in zip(handles, colours):
+            handle.set_color(colour)
+
+
+# How many points the tallest peak is looked for at in one go: a (points x
+# transitions) block of this many rows stays a few MB even for the two thousand
+# transitions of an anharmonic Raman curve at temperature.
+_PEAK_ROWS = 256
+
+
+def _tallest_peak(curves, *, lineshape, hwhm, stdev, eta, frequency_range) -> float:
+    """The height of the tallest peak among ``curves`` as they are drawn.
+
+    Not the tallest transition: broadening spreads a transition's intensity
+    over its width, so a Lorentzian of HWHM 5 cm⁻¹ peaks at a sixteenth of it,
+    and an offset measured against the transitions lifted each curve by many
+    times the height of anything on screen. Measured against what is drawn,
+    the slider's travel is the height of the spectra, and the stack keeps its
+    proportions as the widths change, since the curves and the gaps between
+    them scale together.
+
+    Only what falls inside ``frequency_range`` counts, as only that is drawn,
+    though every transition's tail adds to it.
+
+    The broadened curve is evaluated at the transitions themselves rather than
+    over the drawing's own grid: a peak sits on a transition, or on several
+    that coincide, which a degenerate mode does. Two close lines merging into
+    one bump between them are the exception, and peak a few per cent above
+    either line — immaterial for a control set by eye, and the price of the
+    answer costing nothing next to drawing the curves.
+    """
+    tallest = 0.0
+    for curve in curves:
+        transitions = np.asarray(curve, dtype=float)
+        if not len(transitions):
+            continue
+        centres, intensities = transitions[:, 0], transitions[:, 1]
+        drawn = np.ones(len(centres), dtype=bool)
+        if frequency_range is not None:
+            low, high = sorted(float(bound) for bound in frequency_range)
+            drawn = (centres >= low) & (centres <= high)
+        if not drawn.any():
+            continue
+        if lineshape == "bars":
+            # Sticks are drawn one by one: coincident ones overlap, not add.
+            tallest = max(tallest, float(np.max(intensities[drawn])))
+            continue
+        points = centres[drawn]
+        for start in range(0, len(points), _PEAK_ROWS):
+            squared = (points[start:start + _PEAK_ROWS, None] - centres[None, :]) ** 2
+            heights = _profile(squared, lineshape, hwhm, stdev, eta) @ intensities
+            tallest = max(tallest, float(np.max(heights)))
+    return tallest
+
+
+def _profile(squared, lineshape, hwhm, stdev, eta):
+    """``plot_cry_spec``'s unit-area profiles, from squared distances."""
+    if lineshape == "gauss":
+        return _gaussian(squared, stdev)
+    lorentzian = (hwhm / math.pi) / (squared + hwhm * hwhm)
+    if lineshape == "lorentz":
+        return lorentzian
+    return eta * lorentzian + (1.0 - eta) * _gaussian(squared, stdev)
+
+
+def _gaussian(squared, stdev):
+    return np.exp(squared / (-2.0 * stdev * stdev)) / (stdev * math.sqrt(2.0 * math.pi))
+
+
 __all__ = [
     "BROADENING_PARAMETERS",
+    "COLOUR_SCHEMES",
+    "DEFAULT_COLOURS",
     "DEFAULT_ETA",
     "DEFAULT_HWHM",
+    "DEFAULT_LINEWIDTH",
     "DEFAULT_STDEV",
     "LINESHAPES",
     "SpectrumKind",
     "available_spectra",
     "load_spectra",
     "plot_spectra",
+    "scheme_colours",
 ]

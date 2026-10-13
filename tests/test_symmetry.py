@@ -476,3 +476,62 @@ def test_markup_in_a_label_cannot_reach_the_widget_as_markup():
     """The text is drawn as HTML, so anything that looks like a tag has to be
     escaped on the way in."""
     assert S.rich("<b>2") == "&lt;b&gt;2"
+
+
+# ── linear molecules ──────────────────────────────────────────────────────
+def test_an_infinite_order_axis_is_written_with_an_infinity_sign():
+    """pymatgen spells it with an asterisk — D*h — which is no one's convention
+    on paper and reads as a footnote mark."""
+    from ase.build import molecule
+
+    assert S.analyse(Structure.from_ase(molecule("CO2"))).group == "D∞h"
+    assert S.analyse(Structure.from_ase(molecule("CO"))).group == "C∞v"
+
+
+def test_a_linear_molecule_says_why_it_lists_so_little():
+    """Carbon dioxide is D∞h and shows one element, the inversion centre: the
+    rest of the group is infinite families — every rotation about the axis,
+    every plane through it, every two-fold axis across it — and a single
+    arbitrary member of a family drawn in the view would read as the element
+    itself. Saying so is the difference between a short list and a broken one."""
+    from ase.build import molecule
+
+    co2 = S.analyse(Structure.from_ase(molecule("CO2")))
+    assert [e.label for e in co2.elements] == ["i"]
+    assert "every two-fold axis across it" in co2.note
+    assert co2.note in co2.summary()
+
+    co = S.analyse(Structure.from_ase(molecule("CO")))
+    assert co.elements == []            # C∞v has nothing there is one of
+    assert "every two-fold axis" not in co.note          # it has no such axes
+    assert co.note in co.summary()
+
+    water = S.analyse(Structure.from_ase(molecule("H2O")))
+    assert water.note == ""             # nothing infinite about C2v
+
+
+def test_every_operator_through_the_centre_is_drawn_by_some_element():
+    """The complaint that started this: a group whose elements are not all
+    listed. For a crystal it cannot happen — only 1-, 2-, 3-, 4- and 6-fold
+    axes exist, so every element is finite — and the only operator that draws
+    nothing is the identity, which marks out no axis, plane or point. Anything
+    else going missing would be a classification that quietly returned None."""
+    from ase.spacegroup import crystal as ase_crystal
+
+    cases = {
+        "NaCl": Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)),
+        "Si": Structure.from_ase(bulk("Si", "diamond", a=5.43)),
+        "Mg": Structure.from_ase(bulk("Mg", "hcp", a=3.21, c=5.21)),
+        "rutile": Structure.from_ase(ase_crystal(
+            ("Ti", "O"), basis=[(0, 0, 0), (0.3, 0.3, 0)], spacegroup=136,
+            cellpar=[4.59, 4.59, 2.96, 90, 90, 90])),
+    }
+    for name, structure in cases.items():
+        atoms = structure.to_ase()
+        operations, cell, _naming = S._operations(atoms, structure, 1e-2)
+        centre, kept = S._centre_and_operators(
+            operations, cell, np.asarray(atoms.get_positions()))
+        drawn = [S._classify(rotation, centre, True) for rotation, _ in kept]
+
+        assert drawn.count(None) == 1, f"{name}: only the identity draws nothing"
+        assert len(kept) > 1, name

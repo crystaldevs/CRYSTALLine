@@ -49,7 +49,8 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.crystalio import electronic as el
-from crystalline.ui.panels.controls import ColourButton, Section, range_row, slider_row
+from crystalline.ui.panels.controls import (ColourButton, Section, range_row, set_span,
+                                            slider_row)
 from crystalline.ui.safety import guard
 from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
@@ -87,6 +88,11 @@ class ElectronicDialog(QDialog):
         # The unit and reference the range boxes are written in, so a change
         # of either can carry the numbers across instead of reinterpreting them.
         self._frame_shown = ("eV", el.RELATIVE)
+        # A plot's own energy window and DOS range, when the dialog is opened to
+        # edit one: put on the tracks once the first show has fitted them to
+        # the files, which would otherwise move the handles back to where they
+        # start for a new plot (see set_request).
+        self._held = None
 
         outer = QVBoxLayout(self)
         intro = WrappedLabel(
@@ -208,11 +214,14 @@ class ElectronicDialog(QDialog):
         header.setSectionResizeMode(0, QHeaderView.Stretch)
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self._table.setMinimumHeight(150)
+        # Ticking a projection can be what makes a legend worth having.
+        self._table.itemChanged.connect(lambda _item: self._sync())
         self._table.setToolTip("Tick the projections to draw. Double-click a name "
                                "to change what the legend calls it.")
         dos.add("Projections", self._table)
         self.overlay = QCheckBox("Draw the projections on one axis", self)
         self.overlay.setChecked(True)
+        self.overlay.toggled.connect(lambda _on: self._sync())
         self.overlay.setToolTip(
             "On one axis with a legend, or one panel each. The band+DOS view "
             "always draws them together.")
@@ -233,7 +242,8 @@ class ElectronicDialog(QDialog):
         self._dos_section = dos
 
     def _build_appearance(self, column) -> None:
-        look = Section(column, "Appearance")
+        # Folded, as beside the plot: set once, if at all.
+        look = Section(column, "Appearance", collapsed=True)
         self.band_colour = ColourButton(el.BAND_COLOUR, "Band colour", self)
         look.add("Bands", _row(self.band_colour))
 
@@ -311,6 +321,10 @@ class ElectronicDialog(QDialog):
             start, _BAND_FILTER if kind == "band" else _DOS_FILTER)
         if not path:
             return
+        self._choose(kind, path)
+
+    def _choose(self, kind: str, path: str) -> None:
+        """Make ``path`` the chosen file of ``kind``, listed if it was not."""
         combo = self._files[kind]
         index = combo.findData(path)
         if index < 0:
@@ -416,7 +430,7 @@ class ElectronicDialog(QDialog):
             return
         bounds = sorted(self._shown(v, frame) for v in span)
         values = sorted(self._shown(v, frame) for v in window)
-        _set_range(self._energy, *bounds, *values)
+        set_span(self._energy, *bounds, *values)
 
     @guard()
     def _on_frame_chosen(self, _index: int = 0) -> None:
@@ -427,13 +441,13 @@ class ElectronicDialog(QDialog):
         values = [self._shown(self._canonical(box.value(), old), new) for box in (low, high)]
         bounds = sorted(self._shown(self._canonical(v, old), new) for v in slider.bounds())
         self._format_energy(new[0])
-        _set_range(self._energy, *bounds, *sorted(values))
+        set_span(self._energy, *bounds, *sorted(values))
         if new[0] != old[0]:
             # states/eV <-> states/Hartree: CRYSTALClear rescales the DOS too.
             factor = _HARTREE_EV if new[0] == "Hartree" else 1.0 / _HARTREE_EV
             dslider, dlow, dhigh = self._dos_span
             dbounds = [v * factor for v in dslider.bounds()]
-            _set_range(self._dos_span, *dbounds, dlow.value() * factor, dhigh.value() * factor)
+            set_span(self._dos_span, *dbounds, dlow.value() * factor, dhigh.value() * factor)
         self._frame_shown = new
 
     def _fit_dos(self) -> None:
@@ -443,7 +457,7 @@ class ElectronicDialog(QDialog):
         top = info.dos_max * (_HARTREE_EV if self.unit.currentData() == "Hartree" else 1.0)
         mirrored = info.spin == 2 and self.spin_down.currentData() == el.SPIN_MIRRORED
         bound, value = _nice(top * 1.25), _nice(top * 1.05)
-        _set_range(self._dos_span, -bound if mirrored else 0.0, bound,
+        set_span(self._dos_span, -bound if mirrored else 0.0, bound,
                    -value if mirrored else 0.0, value)
 
     def _on_mode_changed(self, _index: int = 0) -> None:
@@ -457,7 +471,29 @@ class ElectronicDialog(QDialog):
             self._shown_once = True
             self._fit_energy()
             self._fit_dos()
+            self._apply_held()
         super().showEvent(event)
+
+    def _apply_held(self) -> None:
+        """Put a plot's own window and DOS range on the freshly fitted tracks.
+
+        Widened to take them if need be: a window dragged past where the
+        files' span was rounded to is still the window the plot is drawn in.
+        """
+        if self._held is None:
+            return
+        energy, dos = self._held
+        self._held = None
+        if energy is not None:
+            slider = self._energy[0]
+            low, high = sorted(energy)
+            bottom, top = slider.bounds()
+            set_span(self._energy, min(bottom, low), max(top, high), low, high)
+        if dos is not None:
+            slider = self._dos_span[0]
+            low, high = sorted(dos)
+            bottom, top = slider.bounds()
+            set_span(self._dos_span, min(bottom, low), max(top, high), low, high)
 
     # ── keeping the controls honest ─────────────────────────────────────
     def _needs(self):
@@ -490,6 +526,15 @@ class ElectronicDialog(QDialog):
         self.band_colour.setEnabled(need_bands)
         for widget in (self.fermi_colour, self.fermi_style, self.fermi_width):
             widget.setEnabled(self.show_fermi.isChecked())
+        # Hidden rather than greyed, as beside the plot and for a single
+        # spectrum: with nothing to tell apart there is no legend to draw.
+        ticked = sum(1 for row in range(self._table.rowCount())
+                     if self._table.item(row, 0) is not None
+                     and self._table.item(row, 0).checkState() == Qt.Checked)
+        self.legend.setVisible(el.legend_names_anything(
+            self.mode.currentData(), ticked,
+            polarised_bands, need_dos and self._dos_info is not None and self._dos_info.spin == 2,
+            self.overlay.isChecked()))
 
         ready = ((not need_bands or self._bands_info is not None)
                  and (not need_dos or self._dos_info is not None))
@@ -597,26 +642,82 @@ class ElectronicDialog(QDialog):
                 options)
 
     def plot_title(self) -> str:
-        return {el.BANDS: "Band structure", el.DOS: "Density of states",
-                el.BANDS_AND_DOS: "Bands + DOS"}[self.mode.currentData()]
+        return el.plot_title(self.mode.currentData())
+
+    def extent(self) -> dict:
+        """The tracks the window and the DOS range were chosen on.
+
+        Not plot options: a plot does not need to know how far its window
+        could have gone. The controls beside it do, to offer the same track.
+        """
+        _slider, dlow, dhigh = self._dos_span
+        return {
+            "energy_bounds": tuple(self._energy[0].bounds()),
+            "dos_bounds": tuple(self._dos_span[0].bounds()),
+            "dos_handles": tuple(sorted((dlow.value(), dhigh.value()))),
+            # What the files hold, for deciding whether a legend names anything.
+            "dos_polarised": self._dos_info is not None and self._dos_info.spin == 2,
+            "bands_polarised": self._bands_info is not None and self._bands_info.spin == 2,
+            "dos_projections": self._dos_info.n_projections if self._dos_info else 0,
+        }
+
+    def set_request(self, bands_path: Optional[str], dos_path: Optional[str],
+                    options: "el.ElectronicOptions") -> None:
+        """Show a plot's own choices, so that editing it starts from them.
+
+        Everything :meth:`request` hands out comes back: the files, which may
+        have been browsed for anywhere; the projections ticked, with the names
+        and colours they were given; the path labels and the title, typed by
+        hand. The files go first, since reading them is what lays out the
+        projection table and the path labels. The window and the DOS range are
+        held until the dialog is shown (see :meth:`_apply_held`).
+        """
+        index = self.mode.findData(options.mode)
+        if index >= 0:
+            self.mode.setCurrentIndex(index)
+        for kind, path in (("band", bands_path), ("dos", dos_path)):
+            if path:
+                self._choose(kind, path)
+        # Set, not chosen: ``activated`` carries the window across a change of
+        # frame, and the window held below is already in this one.
+        for box, value in ((self.unit, options.unit), (self.reference, options.reference),
+                           (self.spin_down, options.spin_down),
+                           (self.beta_style, options.beta_style),
+                           (self.fermi_style, options.fermi_style)):
+            found = box.findData(value)
+            if found >= 0:
+                box.setCurrentIndex(found)
+        if options.k_labels:
+            self._k_edit.setText(" ".join(options.k_labels))
+        if options.projections is not None:
+            chosen = list(options.projections)
+            names = list(options.projection_labels or [])
+            colours = list(options.projection_colours or [])
+            for row in range(self._table.rowCount()):
+                item = self._table.item(row, 0)
+                ticked = row + 1 in chosen
+                item.setCheckState(Qt.Checked if ticked else Qt.Unchecked)
+                if ticked:
+                    place = chosen.index(row + 1)
+                    if place < len(names):
+                        item.setText(names[place])
+                    if place < len(colours):
+                        self._projection_colours[row].setColour(colours[place])
+        self.overlay.setChecked(options.overlay_projections)
+        self.dos_auto.setChecked(options.dos_range is None)
+        self.band_colour.setColour(options.band_colour)
+        self.beta_colour.setColour(options.beta_colour)
+        self.show_fermi.setChecked(options.show_fermi)
+        self.fermi_colour.setColour(options.fermi_colour)
+        self.fermi_width.setValue(options.fermi_width)
+        self.linewidth.setValue(options.linewidth)
+        self.legend.setChecked(options.legend)
+        self._title.setText(options.title or "")
+        self._held = (options.energy_range, options.dos_range)
+        self._sync()
 
 
 # ── small pieces ──────────────────────────────────────────────────────────
-def _set_range(triple, low_bound: float, high_bound: float, low: float, high: float) -> None:
-    """Move a :func:`range_row`'s track and handles together."""
-    slider, low_box, high_box = triple
-    if high_bound <= low_bound:
-        high_bound = low_bound + 1.0
-    slider.setBounds(low_bound, high_bound)
-    for box in (low_box, high_box):
-        box.blockSignals(True)
-        box.setRange(low_bound, high_bound)
-        box.blockSignals(False)
-    low_box.setValue(low)
-    high_box.setValue(high)
-    slider.setValues(low_box.value(), high_box.value())
-
-
 def _nice(value: float) -> float:
     """Round up to two significant figures: 1.63 -> 1.7, 73.8 -> 74."""
     if value <= 0:

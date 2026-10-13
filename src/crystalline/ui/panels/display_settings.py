@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from crystalline.ui.panels.controls import (
+    PANEL_MARGINS,
     Section as _Section,
     left as _left,
     set_value_width as _set_value_width,
@@ -130,7 +131,7 @@ class DisplayPanel(QWidget):
         body = QWidget()
         scroll.setWidget(body)
         layout = QVBoxLayout(body)
-        layout.setContentsMargins(14, 4, 14, 18)
+        layout.setContentsMargins(*PANEL_MARGINS)
         layout.setSpacing(0)  # sections space themselves, so the rhythm is theirs
 
         # Every section starts folded: the panel opens as a short list of the

@@ -298,3 +298,102 @@ def test_the_two_pseudo_voigt_widths_are_independent():
     assert not np.allclose(profile(2.0, 30.0), profile(30.0, 2.0))
     # at eta = 1 the Gaussian width is out of the mixture entirely
     assert np.allclose(profile(10.0, 1.0, eta=1.0), profile(10.0, 99.0, eta=1.0))
+
+
+def test_the_legend_can_be_turned_off():
+    """Several curves are named by default; on a crowded spectrum the box
+    hides the peaks it names, so it comes off."""
+    pytest.importorskip("CRYSTALClear")
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from crystalline.crystalio.spectra import plot_spectra
+
+    curve = np.array([[500.0, 1.0], [1500.0, 3.0]])
+    datasets = [("xx", curve), ("yy", curve * 1.1)]
+
+    assert plot_spectra(datasets).axes[0].get_legend() is not None
+    assert plot_spectra(datasets, legend=False).axes[0].get_legend() is None
+
+
+def _stack(datasets, **options):
+    """Each curve's lines, and the gap the offset put between the first two."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from crystalline.crystalio.spectra import plot_spectra
+
+    figure = plot_spectra(datasets, **options)
+    lines = [np.asarray(line.get_ydata()) for line in figure.axes[0].lines]
+    plt.close(figure)
+    # The gap between the two, rather than either baseline: a Lorentzian's
+    # tails never quite reach zero.
+    return lines, lines[1].min() - lines[0].min()
+
+
+def test_an_offset_stacks_the_curves_by_a_fraction_of_the_tallest_peak_drawn():
+    """Drawn, not reported: a Lorentzian of HWHM 5 peaks at a sixteenth of its
+    transition, so an offset measured against the transitions lifted each curve
+    by many times anything on screen, and all but the first steps of the
+    slider were wasted."""
+    pytest.importorskip("CRYSTALClear")
+    curve = np.array([[500.0, 1.0], [1500.0, 4.0]])
+    datasets = [("first", curve), ("second", curve)]
+
+    (flat, other), no_gap = _stack(datasets)
+    _lines, gap = _stack(datasets, offset=0.5)
+
+    assert no_gap == pytest.approx(0.0, abs=1e-12)
+    assert gap == pytest.approx(0.5 * flat.max(), rel=1e-3)     # half the peak on screen
+    assert gap < 0.1 * 4.0                                      # nowhere near half the transition
+
+
+def test_wider_lines_keep_the_stack_in_proportion():
+    """Broadening lowers every peak, and the gaps go down with them: the stack
+    looks the same at any width, rather than drifting apart as the lines are
+    widened, which is what a gap fixed in intensity would do."""
+    pytest.importorskip("CRYSTALClear")
+    curve = np.array([[500.0, 1.0], [1500.0, 4.0]])
+    datasets = [("first", curve), ("second", curve)]
+
+    for hwhm in (2.0, 5.0, 20.0):
+        (flat, _other), _ = _stack(datasets, hwhm=hwhm)
+        _lines, gap = _stack(datasets, hwhm=hwhm, offset=1.0)
+        assert gap / flat.max() == pytest.approx(1.0, rel=2e-3), hwhm
+
+
+def test_coincident_lines_are_measured_together():
+    """A degenerate mode is listed once per partner at one frequency, and its
+    peak is their sum — what is drawn, so what the offset is measured against."""
+    pytest.importorskip("CRYSTALClear")
+    pair = np.array([[800.0, 2.0], [800.0, 2.0], [1500.0, 3.0]])   # 4 at 800 beats 3
+    datasets = [("first", pair), ("second", pair)]
+
+    (flat, _other), _ = _stack(datasets)
+    _lines, gap = _stack(datasets, offset=1.0)
+
+    assert gap == pytest.approx(flat.max(), rel=1e-3)
+
+
+def test_sticks_keep_to_the_frequency_window():
+    """plot_cry_spec draws every stick it is handed whatever fmin and fmax say,
+    so a stick spectrum asked for 200-1200 cm-1 ran on to 3800."""
+    pytest.importorskip("CRYSTALClear")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from crystalline.crystalio.spectra import plot_spectra
+
+    curve = np.array([[500.0, 1.0], [900.0, 2.0], [3800.0, 50.0]])
+    figure = plot_spectra([("IR", curve)], lineshape="bars", frequency_range=(200.0, 1200.0))
+    line = figure.axes[0].lines[0]
+    frequencies, intensities = np.asarray(line.get_xdata()), np.asarray(line.get_ydata())
+    plt.close(figure)
+
+    assert frequencies.max() <= 1200.0
+    assert intensities.max() == 2.0                            # the 3800 stick is not there

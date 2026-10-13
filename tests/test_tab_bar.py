@@ -1,4 +1,4 @@
-"""The tab bar whose tabs slide as a whole on a trackpad swipe."""
+"""The tab bar of fixed-width tabs, which slide as a whole on a trackpad swipe."""
 
 import pytest
 
@@ -79,27 +79,85 @@ def test_the_file_tabs_and_the_plot_tabs_slide_as_a_whole(qapp):
     assert "setTabBar(SlidingTabBar(" in inspect.getsource(MainWindow.__init__)
 
 
+def _bar(*names, elide=Qt.ElideMiddle):
+    bar = SlidingTabBar()
+    bar.setElideMode(elide)
+    bar.setTabsClosable(True)
+    for name in names:
+        bar.addTab(name)
+    return bar
+
+
+_NAMES = ("mgo.out", "thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out", "H2O-Ice-Ih.cif")
+
+
+def test_every_tab_is_as_wide_whatever_its_name(qapp):
+    """As in Firefox. Sized to its name, a tab moved whenever the bar's width
+    changed — the file tabs reflowed each time the Phonons panel came or went,
+    and the tab just clicked slid out from under the pointer."""
+    from crystalline.ui.widgets.tab_bar import TAB_CHARACTERS
+
+    bar = _bar(*_NAMES)
+
+    widths = {bar.tabSizeHint(i).width() for i in range(bar.count())}
+    assert len(widths) == 1, widths
+    # room for the same number of characters, whatever the name
+    plain = QTabBar()
+    plain.setTabsClosable(True)
+    plain.addTab("")
+    assert widths.pop() == (plain.tabSizeHint(0).width()
+                            + bar.fontMetrics().averageCharWidth() * TAB_CHARACTERS)
+
+
+def test_the_row_stays_put_while_the_bar_narrows_around_it(qapp):
+    """What fixed widths are for: the same tabs at the same places, as long as
+    the narrower bar still holds them."""
+    tabs = QTabWidget()
+    tabs.setTabBar(SlidingTabBar(tabs))
+    tabs.setTabsClosable(True)
+    tabs.setElideMode(Qt.ElideMiddle)
+    tabs.setUsesScrollButtons(True)
+    for name in _NAMES:
+        tabs.addTab(QWidget(), name)
+    bar = tabs.tabBar()
+    row = bar.tabSizeHint(0).width() * bar.count()
+
+    def places(width):
+        tabs.resize(width, 120)
+        tabs.show()
+        QApplication.processEvents()
+        return [bar.tabRect(i) for i in range(bar.count())]
+
+    wide = places(row * 2)
+    assert places(row + 20) == wide                     # narrower, still fits: nothing moves
+    tabs.close()
+
+
 def test_a_crowded_tab_keeps_a_readable_part_of_its_name(qapp):
-    """Qt squeezes every name to three characters — "t…t" — before scrolling;
-    a tab here keeps about a dozen, and a name shorter than that stays whole."""
-    from crystalline.ui.widgets.tab_bar import READABLE_CHARACTERS
+    """A row that does not fit shrinks before it scrolls, as Firefox's does —
+    but not to Qt's three characters, "t…t": a dozen tells two runs apart."""
+    from crystalline.ui.widgets.tab_bar import READABLE_CHARACTERS, TAB_CHARACTERS
 
-    long_name = "thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out"
-    ours, plain = SlidingTabBar(), QTabBar()
-    for bar in (ours, plain):
-        bar.setElideMode(Qt.ElideMiddle)
-        bar.addTab(long_name)
-        bar.addTab("mgo.out")
+    bar = _bar(*_NAMES)
 
-    qt_minimum = plain.minimumTabSizeHint(0).width()
-    ours_minimum = ours.minimumTabSizeHint(0).width()
-    room = ours.fontMetrics().averageCharWidth() * (READABLE_CHARACTERS - 3)
-    assert ours_minimum == qt_minimum + room                 # a dozen characters, not three
-    assert ours_minimum < ours.tabSizeHint(0).width()        # still elided: the name is long
-    assert ours.minimumTabSizeHint(1).width() == ours.tabSizeHint(1).width()   # short: whole
+    room = bar.fontMetrics().averageCharWidth() * (TAB_CHARACTERS - READABLE_CHARACTERS)
+    for index in range(bar.count()):
+        assert bar.minimumTabSizeHint(index).width() == bar.tabSizeHint(index).width() - room
+    assert len({bar.minimumTabSizeHint(i).width() for i in range(bar.count())}) == 1
 
-    ours.setElideMode(Qt.ElideNone)                          # not eliding: Qt's own answer
-    assert ours.minimumTabSizeHint(0) == QTabBar.minimumTabSizeHint(ours, 0)
+
+def test_a_bar_that_does_not_elide_keeps_every_name_whole(qapp):
+    """Not eliding is asking for whole names, and a fixed width would cut them
+    off instead: such a bar is sized as Qt sizes it."""
+    ours, plain = _bar(*_NAMES, elide=Qt.ElideNone), QTabBar()
+    plain.setElideMode(Qt.ElideNone)
+    plain.setTabsClosable(True)
+    for name in _NAMES:
+        plain.addTab(name)
+
+    for index in range(len(_NAMES)):
+        assert ours.tabSizeHint(index) == plain.tabSizeHint(index)
+        assert ours.minimumTabSizeHint(index) == plain.minimumTabSizeHint(index)
 
 
 def test_a_crowded_bar_lays_its_tabs_out_that_wide(qapp):

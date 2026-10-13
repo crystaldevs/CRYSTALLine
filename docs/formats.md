@@ -19,6 +19,11 @@ file dropped on a window which already contains a structure is imported in the
 same way, into the tab on screen, unless it is dropped together with files that
 open tabs of their own, in which case it is left out.
 
+An `.xyz` or a `.pdb` holds coordinates and nothing else, with no cell and no
+calculation behind it, so it is only ever added to a structure and never opened
+as one. With no structure open there is nothing for it to join, and the window
+says so rather than taking it.
+
 ## Data files read for the plots
 
 The files a PROPERTIES (`.d3`) run leaves beside the output:

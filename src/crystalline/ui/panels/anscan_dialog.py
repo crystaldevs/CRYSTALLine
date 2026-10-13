@@ -17,31 +17,11 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
-    QSpinBox,
-    QVBoxLayout,
-    QWidget,
-)
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout, QWidget
 
-from crystalline.ui.panels.controls import Section, left, set_value_width, slider_row
 from crystalline.crystalio.anscan import AnscanRun
+from crystalline.ui.panels.anscan_options import AnscanOptions
 from crystalline.ui.widgets.wrapped_label import WrappedLabel
-
-
-def _scale_bounds(value: float) -> tuple:
-    """A decade either side of ``value``, so the run's own suggestion is central.
-
-    The scale that suits one mode is nothing like the one that suits another —
-    it is set from the level spacing — so a fixed range would put most runs hard
-    against a stop. Anchoring the range on the suggestion keeps the useful part
-    of the travel where the hand is.
-    """
-    value = float(value) if value and value > 0 else 1.0
-    return (value / 10.0, value * 10.0, value / 10.0)
 
 
 class AnscanDialog(QDialog):
@@ -56,60 +36,15 @@ class AnscanDialog(QDialog):
         summary = WrappedLabel(run.summary, self)
         layout.addWidget(summary)
 
-        overlays = Section(layout, "Overlays")
-
-        # A scale factor is judged by ratio — twice as tall, half as tall — so the
-        # slider is logarithmic and the run's own suggested value sits mid-track.
-        self.wavefunctions = QCheckBox("Wavefunctions", self)
-        self.wavefunctions.setChecked(True)
-        self.wavefunctions.toggled.connect(self._sync)
-        overlays.add_wide(self.wavefunctions)
-        self.scale_wf = slider_row(
-            overlays, "ψ scale", run.scale_wf,
-            *_scale_bounds(run.scale_wf), decimals=1, logarithmic=True,
-        )
-        self.scale_wf.setToolTip(
-            "ψ is multiplied by this before being drawn on its level.\n"
-            "The states are normalised, so the factor is what sets their "
-            "height in cm⁻¹; it opens on the mean level spacing of the run."
-        )
-
-        self.densities = QCheckBox("Probability densities", self)
-        self.densities.toggled.connect(self._sync)
-        overlays.add_wide(self.densities)
-        self.scale_prob = slider_row(
-            overlays, "|ψ|² scale", run.scale_prob,
-            *_scale_bounds(run.scale_prob), decimals=1, logarithmic=True,
-        )
-        self.scale_prob.setToolTip("|ψ|² is multiplied by this before being drawn.")
-
-        # Only the states CRYSTAL wrote coefficients for can carry a curve; the
-        # levels above them are still drawn, they just have nothing on them.
-        self.nstates = QSpinBox(self)
-        self.nstates.setRange(1, max(run.nwf, 1))
-        self.nstates.setValue(max(run.nwf, 1))
-        set_value_width(self.nstates)
-        self.nstates.setToolTip(
-            f"Counting up from the ground state. CRYSTAL wrote {run.nwf} "
-            "wavefunctions for this run."
-        )
-        overlays.add("States", left(self.nstates))
-
-        self.harmonic = QCheckBox("Harmonic potential", self)
-        self.harmonic.setToolTip(
-            "The parabola of the harmonic frequency, for comparison."
-            + (" It opens downwards for this mode, which is imaginary."
-               if run.imaginary else "")
-        )
-        overlays.add_wide(self.harmonic)
-
-        self.points = QCheckBox("Scanned points", self)
-        self.points.setChecked(True)
-        self.points.setToolTip(
-            "The energies ANSCAN actually computed, which the potential is a "
-            "fit to."
-        )
-        overlays.add_wide(self.points)
+        # The same controls the plot carries beside it (see AnscanOptions), so
+        # what is set here and what is pulled there cannot drift apart.
+        self.options_widget = AnscanOptions(run, self)
+        layout.addWidget(self.options_widget)
+        # Named here as well: dialog_state remembers a dialog by walking the
+        # widgets it holds, and these are the names it has always found.
+        for name in ("wavefunctions", "scale_wf", "densities", "scale_prob",
+                     "nstates", "harmonic", "points", "legend"):
+            setattr(self, name, getattr(self.options_widget, name))
 
         self._buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self
@@ -118,31 +53,10 @@ class AnscanDialog(QDialog):
         self._buttons.rejected.connect(self.reject)
         layout.addWidget(self._buttons)
 
-        self._sync()
-
     # ── state ───────────────────────────────────────────────────────────
-    @staticmethod
-    def _setup_scale(spin: QDoubleSpinBox, value: float) -> None:
-        """A height box spanning two decades either side of ``value``."""
-        spin.setRange(0.0, max(value, 1.0) * 100.0)
-        spin.setDecimals(1)
-        spin.setSingleStep(max(value, 1.0) / 10.0)
-        spin.setValue(value)
-
-    def _sync(self) -> None:
-        """A height is only worth setting for a curve that is being drawn."""
-        self.scale_wf.setEnabled(self.wavefunctions.isChecked())
-        self.scale_prob.setEnabled(self.densities.isChecked())
-
     def options(self) -> dict:
         """The chosen settings, as :func:`plot_anscan` keyword arguments."""
-        return {
-            "scale_wf": self.scale_wf.value() if self.wavefunctions.isChecked() else None,
-            "scale_prob": self.scale_prob.value() if self.densities.isChecked() else None,
-            "harmpot": self.harmonic.isChecked(),
-            "scanpot": self.points.isChecked(),
-            "nstates": self.nstates.value(),
-        }
+        return self.options_widget.options()
 
     def title(self) -> str:
         """A tab title naming the mode that was scanned."""

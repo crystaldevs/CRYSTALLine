@@ -118,3 +118,51 @@ def test_a_scale_slider_opens_on_the_run_s_own_suggestion(qapp):
 def test_the_title_names_the_scanned_mode(qapp):
     assert AnscanDialog(_run()).title() == "ANSCAN mode 7"
     assert AnscanDialog(_run(mode=0)).title() == "ANSCAN"
+
+
+def test_the_legend_is_on_by_default_and_can_be_turned_off(qapp):
+    """The same tick as on a spectrum and on a PES cut: named until the box
+    gets in the way of what it names."""
+    dialog = AnscanDialog(_run())
+    assert dialog.options()["legend"] is True
+
+    dialog.legend.setChecked(False)
+
+    assert dialog.options()["legend"] is False
+
+
+# ── beside the plot ───────────────────────────────────────────────────────
+def _knobs(run=None):
+    from crystalline.ui.panels.anscan_options import AnscanOptions
+
+    knobs = AnscanOptions(run or _run())
+    moves = []
+    knobs.changed.connect(lambda: moves.append(knobs.options()))
+    return knobs, moves
+
+
+def test_beside_a_plot_every_overlay_redraws_it(qapp):
+    """The scan is the run's one mode, so nothing decides what the figure is
+    and everything is drawn on it: all of it goes beside the plot."""
+    knobs, moves = _knobs()
+
+    knobs.scale_wf.setValue(800.0)
+    knobs.harmonic.setChecked(True)
+    knobs.densities.setChecked(True)
+
+    assert len(moves) == 3
+    assert moves[-1]["scale_wf"] == pytest.approx(800.0)
+    assert moves[-1]["harmpot"] is True and moves[-1]["scale_prob"] is not None
+
+
+def test_the_knobs_take_a_plot_s_options_without_announcing_them(qapp):
+    knobs, moves = _knobs()
+    wanted = dict(knobs.options(), scale_wf=None, scale_prob=120.0, nstates=4,
+                  harmpot=True, scanpot=False, legend=False)
+
+    knobs.set_options(wanted)
+
+    assert moves == []
+    assert knobs.options() == wanted
+    # No ψ drawn, so no ψ scale to set; the |ψ|² one is live.
+    assert not knobs.scale_wf.isEnabled() and knobs.scale_prob.isEnabled()

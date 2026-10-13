@@ -29,9 +29,10 @@ def qapp():
 
 
 # ── reading ───────────────────────────────────────────────────────────────
-def test_an_output_is_read_whole_for_its_tab():
-    """The structure, and everything the window used to read again afterwards:
-    the Info panel's rows and what each menu needs to know about the output."""
+def test_an_output_is_read_as_far_as_its_tab_needs():
+    """The structure, and what each menu needs to know about the output. The
+    Info panel's account of the run is not among it: it costs more than the
+    structure, and is read afterwards (see the details tests below)."""
     path = sample.path("coesite/coesite_ela.out")
     if path is None:
         pytest.skip("sample output not available")
@@ -40,7 +41,8 @@ def test_an_output_is_read_whole_for_its_tab():
 
     assert len(read.loaded.structure) > 0
     assert read.output_path == path
-    assert read.output_props                                 # the run's own rows
+    assert read.output_props is None                         # still to be read
+    assert mw._read_details(path)                            # ...and there to be read
     assert set(read.capabilities) == set(mw._PROBES)
     for key, found in read.capabilities.items():             # the window's own answer
         assert found == mw._probe(key, path), key
@@ -117,6 +119,8 @@ def _window():
         _load_path = MainWindow._load_path
         _read_next = MainWindow._read_next
         _update_reading_status = MainWindow._update_reading_status
+        _details_queue = MainWindow._details_queue
+        _read_details_next = MainWindow._read_details_next
 
         def __init__(self):
             self._reading_status = _Label()
@@ -299,3 +303,152 @@ def test_a_tab_read_in_behind_says_what_it_left_out_when_first_shown(qapp, warni
     window._show_notice(tab)                                 # once, not every visit
     assert warnings_said == [("Modes not read", "b.out:\nmodes could not be read")]
     assert "self._show_notice(tab)" in inspect.getsource(MainWindow._activate_tab)
+
+
+# ── an output's details, read after its structure ─────────────────────────
+class _Read:
+    """What _read_file hands over, as far as the queue looks at it."""
+
+    def __init__(self, path):
+        self.output_path = None if path.endswith(".gui") else path
+        self.output_props = None
+
+
+class _DetailsTab:
+    def __init__(self, path, behind):
+        self.path = path
+        self.pending = None
+
+    def __repr__(self):
+        return f"<tab {self.path}>"
+
+
+def _details_window():
+    """The queue, with tabs that record what reaches them."""
+
+    class _Stub:
+        _load_path = MainWindow._load_path
+        _read_next = MainWindow._read_next
+        _update_reading_status = MainWindow._update_reading_status
+        _details_queue = MainWindow._details_queue
+        _read_details_next = MainWindow._read_details_next
+        _deliver_details = MainWindow._deliver_details
+        _routed = MainWindow._routed
+        _acting_on = MainWindow._acting_on
+
+        def __init__(self):
+            self._reading_status = _Label()
+            self._pending_reads = []
+            self._reading = False
+            self._reading_path = None
+            self._reader = None
+            self._tabs = []
+            self._tab = None
+            self.delivered = []
+
+        def _show_read_file(self, path, read, front):
+            tab = _DetailsTab(path, behind=not front)
+            self._tabs.append(tab)
+            if front or self._tab is None:
+                self._tab = tab
+            else:
+                tab.pending = (path, read)      # read in behind, not built yet
+            return tab
+
+        def _set_output_props(self, props):
+            self.delivered.append((self._tab, props))
+
+        def _refresh_chrome(self):
+            pass
+
+    return _Stub()
+
+
+@pytest.fixture
+def reads(monkeypatch):
+    """Record the order things are read in; details name the output they are of."""
+    order = []
+
+    def read_file(path):
+        order.append(("file", path))
+        return _Read(path)
+
+    def read_details(path):
+        order.append(("details", path))
+        return {"Total energy (eV)": path}
+
+    monkeypatch.setattr(mw, "_read_file", read_file)
+    monkeypatch.setattr(mw, "_read_details", read_details)
+    return order
+
+
+def test_every_file_is_shown_before_any_output_s_details_are_read(qapp, qtbot, reads):
+    """The structure is what was asked for; the run's own account of itself
+    costs more than it does, so it waits until nothing else is."""
+    window = _details_window()
+    for path, front in (("/runs/a.out", True), ("/runs/b.out", False), ("/runs/c.gui", False)):
+        window._load_path(path, front=front)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+    assert reads == [("file", "/runs/a.out"), ("file", "/runs/b.out"), ("file", "/runs/c.gui"),
+                     ("details", "/runs/a.out"), ("details", "/runs/b.out")]   # no output behind a .gui
+
+
+def test_details_reach_the_tab_of_their_output(qapp, qtbot, reads):
+    """Through the tab's own routing, whichever tab is in front by then; and
+    for a tab read in behind and not looked at yet, into what it will be
+    built from."""
+    window = _details_window()
+    window._load_path("/runs/a.out", front=True)
+    window._load_path("/runs/b.out", front=False)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+    front, behind = window._tabs
+
+    assert window.delivered == [(front, {"Total energy (eV)": "/runs/a.out"})]
+    assert behind.pending[1].output_props == {"Total energy (eV)": "/runs/b.out"}
+
+
+def test_details_for_a_tab_closed_meanwhile_go_nowhere(qapp, qtbot, monkeypatch, reads):
+    window = _details_window()
+    release = threading.Event()
+    monkeypatch.setattr(mw, "_read_details",
+                        lambda path: release.wait(5) and {"Total energy (eV)": path})
+    window._load_path("/runs/a.out", front=True)
+    qtbot.waitUntil(lambda: bool(window._tabs), timeout=5000)
+    window._tabs.clear()                                   # closed while its details are read
+    release.set()
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+    assert window.delivered == []
+
+
+def test_details_are_read_without_a_word(qapp, qtbot, monkeypatch, reads):
+    """The structure is on screen: "Reading a.out…" would say it was not."""
+    window = _details_window()
+    release = threading.Event()
+    monkeypatch.setattr(mw, "_read_details", lambda path: release.wait(5) and {})
+    window._load_path("/runs/a.out", front=True)
+    qtbot.waitUntil(lambda: bool(window._tabs), timeout=5000)
+
+    assert window._reading and not window._reading_status.visible
+    window._load_path("/runs/b.out", front=False)          # asked for meanwhile: named
+    assert window._reading_status.visible
+    assert window._reading_status.texts[-1] == "Reading b.out…"
+    release.set()
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+
+def test_details_wait_a_moment_after_the_file_is_shown(qapp, qtbot, reads):
+    """For its 3D view to settle: read straight away, the details held up the
+    confirmation of the view's new size for 400 ms, and the structure was
+    shown stretched meanwhile."""
+    import time
+
+    window = _details_window()
+    window._load_path("/runs/a.out", front=True)
+    qtbot.waitUntil(lambda: bool(window._tabs), timeout=5000)
+    shown = time.perf_counter()
+    assert ("details", "/runs/a.out") not in reads
+
+    qtbot.waitUntil(lambda: ("details", "/runs/a.out") in reads, timeout=5000)
+    assert time.perf_counter() - shown >= mw._DETAILS_PAUSE_MS / 1000 * 0.8

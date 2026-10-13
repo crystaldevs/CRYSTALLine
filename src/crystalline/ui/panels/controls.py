@@ -43,6 +43,76 @@ _ROW_SPACING = 7
 _SECTION_SPACING = 16
 
 
+# What a dialog that is mostly a list should open at. Width is measured
+# against the widest row it has to show — "Mode 12 — 888.5 cm⁻¹ (η₃ -377.9,
+# η₄ +838.1 cm⁻¹)" is as wide as the run's own numbers make it — and clamped
+# so that long labels cannot open a dialog wider than a screen, while short
+# ones still get a window with air in it rather than a sliver.
+CHOOSER_MIN_WIDTH = 560
+CHOOSER_MAX_WIDTH = 760
+# Rows of list to show beyond what the controls above them need, and the
+# height past which the dialog stops growing and the list scrolls instead.
+CHOOSER_ROWS = 10
+CHOOSER_MAX_HEIGHT = 740
+# Frame, margins and room for a scroll bar, around the widest row.
+CHOOSER_PADDING = 56
+
+
+# The margins of a column of controls: the Display panel's, which the Geometry
+# panel and the controls beside a plot share, so that no box in any of them runs
+# to the edge of its window. (left, top, right, bottom)
+PANEL_MARGINS = (14, 4, 14, 18)
+
+
+def chooser_size(dialog, listings) -> tuple:
+    """The ``(width, height)`` a dialog built around ``listings`` should open at.
+
+    One rule for all of them, because they are the same kind of thing: a list
+    of what this run holds, with the controls that say how to draw it
+    underneath. Sized from the content, since that is what differs between
+    them and between runs; the same clamps everywhere, so two of these dialogs
+    open the same size unless their rows genuinely differ.
+    """
+    widest = max((listing.sizeHintForColumn(0) for listing in listings), default=0)
+    width = min(max(widest + CHOOSER_PADDING, CHOOSER_MIN_WIDTH), CHOOSER_MAX_WIDTH)
+    rows = max((listing.sizeHintForRow(0) for listing in listings), default=0) or 20
+    return width, min(dialog.sizeHint().height() + CHOOSER_ROWS * rows,
+                      CHOOSER_MAX_HEIGHT)
+
+
+def set_span(triple, low_bound: float, high_bound: float, low: float, high: float) -> None:
+    """Move a :func:`range_row`'s track and handles together.
+
+    For a span whose extent comes from the data — an energy window over the
+    bands in hand — rather than being fixed when the row is built.
+    """
+    slider, low_box, high_box = triple
+    if high_bound <= low_bound:
+        high_bound = low_bound + 1.0
+    slider.setBounds(low_bound, high_bound)
+    for box in (low_box, high_box):
+        box.blockSignals(True)
+        box.setRange(low_bound, high_bound)
+        box.blockSignals(False)
+    low_box.setValue(low)
+    high_box.setValue(high)
+    slider.setValues(low_box.value(), high_box.value())
+
+
+def scale_bounds(value: float) -> tuple:
+    """``(low, high, step)`` a decade either side of ``value``, for a slider.
+
+    For a quantity whose useful size is set by the data rather than by the
+    program: how tall to draw a wavefunction on a potential, say, which is
+    judged against the level spacing of the run in hand. A fixed range would
+    put most runs hard against a stop; anchoring it on the run's own
+    suggestion keeps the useful part of the travel under the hand. Paired with
+    a logarithmic slider, since such a thing is judged by ratio.
+    """
+    value = float(value) if value and value > 0 else 1.0
+    return (value / 10.0, value * 10.0, value / 10.0)
+
+
 def set_value_width(box) -> None:
     """Fix a spin box to the value column — or to what it holds, if that is wider.
 
@@ -174,6 +244,16 @@ class _Section:
         """
         self._body_layout.addSpacing(6)
         self._body_layout.addWidget(widget)
+
+    def set_visible(self, visible: bool) -> None:
+        """Show or hide the whole section, heading and all.
+
+        For a section that does not apply at all — the surface of a cut that
+        has no surface — rather than for one whose values are merely
+        unavailable. Greyed, it still asks to be read.
+        """
+        self.header.setVisible(visible)
+        self.body.setVisible(visible and self.header.isChecked())
 
     def set_enabled(self, enabled: bool) -> None:
         """Grey the whole section — for settings a given file has no data for."""
@@ -406,6 +486,32 @@ class SliderBox(QWidget):
         if notify:
             self.changed.emit(self.value())
 
+    def set_range(self, low: float, high: float) -> None:
+        """Move the ends of the track, keeping the value, without announcing it.
+
+        For a range that belongs to what is being set rather than to the
+        control: the positions at which a lattice plane cuts the cell on
+        screen, which depend on the plane and on the cell. The caller keeps
+        the value inside; nothing is moved by the ends moving. Ends that have
+        not moved are left alone, so a drag in progress is not interfered with.
+        """
+        low, high = float(low), float(high)
+        if (low, high) == (self._low, self._high):
+            return
+        self._lock = True
+        try:
+            blocked = self.box.blockSignals(True)
+            self._low, self._high = low, high
+            self.box.setRange(low, high)
+            self.box.blockSignals(blocked)
+            self.slider.setValue(self._to_slider(self.box.value()))
+        finally:
+            self._lock = False
+
+    def bounds(self) -> tuple:
+        """``(low, high)``, the ends of the track."""
+        return self._low, self._high
+
     def _to_slider(self, value: float) -> int:
         low, high = self._low, self._high
         if self._logarithmic:
@@ -537,13 +643,18 @@ LABEL_COLUMN = _LABEL_COLUMN
 VALUE_WIDTH = _VALUE_WIDTH
 
 __all__ = [
+    "CHOOSER_MAX_HEIGHT",
+    "CHOOSER_MAX_WIDTH",
+    "CHOOSER_MIN_WIDTH",
     "LABEL_COLUMN",
     "Section",
+    "chooser_size",
     "SliderBox",
     "VALUE_WIDTH",
     "left",
     "plain_spin",
     "range_row",
+    "scale_bounds",
     "set_value_width",
     "slider_row",
 ]

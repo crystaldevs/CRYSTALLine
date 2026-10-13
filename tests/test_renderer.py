@@ -51,11 +51,15 @@ def test_a_held_view_draws_nothing_until_it_is_let_go():
     class _View:
         held = Viewport.held
         _draw_held = Viewport._draw_held
+        _wait_out_resize = Viewport._wait_out_resize
+        _size_unconfirmed = Viewport._size_unconfirmed
 
         def __init__(self):
             self.interactor = _Interactor()
             self._suspended = False
             self._render_held = False
+            self._drawn = self._resized = False
+            self._native_size = None
 
     view = _View()
     with view.held():
@@ -89,11 +93,15 @@ def test_what_was_owed_while_a_view_was_held_is_drawn_once_it_is_let_go():
     class _View:
         held = Viewport.held
         _draw_held = Viewport._draw_held
+        _wait_out_resize = Viewport._wait_out_resize
+        _size_unconfirmed = Viewport._size_unconfirmed
 
         def __init__(self):
             self.interactor = _Interactor()
             self._suspended = False
             self._render_held = False
+            self._drawn = self._resized = False
+            self._native_size = None
             self._render_now = lambda: drawn.append("drew")
 
     view = _View()
@@ -107,6 +115,84 @@ def test_what_was_owed_while_a_view_was_held_is_drawn_once_it_is_let_go():
     assert not view._render_held       # and nothing is owed twice
     view._draw_held()
     assert drawn == ["drew"]
+
+
+# ── a view resized and drawn in the same pass ─────────────────────────────
+def _resizing_view():
+    """The draw paths of a Viewport, on a stand-in whose draws are counted."""
+    from crystalline.ui.viewport import Viewport
+
+    class _Interactor:
+        def isVisible(self):
+            return True
+
+    class _View:
+        draw_now = Viewport.draw_now
+        _draw_held = Viewport._draw_held
+        _draw_queued = Viewport._draw_queued
+        _wait_out_resize = Viewport._wait_out_resize
+        _size_unconfirmed = Viewport._size_unconfirmed
+        _resize_settled = Viewport._resize_settled
+
+        def __init__(self):
+            self.interactor = _Interactor()
+            self._suspended = False
+            self._render_held = self._render_queued = False
+            self._drawn = self._resized = False
+            self._native_size = None
+            self.drawn = []
+            self._render_now = lambda: self.drawn.append("queued draw")
+
+    return _View()
+
+
+def test_a_view_resized_this_turn_draws_on_the_next(monkeypatch):
+    """VTK takes a new size at once; the surface macOS shows it on catches up
+    a turn later, and a frame drawn in between is shown stretched. Brucite
+    came up squeezed that way: its Phonons panel narrowed the view, and the
+    first frame was drawn 22 ms later in the same pass."""
+    from crystalline.ui import viewport
+
+    view = _resizing_view()
+    monkeypatch.setattr(viewport.BasePlotter, "render",
+                        lambda _interactor: view.drawn.append("drawn now"))
+    view._drawn = True
+    view._resized = True                       # as the Resize event marks it
+
+    view.draw_now()
+    view._render_queued = True
+    view._draw_queued()
+    assert view.drawn == []                    # neither path draws into the old size
+
+    view._resize_settled()                     # the next turn
+    assert view.drawn == ["queued draw"]       # once
+    assert not view._resized and not view._render_held
+
+
+def test_a_view_that_has_never_drawn_still_draws_at_once(monkeypatch):
+    """What draw_now is for: a new window is white until something is drawn,
+    and that white reached the screen across a dark window. With nothing of
+    its own on screen yet, it has nothing to show stretched either."""
+    from crystalline.ui import viewport
+
+    view = _resizing_view()
+    monkeypatch.setattr(viewport.BasePlotter, "render",
+                        lambda _interactor: view.drawn.append("drawn now"))
+    view._resized = True                       # a new view is resized as it is shown
+
+    view.draw_now()
+
+    assert view.drawn == ["drawn now"]
+    assert view._drawn
+
+
+def test_a_resize_of_the_view_is_what_marks_it():
+    import inspect
+
+    from crystalline.ui.viewport import Viewport
+
+    source = inspect.getsource(Viewport.eventFilter)
+    assert "QEvent.Resize" in source and "_resize_settled" in source
 
 
 def test_reference_cell_outlines_original_not_supercell():
@@ -1857,3 +1943,176 @@ def test_an_orbital_is_still_clipped_to_its_cell():
     clipped = _clip_to_cell(sphere, 2.0 * np.eye(3))
     low, high = np.array(clipped.bounds).reshape(3, 2).T
     assert np.all(low >= -1e-6) and np.all(high <= 2.0 + 1e-6)
+
+
+# ── drawn once its window is on screen ────────────────────────────────────
+def _exposing_view(monkeypatch, exposed=True, suspended=False):
+    from crystalline.ui import viewport
+    from crystalline.ui.viewport import Viewport
+
+    drawn = []
+    monkeypatch.setattr(viewport.BasePlotter, "render", lambda _i: drawn.append("drawn"))
+
+    class _Window:
+        def isExposed(self):
+            return exposed
+
+    class _Interactor:
+        def isVisible(self):
+            return True
+
+    class _View:
+        _on_exposed = Viewport._on_exposed
+
+        def __init__(self):
+            self.interactor = _Interactor()
+            self._watched_window = _Window()
+            self._suspended = suspended
+            self._render_held = self._render_queued = False
+            self._drawn = False
+            self._native_size = None
+
+    return _View(), drawn
+
+
+def test_a_view_draws_when_its_window_reaches_the_screen(monkeypatch):
+    """A frame drawn before then never gets there. Closing brucite's tab left a
+    new empty view that had drawn only before its window was up, and the
+    screen showed the closed tab's last picture, squeezed, under "Untitled"."""
+    view, drawn = _exposing_view(monkeypatch)
+
+    view._on_exposed()
+
+    assert drawn == ["drawn"] and view._drawn
+
+
+def test_nothing_is_drawn_for_a_window_going_off_screen(monkeypatch):
+    view, drawn = _exposing_view(monkeypatch, exposed=False)
+
+    view._on_exposed()
+
+    assert drawn == []
+
+
+def test_a_held_view_owes_the_frame_instead(monkeypatch):
+    """Held means another VTK window is drawing (an animation export), and the
+    two must never overlap on macOS."""
+    view, drawn = _exposing_view(monkeypatch, suspended=True)
+
+    view._on_exposed()
+
+    assert drawn == [] and view._render_held
+
+
+def test_the_view_s_own_window_is_what_is_watched():
+    import inspect
+
+    from crystalline.ui.viewport import Viewport
+
+    source = inspect.getsource(Viewport.eventFilter)
+    assert "QEvent.Expose" in source and "_watch_window" in source
+
+
+# ── drawn only at a size macOS has confirmed ──────────────────────────────
+def _confirming_view(monkeypatch):
+    from crystalline.ui import viewport
+    from crystalline.ui.viewport import Viewport
+
+    drawn = []
+    monkeypatch.setattr(viewport.BasePlotter, "render", lambda _i: drawn.append("drawn"))
+
+    class _Interactor:
+        def __init__(self):
+            self.size = (644, 720)
+
+        def isVisible(self):
+            return True
+
+        def width(self):
+            return self.size[0]
+
+        def height(self):
+            return self.size[1]
+
+    class _Timer:
+        def __init__(self):
+            self.active = False
+
+        def isActive(self):
+            return self.active
+
+        def start(self):
+            self.active = True
+
+        def stop(self):
+            self.active = False
+
+    class _View:
+        draw_now = Viewport.draw_now
+        _draw_held = Viewport._draw_held
+        _wait_out_resize = Viewport._wait_out_resize
+        _size_unconfirmed = Viewport._size_unconfirmed
+        _give_up_waiting = Viewport._give_up_waiting
+
+        def __init__(self):
+            self.interactor = _Interactor()
+            self._suspended = False
+            self._render_held = self._render_queued = False
+            self._drawn, self._resized = True, False
+            self._native_size = (936, 720)          # what Cocoa last confirmed
+            self._unconfirmed = _Timer()
+            self._render_now = lambda: drawn.append("drawn")
+
+    return _View(), drawn
+
+
+def test_no_frame_is_drawn_at_a_size_macos_has_not_confirmed(monkeypatch):
+    """Qt gives the view its new size at once; the surface on screen follows
+    when Cocoa says so. Brucite's first frame was drawn 644 px wide into a
+    surface still 936 px wide, and shown stretched to fit it."""
+    view, drawn = _confirming_view(monkeypatch)
+
+    view.draw_now()
+    assert drawn == [] and view._render_held
+    assert view._unconfirmed.isActive()              # and a limit on the wait
+
+    view._native_size = (644, 720)                   # Cocoa's Resize arrives
+    view._draw_held()
+    assert drawn == ["drawn"]
+
+
+def test_a_confirmation_that_never_comes_does_not_freeze_the_view(monkeypatch):
+    view, drawn = _confirming_view(monkeypatch)
+    view.draw_now()
+
+    view._give_up_waiting()                          # the limit runs out
+
+    assert drawn == ["drawn"]
+
+
+def test_the_native_window_s_own_resize_is_what_confirms():
+    import inspect
+
+    from crystalline.ui.viewport import Viewport
+
+    source = inspect.getsource(Viewport.eventFilter)
+    assert "_native_size" in source and "QEvent.Resize" in source
+
+
+def test_vtk_s_own_paint_is_held_at_a_size_macos_has_not_confirmed(monkeypatch):
+    """Qt paints the view as soon as it is resized, and VTK's paintEvent draws
+    from C++ without asking: brucite's stretched frame was that paint."""
+    from PySide6.QtCore import QRect
+    from PySide6.QtGui import QPaintEvent
+
+    from crystalline.ui.viewport import Viewport
+
+    view, drawn = _confirming_view(monkeypatch)
+    view._watched_window = None
+
+    consumed = Viewport.eventFilter(view, view.interactor, QPaintEvent(QRect(0, 0, 644, 720)))
+
+    assert consumed is True and view._render_held     # not drawn now: owed
+    view._native_size = (644, 720)                    # Cocoa's Resize arrives
+    view._draw_held()
+    assert drawn == ["drawn"]
