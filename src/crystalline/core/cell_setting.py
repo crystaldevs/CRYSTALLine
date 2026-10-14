@@ -46,6 +46,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from crystalline.core.cells import periodic_distances
 from crystalline.core.structure import Structure
 
 # The two cells the app can report and write.
@@ -529,9 +530,7 @@ def _wrapped(fractional: np.ndarray) -> np.ndarray:
 
 def _matches(point, fractional, numbers, z, lattice, symprec) -> np.ndarray:
     """Mask of the atoms of element ``z`` sitting at ``point`` (periodically)."""
-    delta = np.asarray(fractional, dtype=float) - np.asarray(point, dtype=float)
-    delta -= np.round(delta)
-    distance = np.linalg.norm(delta @ lattice, axis=1)
+    distance = periodic_distances(fractional, point, lattice)
     return (np.asarray(numbers) == int(z)) & (distance < 2.0 * symprec)
 
 

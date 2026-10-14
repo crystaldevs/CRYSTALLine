@@ -614,6 +614,22 @@ def to_analysis_cell(structure: Structure, unit_cell) -> Structure:
     return Structure.from_ase(atoms[keep])
 
 
+def periodic_distances(fractional, point, lattice) -> np.ndarray:
+    """How far (Å) each of ``fractional`` lies from ``point``, image for image.
+
+    Both in fractional coordinates of the cell whose lattice vectors are the
+    rows of ``lattice``. Each difference is folded to its nearest whole cell,
+    component by component, and measured in Å: for telling whether an atom sits
+    at a point (a distance near zero), which is what deciding where a symmetry
+    operation carries an atom, or whether a setting puts an atom where the
+    crystal has one, comes down to — not a true nearest-image distance between
+    atoms far apart in an oblique cell.
+    """
+    delta = np.asarray(fractional, dtype=float) - np.asarray(point, dtype=float)
+    delta -= np.round(delta)
+    return np.linalg.norm(delta @ np.asarray(lattice, dtype=float), axis=1)
+
+
 __all__ = [
     "CellView",
     "to_conventional",
@@ -622,4 +638,5 @@ __all__ = [
     "tile_supercell",
     "complete_boundary",
     "to_analysis_cell",
+    "periodic_distances",
 ]

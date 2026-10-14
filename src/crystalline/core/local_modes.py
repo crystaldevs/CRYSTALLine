@@ -37,7 +37,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
+from crystalline.core.cells import periodic_distances
 from crystalline.core.measure import ANGLE, DIHEDRAL, DISTANCE
+from crystalline.core.symmetry import cartesian_operation
 
 # How far (Å) a measured atom may sit from where the internal coordinate puts
 # it and still be that atom. CRYSTAL prints thirteen significant figures, and
@@ -312,16 +314,13 @@ class _Operation:
         moved = fractional @ rotation.T + translation
         permutation = np.empty(len(fractional), dtype=int)
         for i, position in enumerate(moved):
-            offset = (fractional - position + 0.5) % 1.0 - 0.5
-            distances = np.linalg.norm(offset @ lattice, axis=1)
+            distances = periodic_distances(fractional, position, lattice)
             j = int(np.argmin(distances))
             if distances[j] > _SYMMETRY_PRECISION * 10:
                 return None
             permutation[i] = j
-        # x = f @ L, so f' = W f + w becomes x' = Lᵀ W L⁻ᵀ x + Lᵀ w.
-        cartesian = lattice.T @ rotation @ np.linalg.inv(lattice.T)
-        return _Operation(cartesian, translation @ lattice, permutation,
-                          _symbol(rotation, translation))
+        cartesian, shift = cartesian_operation(rotation, translation, lattice)
+        return _Operation(cartesian, shift, permutation, _symbol(rotation, translation))
 
     def apply(self, points: np.ndarray) -> np.ndarray:
         return np.asarray(points, dtype=float) @ self.rotation.T + self.translation
