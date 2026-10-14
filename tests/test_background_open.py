@@ -373,6 +373,8 @@ def test_a_tab_read_in_behind_says_what_it_left_out_when_first_shown(qapp, warni
 
 
 # ── on the real window ────────────────────────────────────────────────────
+from _panels import output_rows  # noqa: E402
+
 _THIOUREA = "thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out"
 _COESITE = "coesite/coesite_ela.out"
 _COMING = [("", "Reading the output…")]
@@ -385,21 +387,6 @@ def window(monkeypatch, tmp_path):
     made = make_window(monkeypatch, tmp_path)
     yield made
     close_window(made)
-
-
-def _rows(info_panel):
-    """The Info panel's CRYSTAL-output rows as (label, value); [] while hidden."""
-    from PySide6.QtWidgets import QFormLayout
-
-    if info_panel._output_group.isHidden():
-        return []
-    form = info_panel._output_form
-    rows = []
-    for row in range(form.rowCount()):
-        label = form.itemAt(row, QFormLayout.LabelRole)
-        value = form.itemAt(row, QFormLayout.FieldRole)
-        rows.append((label.widget().text() if label else "", value.widget().text()))
-    return rows
 
 
 def _held_rows(monkeypatch):
@@ -420,11 +407,11 @@ def test_a_tab_comes_up_before_the_rows_about_its_run(window, qtbot, monkeypatch
     qtbot.waitUntil(lambda: window._tab.path == path and window._tab.built(), timeout=10000)
 
     assert window._reading and window._reading_status.text().startswith("Reading thiourea")
-    assert _rows(window.info_panel) == _COMING
+    assert output_rows(window.info_panel) == _COMING
     assert len(window.structure) > 0
     release.set()
     qtbot.waitUntil(lambda: not window._reading, timeout=10000)
-    assert _rows(window.info_panel) == [(f"{k}:", str(v)) for k, v in real(path).items()]
+    assert output_rows(window.info_panel) == [(f"{k}:", str(v)) for k, v in real(path).items()]
 
 
 def test_rows_read_for_a_tab_behind_are_there_when_it_is_first_shown(window, qtbot):
@@ -439,7 +426,7 @@ def test_rows_read_for_a_tab_behind_are_there_when_it_is_first_shown(window, qtb
     assert not tab.built() and tab.pending[1].output_props    # waiting with the file
 
     show_tab(window, tab)
-    rows = _rows(window.info_panel)
+    rows = output_rows(window.info_panel)
     assert rows != _COMING and len(rows) == len(mw._read_output_props(behind))
 
 
@@ -457,4 +444,4 @@ def test_a_tab_closed_before_its_rows_are_read_takes_nothing(window, qtbot, monk
 
     assert closed not in window._tabs
     assert window._tab.path == second
-    assert _rows(window.info_panel) and _rows(window.info_panel) != _COMING
+    assert output_rows(window.info_panel) and output_rows(window.info_panel) != _COMING

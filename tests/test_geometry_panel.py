@@ -904,16 +904,10 @@ def _locmodes_panel():
 
 
 def _measure(panel, *atoms):
-    """Pick ``atoms`` one at a time, as in the 3D view, then measure them.
+    """Pick ``atoms`` one at a time, as in the 3D view, then measure them."""
+    from _panels import pick_and_measure
 
-    The selection model hands the panel each pick's selection sorted by index,
-    so that is what is given here: the order is the panel's to keep.
-    """
-    panel.set_selection([])
-    for picked in range(1, len(atoms) + 1):
-        panel.set_selection(sorted(atoms[:picked]))
-    panel._measure_selection()
-    return panel.measurements()[-1]
+    return pick_and_measure(panel, atoms)
 
 
 def _row(panel, row):

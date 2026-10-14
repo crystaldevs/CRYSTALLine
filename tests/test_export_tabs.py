@@ -15,7 +15,6 @@ as the window reads any file.
 
 import os
 
-import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -26,6 +25,7 @@ from _window import (  # noqa: E402
     export,
     make_window,
     measure,
+    measure_a_bond,
     open_file,
     show_tab,
     visible_geometry_panel,
@@ -82,15 +82,6 @@ def _measure_coordinate(window, number):
     return measure(window, atoms)
 
 
-def _measure_first_bond(window):
-    """Two bonded atoms of whatever is on screen: the closest pair."""
-    positions = np.asarray(window.structure.positions, dtype=float)
-    distances = np.linalg.norm(positions[:, None] - positions[None], axis=2)
-    np.fill_diagonal(distances, np.inf)
-    i, j = np.unravel_index(np.argmin(distances), distances.shape)
-    return measure(window, [int(i), int(j)])
-
-
 def _beside(path):
     stem = os.path.splitext(os.path.basename(path))[0]
     return os.path.join(os.path.dirname(path), f"{stem}_measurements.csv")
@@ -111,7 +102,7 @@ def test_each_tab_exports_what_was_measured_in_it(window, monkeypatch, tmp_path)
     open_file(window, sample_path(_THIOUREA))
     thiourea = window._tab
     assert thiourea is not peroxide
-    bond = _measure_first_bond(window)
+    bond = measure_a_bond(window)
 
     offered, (header, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
     assert offered == _beside(sample_path(_THIOUREA))
@@ -149,7 +140,7 @@ def test_a_file_read_behind_the_tab_on_screen_gets_its_local_modes_when_first_sh
     assert [row[4] for row in rows] == ["5"]
 
     show_tab(window, thiourea)
-    _measure_first_bond(window)
+    measure_a_bond(window)
     offered, (header, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
     assert offered == _beside(sample_path(_THIOUREA)) and header == _PLAIN_HEADER
     assert len(rows) == 1
@@ -187,8 +178,8 @@ def test_closing_a_tab_leaves_the_next_ones_export_as_it_was(window, monkeypatch
     peroxide = _open_peroxide(window)
     _measure_coordinate(window, 2)                       # O1–H3
     open_file(window, sample_path(_COESITE))
-    _measure_first_bond(window)
-    _measure_first_bond(window)
+    measure_a_bond(window)
+    measure_a_bond(window)
 
     window._close_current_tab()
     assert window._tab is peroxide and visible_geometry_panel(window) is peroxide.geometry_panel

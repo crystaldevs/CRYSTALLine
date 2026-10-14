@@ -17,7 +17,6 @@ with its text instead.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -223,19 +222,14 @@ def atoms_on_screen(window, points, atoms, tolerance=1e-3):
     ``atoms`` are the source atoms the points are positions of — an internal
     coordinate's, say — and each atom on screen picked is an image of its own.
     """
-    positions = np.asarray(window.structure.positions, dtype=float)
-    source = np.asarray(window._adp_index)
-    points = np.asarray(points, dtype=float)
-    for first in np.flatnonzero(source == atoms[0]):
-        shift = positions[first] - points[0]
-        picked = [int(first)]
-        for atom, point in zip(atoms[1:], points[1:]):
-            near = np.flatnonzero((source == atom)
-                                  & (np.linalg.norm(positions - (point + shift), axis=1)
-                                     < tolerance))
-            if not len(near):
-                break
-            picked.append(int(near[0]))
-        else:
-            return picked
-    return None
+    from _panels import atoms_at
+
+    return atoms_at(window.structure.positions, window._adp_index, points, atoms,
+                    tolerance=tolerance)
+
+
+def measure_a_bond(window):
+    """Click the two closest atoms on screen and measure them: a bond, on any file."""
+    from _panels import closest_pair
+
+    return measure(window, closest_pair(window.structure.positions))
