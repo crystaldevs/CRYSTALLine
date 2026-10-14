@@ -409,8 +409,20 @@ class MainWindow(QMainWindow):
         the view; then the view, with the file in it (it is on screen already,
         see :meth:`_build_tab_widgets`).
         """
-        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        self._lay_out_now()
         tab.viewport.draw_now()
+
+    def _lay_out_now(self) -> None:
+        """Lay out whatever is waiting to be, now rather than a turn later.
+
+        Left to Qt, a change made on a window that is otherwise still — a tab
+        filled on screen, the Info panel's rows arriving, the status bar's
+        reading label coming or going — reaches the screen a frame before its
+        layout does, and the window is seen half laid out: scrollbars it will
+        not need, a group's rows not in place, the atom count moving over a
+        frame late. Each was found sampling the window frame by frame.
+        """
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
 
     def _build_tab_widgets(self, tab: FileTab) -> None:
         """One tab's 3D view and panels, wired to each other and to the window."""
@@ -2687,12 +2699,20 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Load failed", f"{os.path.basename(path)}:\n{exc}")
             self._read_next()
 
-        # Not through _run_busy: no overlay, and the tab bar stays live — the
-        # result goes to a tab of its own, not to whichever one is on screen.
-        # Held here until the next is started: a dropped worker takes its
-        # thread down with it.
-        self._reader = Worker(lambda: _read_file(path))
-        self._reader.finished.connect(shown)
+        self._start_reader(lambda: _read_file(path), shown, failed)
+
+    def _start_reader(self, work, done, failed) -> None:
+        """Run ``work`` on the file reader; ``done(result)`` or ``failed(exc)`` back here.
+
+        The one worker the reading queue has, for both halves of reading a file
+        (:meth:`_read_next`, :meth:`_read_output_rows`). Not through
+        :meth:`_run_busy`: no overlay, and the tab bar stays live — the result
+        goes to a tab of its own, not to whichever one is on screen. Held on the
+        window until the next is started: a dropped worker takes its thread
+        down with it.
+        """
+        self._reader = Worker(work)
+        self._reader.finished.connect(done)
         self._reader.failed.connect(failed)
         self._reader.start()
 
@@ -2705,22 +2725,16 @@ class MainWindow(QMainWindow):
         waiting behind a batch. Still on the reader, as the rest of the file
         was: the status bar goes on saying the file is being read.
         """
-        def done(props) -> None:
+        def landed(props) -> None:
             try:
                 self._show_output_rows(tab, read, props)
             finally:
                 self._read_next()
 
-        def failed(_exc) -> None:
-            try:
-                self._show_output_rows(tab, read, {})
-            finally:
-                self._read_next()
-
-        self._reader = Worker(lambda: _read_output_props(path))
-        self._reader.finished.connect(done)
-        self._reader.failed.connect(failed)
-        self._reader.start()
+        # Rows that will not read leave the tab without them, and the queue
+        # goes on as if there had been none.
+        self._start_reader(lambda: _read_output_props(path), landed,
+                           lambda _exc: landed({}))
 
     def _show_output_rows(self, tab: FileTab, read: "_ReadFile", props: dict) -> None:
         """Give ``tab`` the rows about its run, wherever it has got to.
@@ -2740,7 +2754,7 @@ class MainWindow(QMainWindow):
             self._output_props = read.output_props
             self.info_panel.set_output_props(self._output_props)
         if tab is self._tab:
-            QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+            self._lay_out_now()
 
     def _update_reading_status(self) -> None:
         """Say in the status bar which file is being read, and how many are to come."""
@@ -2755,11 +2769,10 @@ class MainWindow(QMainWindow):
                 text += f"  {len(self._pending_reads)} more to come"
             label.setText(text)
             label.show()
-        # Laid out now, not a turn later: the status bar moved the atom count
-        # into the label's place one frame after the label went — a jump in a
-        # still window, now that reading ends after the tab is up (the Info
-        # panel's rows come last).
-        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
+        # Reading now ends after the tab is up (the Info panel's rows come
+        # last), on a still window, where the atom count moving into the
+        # label's place a frame late was seen.
+        self._lay_out_now()
 
     def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> FileTab:
         """Put a file that has been read into a tab.

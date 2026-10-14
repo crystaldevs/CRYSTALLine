@@ -126,6 +126,8 @@ def _window(events=None):
         _read_next = MainWindow._read_next
         _read_output_rows = MainWindow._read_output_rows
         _update_reading_status = MainWindow._update_reading_status
+        _start_reader = MainWindow._start_reader
+        _lay_out_now = MainWindow._lay_out_now
 
         def __init__(self):
             self._reading_status = _Label()

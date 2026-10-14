@@ -160,6 +160,7 @@ class _Window(QMainWindow):
     _take_tab_for_file = MainWindow._take_tab_for_file
     _realise_tab = MainWindow._realise_tab
     _settle_tab = MainWindow._settle_tab
+    _lay_out_now = MainWindow._lay_out_now
     _show_notice = MainWindow._show_notice
     _tab_for_page = MainWindow._tab_for_page
     _on_file_tab_changed = MainWindow._on_file_tab_changed
