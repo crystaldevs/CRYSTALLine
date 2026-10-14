@@ -42,6 +42,7 @@ class Palette:
     text_muted: str    # secondary labels, hints, units
     accent: str        # the app's own colour, for checked and active states
     accent_soft: str   # a tint of it, for selected-but-quiet surfaces
+    link: str          # the accent as text on the ground, which needs more contrast
     track: str         # slider grooves, scrollbar channels
     chrome: str        # toolbar and dock headers: the frame around the work
     scene: str         # the 3D viewport's ground
@@ -55,8 +56,12 @@ LIGHT = Palette(
     border_strong="#aeb4bf",
     text="#1b1e24",
     text_muted="#69707c",
-    accent="#3d6ff0",
-    accent_soft="#e4ebfd",
+    # CRYSTAL's cyan (the logo's #28ABCA, hue 193°) taken a step deeper: the
+    # accent is a fill under white text — selected rows, menus, ticks — and
+    # the logo's own shade gives white 2.6:1 there. This one gives 4.6:1.
+    accent="#127f9c",
+    accent_soft="#dcf0f5",
+    link="#0b6f88",
     track="#e0e3e9",
     chrome="#e6e9ef",
     scene="#ffffff",
@@ -70,8 +75,11 @@ DARK = Palette(
     border_strong="#4e555f",
     text="#e7eaef",
     text_muted="#98a0ad",
-    accent="#5b8dee",
-    accent_soft="#2b3a5c",
+    # The same cyan as in light: it is still a fill under white text. As text
+    # on the dark ground it would be too dim, so links take a lighter one.
+    accent="#127f9c",
+    accent_soft="#1c3a44",
+    link="#4cc3df",
     track="#343941",
     chrome="#191c20",
     # Not pure black: a structure lit against #000 loses its darkest faces
@@ -598,6 +606,17 @@ def stylesheet(palette: Palette) -> str:
     }}
     QToolBar QToolButton[chip="ghost"]:pressed {{ background: {p.border}; }}
 
+    /* The Plots window: the figure on an edged sheet, flat buttons below. */
+    QFrame#plotPaper {{ background: #ffffff; border: 1px solid {p.border}; }}
+    QFrame#plotToolSeparator {{ background: {p.border}; border: none; }}
+    QToolButton[role="plotTool"] {{
+        background: transparent; border: none; border-radius: 5px; padding: 3px;
+    }}
+    QToolButton[role="plotTool"]:hover {{ background: {p.track}; }}
+    QToolButton[role="plotTool"]:pressed {{ background: {p.border}; }}
+    QToolButton[role="plotTool"]:checked {{ background: {p.accent_soft}; }}
+    QLabel[role="plotCoords"] {{ color: {p.text_muted}; }}
+
     QToolBar QToolButton[chip="toggle"] {{
         background: transparent;
         color: {p.text_muted};
@@ -741,7 +760,7 @@ def qpalette(palette: Palette):
     # a real colour here rather than whatever Fusion derives from Window.
     out.setColor(QPalette.Mid, QColor(p.border_strong))
     out.setColor(QPalette.Midlight, QColor(p.track))
-    out.setColor(QPalette.Link, accent)
+    out.setColor(QPalette.Link, QColor(p.link))
     for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
         out.setColor(QPalette.Disabled, role, muted)
     return out
@@ -763,9 +782,19 @@ _SETTINGS_KEY = "appearance/mode"
 
 
 def _settings():
+    """The app's settings: one store, wherever the platform keeps them.
+
+    The format is named rather than left to the two-argument constructor,
+    which always means the native store (a .plist on macOS) whatever the
+    default format says — so a test redirecting the default (see
+    tests/conftest.py) was not redirected at all, and the suite wrote into the
+    real app's settings. Named, it is the native store as before, unless told
+    otherwise.
+    """
     from PySide6.QtCore import QSettings
 
-    return QSettings(_SETTINGS_ORGANISATION, _SETTINGS_APPLICATION)
+    return QSettings(QSettings.defaultFormat(), QSettings.UserScope,
+                     _SETTINGS_ORGANISATION, _SETTINGS_APPLICATION)
 
 
 def current_mode() -> str:
@@ -785,7 +814,25 @@ def set_mode(app, mode: str) -> None:
         _settings().setValue(_SETTINGS_KEY, mode)
     except Exception:  # noqa: BLE001 - can't persist; still apply it for this session
         pass
+    _frame(app, mode)
     _paint(app, palette_for(app, mode))
+
+
+def _frame(app, mode: str) -> None:
+    """The windows' own frames in the same appearance as what is inside them.
+
+    The title bars are the system's to draw, in the system's appearance: a
+    dark CRYSTALLine on a light desktop sat under a light title bar. Asked for
+    a scheme, Qt has the system draw them in it; "system" hands that back.
+    """
+    try:
+        from PySide6.QtCore import Qt as _Qt
+
+        scheme = {"dark": _Qt.ColorScheme.Dark,
+                  "light": _Qt.ColorScheme.Light}.get(mode, _Qt.ColorScheme.Unknown)
+        app.styleHints().setColorScheme(scheme)
+    except Exception:  # noqa: BLE001 - Qt before 6.8 cannot be asked; the frames stay as they are
+        pass
 
 
 def is_dark(app) -> bool:
@@ -851,6 +898,7 @@ def apply(app) -> None:
         app.setStyle("Fusion")
     except Exception:  # noqa: BLE001 - an unusual Qt build; the sheet still applies
         pass
+    _frame(app, current_mode())
     _paint(app, palette_for(app))
 
     try:  # follow the desktop, but only while the choice is to follow it

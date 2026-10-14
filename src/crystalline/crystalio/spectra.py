@@ -298,7 +298,10 @@ def plot_spectra(
     )
     _colour_curves(axes, colours)
     if title:
+        from crystalline.crystalio.figure_style import keep_title
+
         axes.set_title(title)
+        keep_title(figure)      # asked for by name
     return figure
 
 

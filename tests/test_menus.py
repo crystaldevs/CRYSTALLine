@@ -155,7 +155,10 @@ def test_rotate_buttons_sit_beside_the_axis_buttons(qapp):
 
     # left / right / up / down + the two in-screen-plane (roll) buttons
     assert len(window._rotate_buttons) == 6
-    assert [b.text() for b in window._rotate_buttons] == ["◀", "▶", "▲", "▼", "↺", "↻"]
+    assert [b.property("glyph") for b in window._rotate_buttons] == [
+        "rotate-left.svg", "rotate-right.svg", "rotate-up.svg", "rotate-down.svg",
+        "rotate-anticlockwise.svg", "rotate-clockwise.svg"]
+    assert all(not b.icon().isNull() and not b.text() for b in window._rotate_buttons)
     assert all(b.autoRepeat() for b in window._rotate_buttons)  # hold to keep turning
 
     # They orbit the view, and unlike a/b/c alignment they need no cell.

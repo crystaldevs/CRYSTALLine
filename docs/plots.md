@@ -3,7 +3,8 @@
 The entries of the **Plot** menu draw the properties computed by CRYSTAL. The
 figures are produced by [CRYSTALClear](https://github.com/crystaldevs/CRYSTALClear)
 and appear in the **Plots** panel at the bottom of the window, one tab per
-figure.
+figure. Most figures carry their options beside them, and are redrawn as these
+are changed.
 
 Some entries use the output file already open; the others read the data files
 written by a properties run, and their names end with `…`. Those files are
@@ -123,12 +124,12 @@ can be varied, for anyone who wants more than the dialogs here offer.
 
 :::{grid-item}
 ```{image} plot-gallery.png
-:alt: Four plots of coesite - a Young's modulus surface, two polar sections and an equation of state
+:alt: Three plots of coesite - a Young's modulus surface and two polar sections - and an equation of state of ZnO
 :class: crystal-framed
 ```
 +++
 Coesite: the directional Young's modulus as a surface, the same and the linear
-compressibility as sections through the principal planes, and an equation of
+compressibility as sections through the principal planes. ZnO: an equation of
 state.
 :::
 

@@ -107,6 +107,13 @@ def _plot_module():
     matplotlib.use("Agg")
     from CRYSTALClear import plot as CCplt
 
+    # Every plot comes through here, CRYSTALClear's and the app's own, so this
+    # is where the house style is put in place: cheap, and idempotent.
+    from crystalline.crystalio import figure_style
+
+    figure_style.apply()
+    if not _font_applied:
+        apply_font()
     return CCplt
 
 
@@ -120,9 +127,13 @@ def _elastic_builder(choose: str, ndeg: int = 100) -> Callable[[str], object]:
 
         co = Crystal_output(path)
         co.get_elatensor()
-        return _to_figure(CCplt.plot_cry_ela(co, choose, ndeg))
+        from crystalline.crystalio.elastic import elastic_surface
+
+        return elastic_surface(co.elatensor, choose, ndeg, module=CCplt)
 
     return build
+
+
 
 
 def _elastic_2d_builder(choose: str, ndeg: int = 200) -> Callable[[str], object]:
@@ -299,6 +310,7 @@ def crystalclear_available() -> bool:
 # than read from CRYSTALClear so the setting works against any build of it, and
 # so a plot produced by CRYSTALLine itself (the spectra overlay) obeys it too.
 FONT_FAMILIES = (
+    ("STIX", "stix"),
     ("Matplotlib default", "default"),
     ("Computer Modern", "cm"),
     ("Computer Modern Sans", "cmss"),
@@ -307,13 +319,22 @@ FONT_FAMILIES = (
     ("Monospace", "monospace"),
 )
 
-DEFAULT_FONT_FAMILY = "default"
+# STIX: a Times-like face with its own matching maths, shipped with matplotlib
+# itself, so every machine draws the same figure with nothing to install — and
+# with the Greek, Å and the true minus sign the figures use (it lacks only the
+# superscript ⁻, which no label here writes as a character).
+DEFAULT_FONT_FAMILY = "stix"
 DEFAULT_FONT_SIZE = 10.0
 
 # Every recipe fixes the mathtext font set as well, so an axis label like
 # $\Phi^\mathbf{n}$ is typeset in the same face as the text around it instead of
 # keeping matplotlib's sans-serif maths.
 _FONT_RECIPES = {
+    "stix": {
+        "font.family": "serif",
+        "font.serif": ["STIXGeneral", "DejaVu Serif"],
+        "mathtext.fontset": "stix",
+    },
     "default": {"font.family": "sans-serif", "mathtext.fontset": "dejavusans"},
     # Computer Modern is LaTeX's default face, so this is what makes a figure
     # match the body text of a paper. 'cmr10' ships with matplotlib; 'CMU Serif'
@@ -373,7 +394,16 @@ def apply_font(family: str = DEFAULT_FONT_FAMILY, size: float = DEFAULT_FONT_SIZ
     applied.update(recipe)
     applied["font.size"] = float(size)
     matplotlib.rcParams.update(applied)
+    global _font_applied
+    _font_applied = True
     return applied
+
+
+# Whether a font has been put in place yet. The first plot drawn applies the
+# default, so a figure is in the house face whether or not Plot ▸ Plot font was
+# ever opened; once anything is applied — that default, or a choice made in the
+# dialog — it is left alone.
+_font_applied = False
 
 
 def installed_font_names() -> list:

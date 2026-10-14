@@ -29,7 +29,7 @@ def test_floating_plot_geometry_is_four_by_three_and_on_screen():
         rect = _floating_plot_geometry(window, _SCREEN)
         assert rect.width() / rect.height() == pytest.approx(4 / 3, abs=0.01)
         assert _SCREEN.contains(rect), "the plot window must open fully on screen"
-        assert rect.width() >= 640  # never squeezed below a usable width
+        assert rect.width() >= 520  # never squeezed below a usable width
 
 
 def test_floating_plot_geometry_scales_with_the_main_window():
@@ -277,11 +277,14 @@ def test_the_toolbar_sits_below_the_figure(qapp):
     panel.add_figure(figure, "a plot")
 
     tab = panel._tabs.widget(0)
-    layout = tab.layout()
-    widgets = [layout.itemAt(i).widget() for i in range(layout.count())]
-    canvas_at = next(i for i, w in enumerate(widgets) if w is tab.canvas)
+    panel.resize(640, 480)
+    panel.show()
+    qapp.processEvents()
+    toolbar = tab._btn_reset.parentWidget()
+    canvas_bottom = tab.canvas.mapTo(tab, tab.canvas.rect().bottomLeft()).y()
 
-    assert canvas_at < len(widgets) - 1, "the toolbar should follow the canvas"
+    assert toolbar.geometry().top() >= canvas_bottom, "the toolbar should follow the canvas"
+    panel.hide()
 
     panel.clear()   # and closing it must not leave a draw queued on a dead canvas
 

@@ -164,3 +164,34 @@ def test_an_empty_other_box_falls_back_rather_than_setting_nothing(qapp):
     dialog.installed.setCurrentText("   ")
 
     assert dialog.options()["family"] == DEFAULT_FONT_FAMILY
+
+
+def test_the_first_plot_is_in_the_house_face_without_the_dialog_ever_opened(monkeypatch):
+    """STIX: ships with matplotlib, so every machine draws the same figure."""
+    pytest.importorskip("CRYSTALClear")
+    import matplotlib
+
+    from crystalline.crystalio import plotting
+
+    monkeypatch.setattr(plotting, "_font_applied", False)
+    matplotlib.rcParams["font.family"] = ["sans-serif"]
+
+    plotting._plot_module()
+
+    assert DEFAULT_FONT_FAMILY == "stix"
+    assert matplotlib.rcParams["font.serif"][0] == "STIXGeneral"
+    assert matplotlib.rcParams["mathtext.fontset"] == "stix"
+
+
+def test_a_font_chosen_in_the_dialog_is_not_overridden_by_the_default(monkeypatch):
+    pytest.importorskip("CRYSTALClear")
+    import matplotlib
+
+    from crystalline.crystalio import plotting
+
+    monkeypatch.setattr(plotting, "_font_applied", False)
+    apply_font(family="cmss")
+
+    plotting._plot_module()
+
+    assert matplotlib.rcParams["font.sans-serif"][0] == "CMU Sans Serif"

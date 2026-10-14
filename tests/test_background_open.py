@@ -239,6 +239,9 @@ def _router(blank_on_screen=False):
         def _update_tab_labels(self):
             self.calls.append(("labels",))
 
+        def _sync_welcome(self):
+            pass                     # the welcome page has its own tests
+
         def _fill_tab(self, tab, path, read):
             # filled while the window acts on it — whichever tab is on screen
             self.calls.append(("fill", tab.name, self._tab.name))

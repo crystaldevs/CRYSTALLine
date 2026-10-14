@@ -1,17 +1,26 @@
 /* CRYSTALLine on top of sphinx-book-theme.
  *
  * The theme is CRYSTALClear's, so the two sites stay a family; the colours are
- * the logo's own — the cyan-teal of "Line" and the green of the lattice — and
- * the rest is room to breathe: wider text, framed screenshots, cards that
- * carry a picture.
+ * the app's own (crystalline/ui/theme.py) — CRYSTAL's cyan, taken deep enough
+ * to carry white text and to read as text on white — and the green of the
+ * lattice; the rest is room to breathe: wider text, framed screenshots, cards
+ * that carry a picture.
+ *
+ * Text and fills are two colours, as in the app: a link is cyan text on the
+ * page, a button white text on cyan, and the one shade cannot be right for
+ * both in the dark mode.
  */
 
 :root,
 html[data-theme="light"] {
-  --crystal-cyan: #1795b5;
-  --crystal-cyan-bright: #20a0c0;
+  /* As text: 5.8:1 on white. The app's link colour. */
+  --crystal-cyan: #0b6f88;
+  --crystal-cyan-bright: #127f9c;
+  /* As a fill under white text: 4.6:1. The app's accent. */
+  --crystal-fill: #127f9c;
+  --crystal-fill-hover: #0b6f88;
   --crystal-green: #7ac143;
-  --crystal-ink: #1b2b34;
+  --crystal-ink: #14212b;
 
   --pst-color-primary: var(--crystal-cyan);
   --pst-color-link: var(--crystal-cyan);
@@ -31,8 +40,11 @@ html[data-theme="light"] {
 }
 
 html[data-theme="dark"] {
-  --crystal-cyan: #45c2dd;
+  --crystal-cyan: #4cc3df;
   --crystal-cyan-bright: #6fd4ea;
+  /* White text on #4cc3df is 2:1; buttons keep the deep cyan. */
+  --crystal-fill: #127f9c;
+  --crystal-fill-hover: #0f7591;
   --crystal-green: #9fdb6a;
   --crystal-ink: #e6f1f5;
 
@@ -145,13 +157,14 @@ html[data-theme="dark"] .crystal-shot img {
 
 /* Buttons in the logo's colours rather than the theme's default blue. */
 .sd-btn-primary {
-  background-color: var(--crystal-cyan) !important;
-  border-color: var(--crystal-cyan) !important;
+  background-color: var(--crystal-fill) !important;
+  border-color: var(--crystal-fill) !important;
+  color: #fff !important;
 }
 
 .sd-btn-primary:hover {
-  background-color: var(--crystal-cyan-bright) !important;
-  border-color: var(--crystal-cyan-bright) !important;
+  background-color: var(--crystal-fill-hover) !important;
+  border-color: var(--crystal-fill-hover) !important;
 }
 
 .sd-btn-outline-primary {
@@ -160,7 +173,8 @@ html[data-theme="dark"] .crystal-shot img {
 }
 
 .sd-btn-outline-primary:hover {
-  background-color: var(--crystal-cyan) !important;
+  background-color: var(--crystal-fill) !important;
+  border-color: var(--crystal-fill) !important;
   color: #fff !important;
 }
 

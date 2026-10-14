@@ -29,13 +29,17 @@ _ROTATE_STEP_DEG = 15.0
 # offer the same gestures. The signs say what the *scene* does — press ▶ and
 # the crystal turns right — because that is what the arrow on the button
 # promises and what the eye follows. See :func:`camera_angles`.
+#
+# Each is drawn from a bundled glyph, as undo and redo are, rather than from a
+# text arrow: ◀ and ↻ come from whatever font has them, at that font's weight
+# and baseline, and sat beside the drawn icons as visibly something else.
 ROTATE_CHIPS = (
-    ("◀", "Rotate left", -1.0, 0.0, 0.0),
-    ("▶", "Rotate right", 1.0, 0.0, 0.0),
-    ("▲", "Rotate up", 0.0, 1.0, 0.0),
-    ("▼", "Rotate down", 0.0, -1.0, 0.0),
-    ("↺", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -1.0),
-    ("↻", "Rotate clockwise in the screen plane", 0.0, 0.0, 1.0),
+    ("rotate-left.svg", "Rotate left", -1.0, 0.0, 0.0),
+    ("rotate-right.svg", "Rotate right", 1.0, 0.0, 0.0),
+    ("rotate-up.svg", "Rotate up", 0.0, 1.0, 0.0),
+    ("rotate-down.svg", "Rotate down", 0.0, -1.0, 0.0),
+    ("rotate-anticlockwise.svg", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -1.0),
+    ("rotate-clockwise.svg", "Rotate clockwise in the screen plane", 0.0, 0.0, 1.0),
 )
 
 
@@ -65,6 +69,27 @@ def rotate_step_box(parent):
     box.setFixedSize(64, CHIP_SIZE.height())
     box.setToolTip("How far one press of a rotate button turns the view.")
     return box
+
+
+def glyph_icon(name: str) -> QIcon:
+    """A bundled glyph in the current theme's text colour."""
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui import theme
+
+    return theme.monochrome_icon(name, theme.active_palette(QApplication.instance()).text)
+
+
+def rotate_chip(parent, glyph: str, tooltip: str) -> "QToolButton":
+    """One orbit chip: its glyph, kept with it so a theme change can redraw it."""
+    button = QToolButton(parent)
+    button.setIcon(glyph_icon(glyph))
+    button.setProperty("glyph", glyph)
+    button.setToolTip(tooltip)
+    button.setAccessibleName(tooltip)
+    button.setAutoRepeat(True)  # hold to keep turning
+    style_chip(button, "ghost")
+    return button
 
 
 def reset_view_icon():
@@ -170,6 +195,12 @@ def _build_file_menu(window) -> None:
     open_action.setShortcut("Ctrl+O")
     open_action.triggered.connect(window._open_file)
     file_menu.addAction(open_action)
+
+    # The same list the welcome page shows, filled each time it is opened so
+    # it is never staler than the files on disk.
+    recent_menu = file_menu.addMenu("Open recent")
+    recent_menu.aboutToShow.connect(lambda: _fill_recent_menu(window, recent_menu))
+    window._recent_menu = recent_menu
 
     close_tab = QAction("Close tab", window)
     close_tab.setShortcuts(QKeySequence.Close)  # Ctrl+W (and Ctrl+F4), ⌘W on macOS
@@ -362,6 +393,8 @@ def refresh_history_icons(window) -> None:
     reset = getattr(window, "_reset_view_button", None)
     if reset is not None:
         reset.setIcon(reset_view_icon())
+    for button in getattr(window, "_rotate_buttons", ()):
+        button.setIcon(glyph_icon(button.property("glyph")))
 
 
 def refresh_appearance_button(window) -> None:
@@ -603,6 +636,26 @@ def _build_plot_menu(window) -> None:
     window._update_orbital_actions()
 
 
+def _fill_recent_menu(window, menu) -> None:
+    """The recent files, newest first, then a way to forget them."""
+    import os
+
+    from crystalline.ui import preferences
+
+    menu.clear()
+    paths = preferences.recent_files()
+    for path in paths:
+        action = menu.addAction(os.path.basename(path))
+        action.setToolTip(path)
+        action.setStatusTip(path)
+        action.triggered.connect(lambda _checked=False, p=path: window._load_paths([p]))
+    if not paths:
+        menu.addAction("No recent files").setEnabled(False)
+        return
+    menu.addSeparator()
+    menu.addAction("Clear menu").triggered.connect(window._forget_recent_files)
+
+
 # ── Help ──────────────────────────────────────────────────────────────────
 def _build_help_menu(window) -> None:
     help_menu = window.menuBar().addMenu("&Help")
@@ -612,39 +665,10 @@ def _build_help_menu(window) -> None:
 
 
 def show_about(parent) -> None:
-    """A small About dialog showing the logo and version."""
-    from PySide6.QtCore import Qt as _Qt
-    from PySide6.QtGui import QPixmap
-    from PySide6.QtWidgets import QDialog, QDialogButtonBox, QVBoxLayout
+    """Help ▸ About: see :class:`~crystalline.ui.panels.about_dialog.AboutDialog`."""
+    from crystalline.ui.panels.about_dialog import AboutDialog
 
-    from crystalline.resources import logo_path
-
-    dialog = QDialog(parent)
-    dialog.setWindowTitle("About CRYSTALLine")
-    layout = QVBoxLayout(dialog)
-    layout.setContentsMargins(24, 20, 24, 16)
-    layout.setSpacing(12)
-
-    logo = QLabel()
-    logo.setPixmap(QPixmap(logo_path()).scaledToWidth(320, _Qt.SmoothTransformation))
-    logo.setAlignment(_Qt.AlignCenter)
-    layout.addWidget(logo)
-
-    caption = QLabel(
-        "<div style='text-align:center'>"
-        "<b>CRYSTALLine</b><br>"
-        "A desktop viewer &amp; editor for CRYSTAL structures and phonons.<br>"
-        "<span style='color:gray'>Built on CRYSTALClear.<br>"
-    )
-    caption.setTextFormat(_Qt.RichText)
-    caption.setAlignment(_Qt.AlignCenter)
-    layout.addWidget(caption)
-
-    buttons = QDialogButtonBox(QDialogButtonBox.Close)
-    buttons.rejected.connect(dialog.reject)
-    buttons.accepted.connect(dialog.accept)
-    layout.addWidget(buttons)
-    dialog.exec()
+    AboutDialog(parent).exec()
 
 
 # ── toolbars ──────────────────────────────────────────────────────────────
@@ -725,12 +749,8 @@ def _build_toolbars(window) -> None:
     view_toolbar.addWidget(rotate_caption)
     # The last two spin the structure in the screen plane (about the axis
     # perpendicular to the screen) rather than orbiting the camera around it.
-    for label, tooltip, azimuth, elevation, roll in ROTATE_CHIPS:
-        button = QToolButton(window)
-        button.setText(label)
-        button.setToolTip(tooltip)
-        button.setAutoRepeat(True)  # hold to keep turning
-        style_chip(button, "ghost")
+    for glyph, tooltip, azimuth, elevation, roll in ROTATE_CHIPS:
+        button = rotate_chip(window, glyph, tooltip)
         # The signs are fixed; how far each press turns is read from the step
         # box when it is pressed, so changing the step needs no rewiring.
         button.clicked.connect(

@@ -114,7 +114,9 @@ _APPLICATION_TITLE = "CRYSTALLine — CRYSTAL structure & phonon viewer"
 
 # Geometry of the floating Plots window on the first plot: a fraction of the main
 # window's width (never below the minimum), 4:3, inset from its lower-right corner.
-_PLOT_FLOAT_WIDTH_FRACTION = 0.55
+# The figure's width, not the window's: the controls are added beside it, and at
+# 55% with them the window came out nearly as wide as the main one.
+_PLOT_FLOAT_WIDTH_FRACTION = 0.45
 # How long an output's details wait after a file is shown: long enough for its
 # 3D view to settle at its size — the Phonons panel coming in narrows it — and
 # draw, which a worker busy in Python holds up; short enough that the Info
@@ -124,7 +126,7 @@ _DETAILS_PAUSE_MS = 300
 # The figure's shape, width over height, unless its recipe asks for another:
 # matplotlib's own default, which gives the axes room in both directions.
 _PLOT_ASPECT = 4 / 3
-_PLOT_FLOAT_MIN_WIDTH = 640
+_PLOT_FLOAT_MIN_WIDTH = 520
 _PLOT_FLOAT_MARGIN = 24
 
 # How far (cm⁻¹) a click may land from a mode and still be taken to mean it.
@@ -303,6 +305,14 @@ class MainWindow(QMainWindow):
         # views — the part of the window a file is aimed at.
         self.setAcceptDrops(True)
         self._drop_hint = DropHint(self._file_tabs)
+        # What an empty tab shows: over the pages, not the tab bar, so the tabs
+        # stay where they can be reached.
+        from crystalline.ui.widgets.welcome import WelcomeOverlay
+
+        self._welcome = WelcomeOverlay(self._file_tabs.findChild(QStackedWidget))
+        self._welcome.open_requested.connect(self._open_file)
+        self._welcome.path_chosen.connect(lambda path: self._load_paths([path]))
+        self._welcome.clear_requested.connect(self._forget_recent_files)
 
         # The first tab: the structure handed in, or an empty one that the first
         # file opened takes over.
@@ -697,6 +707,35 @@ class MainWindow(QMainWindow):
         if getattr(self, "_edit_tool_actions", None) is not None:
             self._update_edit_actions()
         self._update_status()
+        self._sync_welcome()
+
+    def _sync_welcome(self) -> None:
+        """The welcome page over an empty tab, and over nothing else."""
+        from crystalline.ui import preferences
+
+        welcome = getattr(self, "_welcome", None)
+        if welcome is None:
+            return
+        blank = self._tab is not None and self._tab.is_blank()
+        if blank:
+            welcome.set_recent(preferences.recent_files())
+        welcome.present(blank)
+        # The Point symmetry panel steps aside for it — beside a page with no
+        # structure it is an empty tree — and comes back with the next one.
+        dock = getattr(self, "_symmetry_dock", None)
+        if dock is not None:
+            if blank and dock.isVisible():
+                self._symmetry_parked = True
+                dock.hide()
+            elif not blank and getattr(self, "_symmetry_parked", False):
+                self._symmetry_parked = False
+                dock.show()
+
+    def _forget_recent_files(self) -> None:
+        from crystalline.ui import preferences
+
+        preferences.forget_recent_files()
+        self._sync_welcome()
 
     def _capability(self, key: str):
         """What the open output offers for ``key`` (see :func:`_probe`), once per tab and file.
@@ -762,6 +801,7 @@ class MainWindow(QMainWindow):
     def _on_structure_changed(self, s: Structure) -> None:
         """Model edited: record undo, redraw, and reconcile a running animation."""
         self._capture_undo(s)
+        self._sync_welcome()  # atoms built in an empty tab: it is not empty now
         if len(self._tabs) == 1:
             self._update_tab_labels()  # atoms built in the empty tab make it closable
         self._update_status()  # atom count may have changed (add/remove)
@@ -1197,6 +1237,9 @@ class MainWindow(QMainWindow):
                 self, kind.caption, start, kind.file_filter)
             if not path:
                 return
+        if kind.key.startswith(("ela_", "ela2d_")):
+            self._open_elastic(kind, path)
+            return
         # Some of these take seconds — an elastic surface is evaluated over a
         # grid of directions — so the build goes to a thread and the window shows
         # the busy overlay instead of locking up.
@@ -1216,6 +1259,32 @@ class MainWindow(QMainWindow):
 
         self._run_busy(build, f"Building {kind.label.rstrip('… ').lower()}…",
                        show, "Plot failed")
+
+    def _open_elastic(self, kind, path: str) -> None:
+        """An elastic plot with its controls beside it, drawn from the tensor.
+
+        The tensor is read once, on a worker; every view of it — another
+        property, sections instead of a surface, another colour map — is then
+        drawn from memory as the controls are turned.
+        """
+        from crystalline.crystalio import elastic
+        from crystalline.ui.panels.elastic_controls import ElasticControls
+
+        def build():
+            tensor = elastic.read_tensor(path)
+            recipe = PlotRecipe(
+                draw=lambda **options: elastic.plot_elastic(tensor, **options),
+                options=elastic.options_for(kind.key), title=elastic.title,
+                controls=ElasticControls)
+            return recipe, recipe.redrawn()
+
+        def show(built) -> None:
+            recipe, (figure, _options) = built
+            self.plot_panel.add_figure(figure, elastic.title(recipe.options), recipe=recipe)
+            self._reveal_plot_dock()
+
+        self._run_busy(build, f"Building {kind.label.rstrip('… ').lower()}…", show,
+                       "Plot failed")
 
     # ── thermal ellipsoids (ADP) ────────────────────────────────────────
     def _displayed_adp(self, temperature_index: Optional[int] = None) -> Optional[np.ndarray]:
@@ -1316,11 +1385,8 @@ class MainWindow(QMainWindow):
         # spectrum again is arithmetic on curves already in hand, which is what
         # makes this the plot worth being able to change in place.
         def draw(*, curves, **options):
-            return plot_spectra(
-                [(kind.label, data[kind]) for kind in curves],
-                title=curves[0].label if len(curves) == 1 else None,
-                **options,
-            )
+            # No title, even over one curve: the tab names it.
+            return plot_spectra([(kind.label, data[kind]) for kind in curves], **options)
 
         def name(options) -> str:
             curves = options["curves"]
@@ -2275,8 +2341,10 @@ class MainWindow(QMainWindow):
             tab.plots_open = True  # this file's plots are open: bring them back with it
         if not self._plot_dock_floated:
             self._plot_dock_floated = True
+            # Placed and sized before it is shown: shown first, it came up
+            # where a docked panel would be, at the size of one, and then
+            # jumped to where it belongs.
             self._plot_dock.setFloating(True)
-            self._plot_dock.show()
             screen = self.screen()
             where = _floating_plot_geometry(
                 self.frameGeometry(), screen.availableGeometry() if screen else None,
@@ -3181,9 +3249,13 @@ class MainWindow(QMainWindow):
         has to happen on this thread, and doing it for a tab nobody has turned
         to yet is the one cost reading in the background does not remove.
         """
+        from crystalline.ui import preferences
+
+        preferences.remember_file(path)
         if front or self._tab.is_blank():
             tab = self._take_tab_for_file()
             self._fill_tab(tab, path, read)
+            self._sync_welcome()  # down before the view is drawn, not after
             self._settle_tab(tab)  # filled on screen: shown finished, not a frame early
             self._show_notice(tab)
             return tab

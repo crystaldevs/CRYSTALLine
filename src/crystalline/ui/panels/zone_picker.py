@@ -130,6 +130,11 @@ _POINT_COLOUR = "#d6453c"
 _CURRENT_COLOUR = "#f5a623"
 
 
+# The zone's own colour: CRYSTAL's cyan, as in the logo. Drawn translucent or
+# as a bar, never under text, so the logo's own shade serves.
+_ZONE_COLOUR = "#28abca"
+
+
 class ZonePickerDialog(QDialog):
     """Click special points in order; the path is the chain between them."""
 
@@ -159,20 +164,13 @@ class ZonePickerDialog(QDialog):
 
         outer = QVBoxLayout(self)
         if not self._points:
-            message = ("This lattice could not be classified, so it has no labelled "
-                       "points — the zone is drawn, but the path has to be typed.")
-        elif picking:
-            message = ("Click the labelled points in the order the path should visit "
-                       "them. The zone is the Wigner–Seitz cell of the reciprocal "
-                       "lattice.")
-        else:
-            message = ("The first Brillouin zone — the Wigner–Seitz cell of the "
-                       "reciprocal lattice — with this lattice's high-symmetry "
-                       "points. Drag to rotate, scroll to zoom.")
-        note = QLabel(message)
-        note.setWordWrap(True)
-        note.setStyleSheet("color: palette(mid);")
-        outer.addWidget(note)
+            # Not a description of the dialog but a warning about this lattice:
+            # without labelled points there is nothing to click.
+            note = QLabel("This lattice could not be classified, so it has no labelled "
+                          "points — the zone is drawn, but the path has to be typed.")
+            note.setWordWrap(True)
+            note.setStyleSheet("color: palette(mid);")
+            outer.addWidget(note)
 
         # Which cell's zone. Two different pictures of the same crystal, and
         # picking one of them wrong is the classic way to draw a Brillouin zone
@@ -308,12 +306,8 @@ class ZonePickerDialog(QDialog):
         rotate = QLabel("ROTATE")
         rotate.setContentsMargins(2, 0, 6, 0)
         bar.addWidget(rotate)
-        for label, tip, azimuth, elevation, roll in menus.ROTATE_CHIPS:
-            button = QToolButton(bar)
-            button.setText(label)
-            button.setToolTip(tip)
-            button.setAutoRepeat(True)          # hold to keep turning
-            menus.style_chip(button, "ghost")
+        for glyph, tip, azimuth, elevation, roll in menus.ROTATE_CHIPS:
+            button = menus.rotate_chip(bar, glyph, tip)
             # The chip's signs are what the scene does; camera_angles turns
             # them into what the camera has to do, and the step box says how far.
             button.clicked.connect(
@@ -419,7 +413,7 @@ class ZonePickerDialog(QDialog):
             # of it, so it is drawn as a bar rather than as a hairline that
             # the axes out of Γ would then outweigh.
             plotter.add_mesh(pv.lines_from_points(vertices[loop]),
-                             color="#7f8c9b" if self._chain is None else "#5b8dee",
+                             color="#7f8c9b" if self._chain is None else _ZONE_COLOUR,
                              line_width=2 if self._chain is None else _ZONE_BAR_WIDTH,
                              pickable=False)
         # A translucent body gives the zone its shape; the wireframe alone
@@ -428,11 +422,11 @@ class ZonePickerDialog(QDialog):
         # nothing at all, so the polygon is filled directly.
         if len(faces) == 1 and len(vertices) >= 3:
             polygon = pv.PolyData(vertices, faces=[len(vertices), *range(len(vertices))])
-            plotter.add_mesh(polygon, color="#5b8dee", opacity=0.18,
+            plotter.add_mesh(polygon, color=_ZONE_COLOUR, opacity=0.18,
                              show_edges=False, pickable=False)
         elif len(vertices) >= 4:
             hull = pv.PolyData(vertices).delaunay_3d().extract_surface()
-            plotter.add_mesh(hull, color="#5b8dee", opacity=0.10,
+            plotter.add_mesh(hull, color=_ZONE_COLOUR, opacity=0.10,
                              show_edges=False, pickable=False)
 
         radius = _POINT_RADIUS * self._extent
