@@ -20,6 +20,26 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture
+def throwaway_settings(tmp_path, monkeypatch):
+    """Point the theme at a settings file of the test's own.
+
+    The stored appearance is a real preference on this machine. Anything that
+    reads it (``current_mode``, or ``palette_for`` with no mode) would read the
+    user's, and ``set_mode`` would overwrite it: a test that died before putting
+    it back left the app in whatever mode the test had last set. The stand-in is
+    still a real ``QSettings``, so a round trip goes through the same code as the
+    app's. It is an ini file named outright because on macOS the native format
+    ignores ``QSettings.setPath`` and would still land in the user's preferences.
+    """
+    from PySide6.QtCore import QSettings
+
+    path = tmp_path / "settings.ini"
+    monkeypatch.setattr(theme, "_settings",
+                        lambda: QSettings(str(path), QSettings.Format.IniFormat))
+    return path
+
+
 @pytest.mark.parametrize("palette", [theme.LIGHT, theme.DARK])
 def test_the_sheet_builds_and_leaves_no_placeholder_behind(palette):
     """An f-string that lost a brace shows up as a literal ``{p.`` in the output
@@ -123,16 +143,16 @@ def test_an_unknown_mode_is_refused_rather_than_guessed(qapp):
         theme.set_mode(qapp, "sepia")
 
 
-def test_the_choice_survives_a_restart(qapp):
-    """It is a preference, not a session setting."""
-    before = theme.current_mode()
-    try:
-        theme.set_mode(qapp, "dark")
-        assert theme.current_mode() == "dark"
-        theme.set_mode(qapp, "light")
-        assert theme.current_mode() == "light"
-    finally:
-        theme.set_mode(qapp, before)
+def test_the_choice_survives_a_restart(qapp, throwaway_settings):
+    """It is a preference, not a session setting. Each read opens the store
+    afresh, as the next launch would; but Qt shares what it has read of a file
+    within one process, so the file itself is checked too, since that is all a
+    real restart has to go on."""
+    theme.set_mode(qapp, "dark")
+    assert theme.current_mode() == "dark"
+    theme.set_mode(qapp, "light")
+    assert theme.current_mode() == "light"
+    assert "mode=light" in throwaway_settings.read_text()
 
 
 def test_unreadable_settings_fall_back_to_following_the_system(qapp, monkeypatch):
@@ -143,7 +163,7 @@ def test_unreadable_settings_fall_back_to_following_the_system(qapp, monkeypatch
     assert theme.current_mode() == theme.DEFAULT_MODE
 
 
-def test_a_theme_change_redraws_what_baked_a_colour_in(qapp):
+def test_a_theme_change_redraws_what_baked_a_colour_in(qapp, throwaway_settings):
     """The undo/redo glyphs are rendered once in the text colour, so a switch has
     to redraw them or they stay dark on a dark toolbar."""
     from PySide6.QtWidgets import QWidget
@@ -285,7 +305,7 @@ def test_the_toolbar_chip_colours_match_the_3d_gizmo():
 
 
 # ── the lamp, and the 3D ground ───────────────────────────────────────────
-def test_the_lamp_is_on_for_the_light_theme(qapp):
+def test_the_lamp_is_on_for_the_light_theme(qapp, throwaway_settings):
     """A lamp that lit up for the *dark* theme would be backwards however it is
     explained."""
     from PySide6.QtWidgets import QMainWindow
@@ -309,7 +329,7 @@ def test_the_lamp_is_on_for_the_light_theme(qapp):
     theme._paint(qapp, theme.palette_for(qapp))
 
 
-def test_the_3d_ground_follows_the_theme_but_not_over_a_chosen_colour(qapp):
+def test_the_3d_ground_follows_the_theme_but_not_over_a_chosen_colour(qapp, throwaway_settings):
     """A dark chrome around a white viewport reads as a bug. But the background
     is a real setting, so a colour someone picked has to survive a theme change.
     """
