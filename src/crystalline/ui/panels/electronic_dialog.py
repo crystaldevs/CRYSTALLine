@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QHeaderView,
-    QLabel,
     QLineEdit,
     QPushButton,
     QTableWidget,
@@ -95,12 +94,6 @@ class ElectronicDialog(QDialog):
         self._held = None
 
         outer = QVBoxLayout(self)
-        intro = WrappedLabel(
-            "Band and DOS files from a PROPERTIES run. CRYSTAL writes their "
-            "energies relative to the Fermi level; choose absolute energies to "
-            "move everything, the Fermi line included, up by E_F.")
-        intro.setStyleSheet("color: palette(mid);")
-        outer.addWidget(intro)
 
         columns = QHBoxLayout()
         left, right = QVBoxLayout(), QVBoxLayout()
@@ -273,9 +266,6 @@ class ElectronicDialog(QDialog):
         self.legend = QCheckBox("Legend", self)
         self.legend.setChecked(True)
         look.add_wide(self.legend)
-        hint = QLabel("The figure font is shared by every plot: Plot ▸ Plot font…")
-        hint.setStyleSheet("color: palette(mid);")
-        look.append(hint)
 
     # ── files ───────────────────────────────────────────────────────────
     def _populate(self, folder: str) -> bool:

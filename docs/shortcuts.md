@@ -22,6 +22,7 @@ here means {kbd}`⌘O`.
 | | |
 | --- | --- |
 | Open… | {kbd}`Ctrl+O`, each file in a tab of its own |
+| Open recent | |
 | Close tab | {kbd}`Ctrl+W` |
 | Import atoms into structure… | |
 | Save structure as .gui… | |

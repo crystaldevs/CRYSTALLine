@@ -10,7 +10,7 @@ pytest.importorskip("matplotlib")
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Signal  # noqa: E402
-from PySide6.QtWidgets import QApplication, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QCheckBox, QWidget  # noqa: E402
 
 from crystalline.ui.panels.plot_view import PlotPanel, PlotRecipe  # noqa: E402
 
@@ -477,12 +477,48 @@ def test_the_controls_keep_clear_of_the_window_s_edge(panel):
     knobs.setFixedWidth(250)
     panel.add_figure(_figure(), "IR", recipe=PlotRecipe(
         draw=lambda **o: _figure(), controls=lambda: knobs))
-    column = panel.widget_at(0).layout().itemAt(0).layout().itemAt(1).layout()
+    from crystalline.ui.panels.plot_view import _CONTROLS_WIDTH
+
+    column = panel.widget_at(0).controls_column.widget().layout()
 
     margins = column.contentsMargins()
-    assert (margins.left(), margins.top(), margins.right(), margins.bottom()) == PANEL_MARGINS
+    assert (margins.left(), margins.right(), margins.bottom()) == (
+        PANEL_MARGINS[0], PANEL_MARGINS[2], PANEL_MARGINS[3])
     # ...and the window that opens for them leaves the figure its width
-    assert panel.controls_width() == 250 + PANEL_MARGINS[0] + PANEL_MARGINS[2]
+    assert panel.controls_width() >= _CONTROLS_WIDTH + PANEL_MARGINS[0] + PANEL_MARGINS[2]
+
+
+def test_unfolding_a_section_beside_a_plot_leaves_the_window_its_size(panel, qapp):
+    """Unfolding Appearance beside a spectrum made the controls taller than the
+    Plots window, and the window grew to hold them: a click changed the
+    figure's shape. They scroll instead, in a column of one width."""
+    from PySide6.QtWidgets import QVBoxLayout as _Column
+
+    from crystalline.ui.panels.controls import Section
+
+    class _Tall(_Knobs):
+        def __init__(self):
+            super().__init__()
+            layout = self.layout() or _Column(self)
+            self.section = Section(layout, "Appearance", collapsed=True)
+            for n in range(30):
+                self.section.add(f"Row {n}", QCheckBox())
+
+    knobs = _Tall()
+    panel.add_figure(_figure(), "IR", recipe=PlotRecipe(
+        draw=lambda **o: _figure(), controls=lambda: knobs))
+    panel.resize(700, 320)
+    panel.show()
+    qapp.processEvents()
+    column = panel.widget_at(0).controls_column
+    width = column.width()
+
+    knobs.section.header.click()
+    qapp.processEvents()
+    assert panel.minimumSizeHint().height() < 320
+    assert panel.size().height() == 320
+    assert column.width() == width
+    panel.hide()
 
 
 def test_a_redrawn_plot_lets_the_old_figure_go(panel, qapp):
@@ -610,3 +646,29 @@ def test_a_slow_redraw_says_it_is_under_way(panel, qapp):
 
     assert any("Drawing the plot again" in text for text in window.said)
     assert window.statusBar().currentMessage() == ""
+
+
+def test_every_plot_gives_its_controls_the_same_share_of_the_window(panel, qapp):
+    """Each column took its controls' own width, so in a window of one size the
+    figure came out a different size for every kind of plot."""
+    from crystalline.ui.panels import plot_view
+
+    shared = dict(plot_view._COLUMN)
+    narrow, wide = _Knobs(), _Knobs()
+    narrow.setMinimumWidth(120)
+    wide.setMinimumWidth(520)          # wider than the shared width itself
+    for title, knobs in (("narrow", narrow), ("wide", wide)):
+        panel.add_figure(_figure(), title, recipe=PlotRecipe(
+            draw=lambda **o: _figure(), controls=lambda k=knobs: k))
+    panel.resize(1100, 500)
+    panel.show()
+    widths = []
+    for index in range(panel.count()):
+        panel._tabs.setCurrentIndex(index)
+        qapp.processEvents()
+        widths.append(panel.widget_at(index).controls_column.width())
+    panel.hide()
+    plot_view._COLUMN.update(shared)    # the next test's columns are its own
+
+    assert widths[0] == widths[1]
+    assert widths[0] >= 520

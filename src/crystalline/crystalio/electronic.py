@@ -67,15 +67,18 @@ SPIN_ALONGSIDE = "up"
 # given the colour, style and width that were asked for. Found first, styled
 # second — so a Fermi line asked for in black cannot be confused with the black
 # zero lines beside it.
-FERMI_COLOUR = "forestgreen"
+# The house colours (see figure_style): the bands in the figure's ink, so the
+# DOS projections beside them carry the colour; spin down in the house red;
+# the Fermi level in the house green, which the projections never use.
+FERMI_COLOUR = "#3f9e4d"
 
-BAND_COLOUR = "#1f3a93"
-BETA_COLOUR = "#c0392b"
+BAND_COLOUR = "#14212b"
+BETA_COLOUR = "#c2414b"
 
 # A qualitative palette for the DOS projections, with no green in it — green
 # is the Fermi level's.
-PROJECTION_COLOURS = ("#1f77b4", "#d62728", "#9467bd", "#8c564b", "#e377c2",
-                      "#7f7f7f", "#bcbd22", "#17becf", "#ff7f0e", "#393b79")
+PROJECTION_COLOURS = ("#0b7a96", "#d9822b", "#8e5bb5", "#c2414b", "#5b6878",
+                      "#c9a227", "#1f4e79", "#b5657f", "#7a8b3a", "#4fa3b8")
 
 # A gap wider than this below the Fermi level is taken as the top of the core.
 # Valence manifolds are separated by less (urea's 2s-2p gap is 8.7 eV, LiF's
@@ -669,6 +672,7 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
             if options.unit != "eV":
                 beta = beta / _HARTREE_EV
             _overlay_beta(figure, beta, bands.n_kpoints, options)
+        _tidy_k_axis(figure.axes[0])
         energy_axis = "y"
 
     elif options.mode == DOS:
@@ -708,15 +712,34 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
             legend=options.legend and len(chosen) > 1, **common))
         if bands.spin == 2:
             _restyle_beta(figure.axes[0], bands.n_kpoints, options)
+        _tidy_k_axis(figure.axes[0])
         _legend_beside(figure, figure.axes[-1])
         energy_axis = "y"
 
     _style_fermi(figure, energy_axis, fermi_at, options)
     _label_energy(figure, energy_axis, options)
+    if options.title:
+        from crystalline.crystalio.figure_style import keep_title
+
+        keep_title(figure)      # typed into the dialog: wanted
     return figure
 
 
 # ── finishing touches CRYSTALClear does not offer ─────────────────────────
+def _tidy_k_axis(ax) -> None:
+    """Ticks only at the high-symmetry points along a band path.
+
+    The house style puts minor ticks on every axis and ticks along the top as
+    well (see figure_style); along k they mark nothing — the distance between
+    two corners of the path is not a quantity anyone reads off — so the k axis
+    keeps only its labelled points, at the bottom.
+    """
+    from matplotlib.ticker import NullLocator
+
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="both", top=False)
+
+
 def _style_fermi(figure, axis: str, at: float, options: ElectronicOptions) -> None:
     """Move CRYSTALClear's Fermi lines to ``at`` and style them — or hide them.
 

@@ -596,8 +596,13 @@ def test_both_views_offer_the_same_rotate_chips():
     """Same glyphs, same order, same meaning — from one definition."""
     from crystalline.ui import menus
 
-    labels = [chip[0] for chip in menus.ROTATE_CHIPS]
-    assert labels == ["◀", "▶", "▲", "▼", "↺", "↻"]
+    from crystalline.resources import asset_path
+
+    glyphs = [chip[0] for chip in menus.ROTATE_CHIPS]
+    assert glyphs == ["rotate-left.svg", "rotate-right.svg", "rotate-up.svg",
+                      "rotate-down.svg", "rotate-anticlockwise.svg", "rotate-clockwise.svg"]
+    for glyph in glyphs:                       # each drawn from a bundled file
+        assert "GLYPH" in open(asset_path(glyph)).read()
     # unit signs, so the step box decides how far a press turns
     for _label, _tip, azimuth, elevation, roll in menus.ROTATE_CHIPS:
         assert {abs(azimuth), abs(elevation), abs(roll)} == {0.0, 1.0}

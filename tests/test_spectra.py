@@ -235,6 +235,12 @@ def test_plotting_a_single_curve_needs_no_legend():
     assert figure.axes[0].get_legend() is None
     assert figure.axes[0].get_title() == "IR (harmonic, 0 K)"
 
+    # Asked for by name, so the finishing pass that drops titles keeps it.
+    from crystalline.crystalio.figure_style import finish
+
+    finish(figure)
+    assert figure.axes[0].get_title() == "IR (harmonic, 0 K)"
+
 
 def test_plotting_nothing_is_an_error_not_an_empty_figure():
     pytest.importorskip("CRYSTALClear")

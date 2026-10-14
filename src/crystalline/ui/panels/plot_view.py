@@ -18,7 +18,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
-from PySide6.QtCore import QObject, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,8 +31,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QSizePolicy,
+    QScrollArea,
     QSpinBox,
     QStackedLayout,
+    QStyle,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -232,10 +234,19 @@ def _alive(widget) -> bool:
 
 # Vector formats ignore raster DPI; JPEG has no alpha channel. Used to grey out
 # the controls that don't apply to the chosen format.
-# The least room the controls beside a figure are given, where their own
-# minimum is smaller: a label column, a slider and a value box, which is what
-# the panels elsewhere in the window are built from.
-_CONTROLS_WIDTH = 300
+# The room the controls beside a figure are given, whichever plot it is: the
+# widest of the app's own, the band structure's energy window — a range slider
+# between two value boxes — so that every plot gets the same share of the
+# window. Each took its own width before, and the figure in a window of one
+# size came out a different size for every kind of plot.
+_CONTROLS_WIDTH = 400
+
+# The widest column made so far, which every column is given: one whose
+# controls need more than _CONTROLS_WIDTH (larger fonts, another platform)
+# widens the rest to match rather than standing out from them.
+_COLUMN = {"width": 0}
+#: How far the figure's sheet stands in from the tab's edges.
+_PAPER_INSET = 14
 
 # How long the controls must be still before the plot is drawn again. Long
 # enough that a drag is not a slideshow, short enough that letting go feels
@@ -244,6 +255,43 @@ _REDRAW_REST_MS = 180
 
 _VECTOR_FORMATS = frozenset({"svg", "pdf", "eps", "ps"})
 _OPAQUE_FORMATS = frozenset({"jpg", "jpeg"})
+
+
+def _finish(figure) -> None:
+    """The house style's finishing pass, on every figure that reaches a tab.
+
+    Here because every plot arrives here, whichever code drew it — a new tab or
+    a tab redrawn with new options — and the pass is idempotent.
+    """
+    try:
+        from crystalline.crystalio import figure_style
+    except Exception:  # noqa: BLE001 - a plot is still worth showing unstyled
+        return
+    try:
+        figure_style.finish(figure)
+    except Exception:  # noqa: BLE001 - likewise
+        pass
+
+
+def _unfolded_width(controls: QWidget) -> int:
+    """The least width ``controls`` need with every section open.
+
+    A folded section's rows are hidden, and a hidden widget asks for no room:
+    measured as they open, the controls were as wide as their open sections,
+    and unfolding a wider one — a range slider with its two boxes — squeezed
+    its rows into a column already fixed.
+    """
+    folded = [header._section.body for header in controls.findChildren(QToolButton)
+              if getattr(header, "_section", None) is not None
+              and header._section.body.isHidden()]
+    for body in folded:
+        body.setVisible(True)     # not on screen: the controls are not shown yet
+    try:
+        # A minimum set outright counts as much as one the layout asks for.
+        return max(controls.minimumSizeHint().width(), controls.minimumWidth())
+    finally:
+        for body in folded:
+            body.setVisible(False)
 
 
 class _PlotTab(QWidget):
@@ -273,6 +321,7 @@ class _PlotTab(QWidget):
             NavigationToolbar2QT,
         )
 
+        _finish(figure)
         self.figure = figure
         self._title = title
         self._on_pick = on_pick
@@ -310,20 +359,25 @@ class _PlotTab(QWidget):
         # costs width the figure has to spare and a row costs height it does
         # not. The toolbar stays under both, as it is about the whole tab.
         self.controls = self._build_controls()
+        self.controls_column: Optional[QScrollArea] = None
+        # The figure on a sheet of its own, inset and edged, rather than a
+        # white rectangle running into the tab bar and the buttons below it:
+        # it is a page the window shows, as it will be on paper.
+        self._paper = QFrame(self)
+        self._paper.setObjectName("plotPaper")
+        sheet = QVBoxLayout(self._paper)
+        sheet.setContentsMargins(1, 1, 1, 1)
+        sheet.addWidget(self.canvas)
+        across = QHBoxLayout()
+        across.setContentsMargins(_PAPER_INSET, _PAPER_INSET, 0, 0)
+        across.setSpacing(0)
+        across.addWidget(self._paper, 1)
         if self.controls is None:
-            layout.addWidget(self.canvas, 1)
+            across.addSpacing(_PAPER_INSET)
         else:
-            across = QHBoxLayout()
-            across.setContentsMargins(0, 0, 0, 0)
-            across.addWidget(self.canvas, 1)
-            column = QVBoxLayout()
-            # The side panels' margins: without them the boxes ran into the
-            # edge of the window, and the first of them into the figure.
-            column.setContentsMargins(*PANEL_MARGINS)
-            column.addWidget(self.controls, 0)
-            column.addStretch(1)      # the rows sit at the top, beside the axes
-            across.addLayout(column, 0)
-            layout.addLayout(across, 1)
+            self.controls_column = self._controls_column(self.controls)
+            across.addWidget(self.controls_column, 0)
+        layout.addLayout(across, 1)
         layout.addWidget(self._build_toolbar())
         if self._on_pick is not None:
             self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
@@ -364,25 +418,27 @@ class _PlotTab(QWidget):
         """A slim row of icon buttons driving the hidden matplotlib toolbar."""
         bar = QWidget(self)
         row = QHBoxLayout(bar)
-        row.setContentsMargins(4, 2, 4, 2)
+        # Inset like the figure, less the buttons' own padding, so the first
+        # glyph lines up with the sheet's edge.
+        row.setContentsMargins(_PAPER_INSET - 3, 4, _PAPER_INSET - 3, 4)
         row.setSpacing(2)
 
         self._btn_reset = self._tool_button(
-            "home_large.png", "Reset", "Reset the view", self._nav.home
+            "plot-home.svg", "Reset", "Reset the view", self._nav.home
         )
         self._btn_back = self._tool_button(
-            "back_large.png", "Back", "Back to previous view", self._nav.back
+            "plot-back.svg", "Back", "Back to previous view", self._nav.back
         )
         self._btn_forward = self._tool_button(
-            "forward_large.png", "Forward", "Forward to next view", self._nav.forward
+            "plot-forward.svg", "Forward", "Forward to next view", self._nav.forward
         )
         # Pan and zoom toggle matplotlib's interaction mode, so they're checkable
         # and mutually exclusive (the mode itself lives in the matplotlib toolbar).
         self._btn_pan = self._tool_button(
-            "move_large.png", "Pan", "Drag to pan", self._toggle_pan, checkable=True
+            "plot-pan.svg", "Pan", "Drag to pan", self._toggle_pan, checkable=True
         )
         self._btn_zoom = self._tool_button(
-            "zoom_to_rect_large.png", "Zoom", "Drag a box to zoom", self._toggle_zoom, checkable=True
+            "plot-zoom.svg", "Zoom", "Drag a box to zoom", self._toggle_zoom, checkable=True
         )
 
         for btn in (self._btn_reset, self._btn_back, self._btn_forward):
@@ -395,7 +451,7 @@ class _PlotTab(QWidget):
         # Live coordinate readout of the point under the cursor.
         self._coords = QLabel("", bar)
         self._coords.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._coords.setStyleSheet("color: palette(mid);")
+        self._coords.setProperty("role", "plotCoords")
         row.addWidget(self._coords)
 
         row.addWidget(self._separator())
@@ -404,12 +460,12 @@ class _PlotTab(QWidget):
         # while this one draws it again.
         if self.recipe is not None and self.recipe.edit is not None:
             row.addWidget(
-                self._tool_button("qt4_editor_options_large.png", "Edit…",
+                self._tool_button("plot-edit.svg", "Edit…",
                                   "Change this plot's settings and draw it again",
                                   self._edit_requested)
             )
         row.addWidget(
-            self._tool_button("filesave_large.png", "Save…", "Save the plot to a file",
+            self._tool_button("plot-save.svg", "Save…", "Save the plot to a file",
                               self._save_figure)
         )
         return bar
@@ -433,7 +489,7 @@ class _PlotTab(QWidget):
         # room than they need — which is their own minimum, asked rather than
         # chosen. Capped below it, a row is squeezed past the point where Qt
         # can lay it out and the range slider is drawn over its value boxes.
-        widget.setMaximumWidth(max(widget.minimumSizeHint().width(), _CONTROLS_WIDTH))
+        widget.setMaximumWidth(max(_unfolded_width(widget), _CONTROLS_WIDTH))
         widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         widget.set_options(self.recipe.options)
         self._settle = QTimer(self)
@@ -442,6 +498,50 @@ class _PlotTab(QWidget):
         self._settle.timeout.connect(self._controls_settled)
         widget.changed.connect(self._settle.start)
         return widget
+
+    def _controls_column(self, controls: QWidget) -> "QScrollArea":
+        """The controls down the right-hand side, at one width, scrolled if short.
+
+        Scrolled rather than stretching the window: a section unfolded beside a
+        short plot made the controls taller than the window, and the window
+        grew to fit them — a click on "Appearance" changed the figure's shape.
+        One width, the most the controls may take, so a section unfolding or a
+        redraw replacing the canvas cannot move the boundary with the figure.
+        """
+        holder = QWidget()
+        column = QVBoxLayout(holder)
+        # The side panels' margins: without them the boxes ran into the edge
+        # of the window, and the first of them into the figure.
+        left, _top, right, bottom = PANEL_MARGINS
+        # No margin above: a section opens with space of its own, which puts
+        # the first heading level with the top of the figure beside it.
+        column.setContentsMargins(left, 0, right, bottom)
+        column.addWidget(controls, 0)
+        column.addStretch(1)      # the rows sit at the top, beside the axes
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(holder)
+        self._column_extra = left + right
+        if not scroll.style().styleHint(QStyle.SH_ScrollBar_Transient, None, scroll):
+            self._column_extra += scroll.verticalScrollBar().sizeHint().width()  # one that takes room
+        width = controls.maximumWidth() + self._column_extra
+        _COLUMN["width"] = max(_COLUMN["width"], width)
+        scroll.setFixedWidth(_COLUMN["width"])
+        controls.setMaximumWidth(_COLUMN["width"] - self._column_extra)
+        return scroll
+
+    def _match_column(self) -> None:
+        """Take the width every column now has, if another plot has widened it."""
+        column = self.controls_column
+        if column is not None and column.width() != _COLUMN["width"]:
+            self.controls.setMaximumWidth(_COLUMN["width"] - self._column_extra)
+            column.setFixedWidth(_COLUMN["width"])
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        self._match_column()
+        super().showEvent(event)
 
     def _controls_settled(self) -> None:
         """Ask for the plot to be drawn again, as the controls now describe it."""
@@ -469,32 +569,46 @@ class _PlotTab(QWidget):
 
     def _separator(self) -> QFrame:
         line = QFrame(self)
-        line.setFrameShape(QFrame.VLine)
-        line.setFrameShadow(QFrame.Sunken)
+        line.setObjectName("plotToolSeparator")
+        line.setFixedSize(1, 16)
         return line
 
     def _tool_button(self, icon_name, text, tooltip, slot, checkable: bool = False) -> QToolButton:
         btn = QToolButton(self)
         btn.setToolTip(tooltip)
+        btn.setAccessibleName(text.rstrip("…"))
         btn.setCheckable(checkable)
         btn.setAutoRaise(True)
-        icon = self._icon(icon_name)
-        if icon is not None:
-            btn.setIcon(icon)
-            btn.setIconSize(QSize(18, 18))
-            btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
-        else:  # matplotlib icons unavailable — fall back to a text button
-            btn.setText(text)
-            btn.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        btn.setProperty("role", "plotTool")
+        btn.setProperty("glyph", icon_name)
+        btn.setIcon(self._icon(icon_name))
+        btn.setIconSize(QSize(18, 18))
+        btn.setToolButtonStyle(Qt.ToolButtonIconOnly)
         btn.clicked.connect(slot)
         return btn
 
-    def _icon(self, name):
-        """A themed matplotlib toolbar icon, or ``None`` if unavailable."""
-        try:
-            return self._nav._icon(name)  # handles light/dark theming for us
-        except Exception:  # noqa: BLE001 - private API; degrade to text buttons
-            return None
+    @staticmethod
+    def _icon(name):
+        """One of the app's own glyphs, in the theme's text colour.
+
+        Not matplotlib's: those are heavy filled shapes from another family,
+        and the row under every plot was the one place in the app they showed.
+        """
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.ui import theme
+
+        return theme.monochrome_icon(name, theme.active_palette(QApplication.instance()).text)
+
+    def changeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().changeEvent(event)
+        if event.type() == QEvent.PaletteChange:
+            # Drawn in the theme's colour, so drawn again when it changes: a
+            # dark glyph left over from the light theme vanishes in the dark.
+            for button in self.findChildren(QToolButton):
+                glyph = button.property("glyph")
+                if glyph:
+                    button.setIcon(self._icon(glyph))
 
     def _set_coords(self, message: str) -> None:
         self._coords.setText(message or "")
@@ -606,6 +720,7 @@ class _PlotTab(QWidget):
         )
 
         old_canvas, old_figure, old_nav = self.canvas, self.figure, self._nav
+        _finish(figure)
         self.figure = figure
         if title is not None:
             self._title = title
@@ -625,7 +740,7 @@ class _PlotTab(QWidget):
             self.canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
             self.canvas.setToolTip("Click a peak to animate the mode that produced it")
 
-        self.layout().replaceWidget(old_canvas, self.canvas)
+        self._paper.layout().replaceWidget(old_canvas, self.canvas)
         self._release(old_canvas, old_figure)
         # The old toolbar goes too. It is a child of this tab, so nothing else
         # would ever take it away, and it holds the old canvas, which holds the
@@ -738,13 +853,10 @@ class PlotPanel(QWidget):
         the figure's and not the whole window's: a column beside the plot came
         out of the plot's width, which is what made it letterboxed.
         """
-        widths = [tab.controls.width() or tab.controls.sizeHint().width()
+        widths = [tab.controls_column.width()
                   for tab in (self._tabs.widget(i) for i in range(self._tabs.count()))
-                  if tab is not None and tab.controls is not None]
-        # With the margins either side of the column, which the figure does
-        # not get to use either.
-        left, _top, right, _bottom = PANEL_MARGINS
-        return max(widths) + left + right if widths else 0
+                  if tab is not None and tab.controls_column is not None]
+        return max(widths) if widths else 0
 
     def index_of(self, tab) -> int:
         """Where ``tab`` is now — tabs are movable, so this is asked, not kept."""

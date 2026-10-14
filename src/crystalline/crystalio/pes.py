@@ -377,7 +377,7 @@ def plot_pes(
     if dimension == "1D":
         if mode is None:
             raise ValueError("a one-mode cut needs a mode")
-        return _to_figure(function(
+        figure = _to_figure(function(
             out, mode, xlim=[-span, span],
             harmonic=harmonic, levels=levels, nstates=nstates,
             # None leaves the height to the plotter, which reads it off the
@@ -385,6 +385,9 @@ def plot_pes(
             scale_wf=scale_wf or None,
             legend=legend,
         ))
+        if levels:
+            _levels_inside_the_well(figure.axes[0])
+        return figure
 
     if modei is None or modej is None:
         raise ValueError("a two-mode cut needs two modes")
@@ -392,6 +395,46 @@ def plot_pes(
     return _to_figure(function(
         out, modei, modej, quantity=quantity, xlim=[-span, span], **extra,
     ))
+
+
+def _levels_inside_the_well(ax) -> None:
+    """Draw each level only where the state can classically be.
+
+    CRYSTALClear rules every level across the whole window, so the lines run
+    straight through the walls of the potential and on to the edge — which is
+    not how a level diagram is read, and buries the curve under them. Each now
+    spans the stretch of the anharmonic potential below it around the minimum.
+    The wavefunctions are left whole: their tails past the walls are physics.
+    """
+    import numpy as np
+    from matplotlib.collections import LineCollection
+
+    curve = next((line for line in ax.get_lines()
+                  if line.get_label() == "cubic + quartic"), None)
+    if curve is None:
+        return
+    x = np.asarray(curve.get_xdata(), dtype=float)
+    v = np.asarray(curve.get_ydata(), dtype=float)
+    bottom = int(np.argmin(v))
+    for collection in ax.collections:
+        if not isinstance(collection, LineCollection):
+            continue
+        segments = collection.get_segments()
+        if len(segments) != 1 or len(segments[0]) != 2:
+            continue
+        (x0, e0), (x1, e1) = segments[0]
+        if not np.isclose(e0, e1):
+            continue                                   # not a level
+        below = v <= e0
+        if not below[bottom]:
+            continue
+        left = bottom
+        while left > 0 and below[left - 1]:
+            left -= 1
+        right = bottom
+        while right < len(x) - 1 and below[right + 1]:
+            right += 1
+        collection.set_segments([[(x[left], e0), (x[right], e0)]])
 
 
 __all__ = [

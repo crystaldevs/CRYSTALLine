@@ -76,7 +76,10 @@ def test_both_variants_keep_text_readable_against_their_ground():
     for palette in (theme.LIGHT, theme.DARK):
         assert contrast(palette.text, palette.window) > 7.0      # body text
         assert contrast(palette.text_muted, palette.window) > 3.5  # titles and hints
-        assert contrast("#ffffff", palette.accent) > 3.0         # text on a selection
+        assert contrast("#ffffff", palette.accent) >= 4.5        # text on a selection
+        assert contrast(palette.accent, palette.window) >= 3.0   # a tick, a focus ring
+        assert contrast(palette.link, palette.window) >= 4.5     # a link, as text
+        assert contrast(palette.link, palette.raised) >= 4.5
 
 
 def test_applying_the_theme_sets_both_the_palette_and_the_sheet(qapp):
@@ -612,3 +615,23 @@ def test_a_tab_close_button_is_a_quiet_glyph_in_the_theme_s_own_tone():
                 stroke = re.search(r'stroke="(#[0-9a-fA-F]{6})"', handle.read()).group(1)
             red, green, blue = (int(stroke[i:i + 2], 16) for i in (1, 3, 5))
             assert max(red, green, blue) - min(red, green, blue) < 0x20, stroke  # a grey
+
+
+def test_the_window_frames_follow_the_chosen_appearance(qapp):
+    """A dark CRYSTALLine on a light desktop sat under a light title bar: the
+    frames are the system's to draw, and are drawn in the scheme Qt is given."""
+    from PySide6.QtCore import Qt
+
+    hints = qapp.styleHints()
+    if not hasattr(hints, "setColorScheme"):
+        pytest.skip("Qt before 6.8 cannot be asked for a scheme")
+    if qapp.platformName() == "offscreen":
+        pytest.skip("no window system to draw frames: the request is not kept")
+    before = theme.current_mode()
+    try:
+        theme.set_mode(qapp, "dark")
+        assert hints.colorScheme() == Qt.ColorScheme.Dark
+        theme.set_mode(qapp, "light")
+        assert hints.colorScheme() == Qt.ColorScheme.Light
+    finally:
+        theme.set_mode(qapp, before)
