@@ -199,7 +199,7 @@ def measure(window, atoms):
 
 
 def export(window, monkeypatch, path):
-    """Press Export… in the dock, and choose ``path`` in the dialog.
+    """Press Export to CSV… in the dock, and choose ``path`` in the dialog.
 
     Returns the name the dialog offered, and the CSV as rows.
     """

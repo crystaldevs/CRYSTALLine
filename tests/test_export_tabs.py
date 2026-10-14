@@ -3,7 +3,7 @@
 On the real window (``_window.py``: only the 3D views are stood in for), so
 what is checked is the window's own plumbing — the tab a file is read into,
 which panel gets its local modes and its name, which panel the dock shows when
-Export… is pressed — rather than its source.
+Export to CSV… is pressed — rather than its source.
 
 The LOCMODES file is ``data/locmodes/h2o2_synthetic.out``, made-up force
 constants for hydrogen peroxide in a 5 Å box. It holds no geometry block a

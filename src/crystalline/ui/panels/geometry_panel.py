@@ -287,7 +287,7 @@ class GeometryPanel(QWidget):
         self._show_local_columns(False)
         box.addWidget(self._list, 1)
 
-        # Four buttons sharing the table's width, the first flush with its left
+        # Three buttons sharing the table's width, the first flush with its left
         # edge and the last with its right, however wide the dock is made — as
         # the planes' three below are, rather than huddled at the left.
         row = QHBoxLayout()
@@ -301,21 +301,21 @@ class GeometryPanel(QWidget):
         self._clear_btn = QPushButton("Clear all")
         self._clear_btn.clicked.connect(self.clear_measurements)
         row.addWidget(self._clear_btn, 1)
+        box.addLayout(row)
         # The table, out of the program: for a LOCMODES run, the force constants
         # of the bonds and angles measured, ready for a spreadsheet or a script.
-        # With the other three, which act on the table too. "Export…" and not
-        # "Export to CSV…": the row is the widest in the panel with a fourth
-        # button, and so sets the dock's least width; the tooltip and the save
-        # dialog say what it writes.
-        self._export_btn = QPushButton("Export…")
+        # On a line of its own, the table's width. Beside the other three it
+        # made that row the widest in the panel, and so the Geometry dock's
+        # least width (357 px on macOS, against 323 now that Lattice planes'
+        # Through buttons set it), and had to be called just "Export…".
+        self._export_btn = QPushButton("Export to CSV…")
         self._export_btn.setToolTip(
             "Write the table to a CSV file — every row, in the order shown, with "
             "the values in full and, for a LOCMODES run, each local mode as "
             "CRYSTAL gives it"
         )
         self._export_btn.clicked.connect(self._export_measurements)
-        row.addWidget(self._export_btn, 1)
-        box.addLayout(row)
+        box.addWidget(self._export_btn)
         # The colour button follows the list selection, not just "any measurement".
         self._list.itemSelectionChanged.connect(self._sync_buttons)
 

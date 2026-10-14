@@ -432,11 +432,12 @@ def test_the_position_boxes_do_not_widen_the_dock(qapp):
 
     panel = GeometryPanel(_nacl())
     # the panel's own width without the boxes, plus the scroll bar the panel
-    # keeps room for. That width is now the Measure row's — Colour, Remove,
-    # Clear all and Export side by side: 357 px with the macOS style, 384 here,
-    # where the offscreen style makes every button at least 80 px wide.
+    # keeps room for. That width is Lattice planes' Through origin / Through
+    # selected atom row: 323 px with the macOS style, 362 here, where the
+    # offscreen style makes every button at least 80 px wide. (With Export
+    # beside Clear all, Measure's row set it: 357, and 384 here.)
     scroll_bar = panel.findChild(QScrollArea).verticalScrollBar().sizeHint().width()
-    assert panel.sizeHint().width() <= 370 + scroll_bar
+    assert panel.sizeHint().width() <= 360 + scroll_bar
 
 
 def test_a_typed_position_moves_the_periodic_images_too(qapp):
@@ -1123,13 +1124,18 @@ def test_the_export_is_offered_beside_the_run_and_named_after_it(qapp, tmp_path,
 
 
 def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
-    """Colour, Remove, Clear all and Export share the table's width: the first
-    starts where the table starts, the last ends where it ends, and they grow
-    together as the dock is widened — as the planes' row does."""
+    """Colour, Remove and Clear all share the table's width: the first starts
+    where the table starts, the last ends where it ends, and they grow together
+    as the dock is widened — as the planes' row does. Export to CSV has the line
+    under them to itself, as wide as the table."""
     from PySide6.QtCore import QPoint
 
     panel = GeometryPanel(_water())
-    buttons = (panel._color_btn, panel._remove_btn, panel._clear_btn, panel._export_btn)
+    # Unfolded: every section starts folded, and folded the buttons are never
+    # laid out — all at Qt's default geometry, so the edges below compared
+    # nothing with nothing (since accc7aa, until the Export line was checked).
+    panel._sections["measure"].header.setChecked(True)
+    buttons = (panel._color_btn, panel._remove_btn, panel._clear_btn)
 
     def edges(widget):
         left = widget.mapTo(panel, QPoint(0, 0)).x()
@@ -1144,6 +1150,9 @@ def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
         assert edges(buttons[-1])[1] == table[1]
         widths = [b.width() for b in buttons]
         assert max(widths) - min(widths) <= 2           # shared out evenly
+        assert edges(panel._export_btn) == table        # a line of its own
+        below = panel._export_btn.mapTo(panel, QPoint(0, 0)).y()
+        assert below >= buttons[0].mapTo(panel, QPoint(0, 0)).y() + buttons[0].height()
     assert buttons[0].width() > 100                     # and wider at 640 than at their least
     panel.hide()
 
