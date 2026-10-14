@@ -117,6 +117,10 @@ _HEADER_TIPS = (
 # The least width (px) the measured atoms keep: enough for a bond's two, and
 # both ends of a longer label.
 _NAME_MIN_WIDTH = 110
+# Where the numbers sit in their columns, Value and the local modes' alike, and
+# their headings over them: centred (Filippo, 2026-10-14). Right-aligned, a
+# file's lone Value column read as pushed away to the dock's edge.
+_NUMBER_ALIGNMENT = Qt.AlignHCenter | Qt.AlignVCenter
 # What each local column shows of an internal coordinate, and to how many places
 # — CRYSTAL's own for the constants and the mass; a tenth of a wavenumber.
 _LOCAL_FIELDS = {
@@ -793,7 +797,7 @@ class GeometryPanel(QWidget):
             values = [getattr(c, field) for c in m.local]
             item.setText(column, " / ".join(f"{v:.{places}f}" for v in values if v is not None))
         for column in (_COL_VALUE,) + _LOCAL_COLUMNS:
-            item.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+            item.setTextAlignment(column, _NUMBER_ALIGNMENT)
         # A local mode found by symmetry, not as listed, in italics: the same
         # numbers, said of a coordinate the output never names (the tooltip
         # says which one it is the image of).
@@ -1348,7 +1352,7 @@ class _MeasureTable(QTreeWidget):
         header.sectionResized.connect(lambda *_: self._fit_name_column())
         self.setTextElideMode(Qt.ElideMiddle)
         for column in (_COL_VALUE,) + _LOCAL_COLUMNS:
-            heading.setTextAlignment(column, Qt.AlignRight | Qt.AlignVCenter)
+            heading.setTextAlignment(column, _NUMBER_ALIGNMENT)
 
     @guard()
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name

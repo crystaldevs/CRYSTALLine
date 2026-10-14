@@ -943,6 +943,33 @@ def test_a_measurement_that_is_none_of_them_has_nothing_beside_it(qapp):
     assert "Not one of the internal coordinates" in panel._items()[0].toolTip(0)
 
 
+def test_the_numbers_are_centred_in_their_columns(qapp):
+    """Value and the local modes' columns alike, their headings over them, for
+    any file: right-aligned, a file's lone Value column read as pushed away to
+    the dock's edge. The measured atoms stay on the left, by their tick box."""
+    from crystalline.ui.panels.geometry_panel import _COL_FREQ, _COL_NAME, _COL_VALUE
+
+    def side(alignment):
+        return alignment & (Qt.AlignLeft | Qt.AlignRight | Qt.AlignHCenter)
+
+    def sides(panel, column):
+        heading = panel._list.headerItem().textAlignment(column)
+        return side(panel._items()[0].textAlignment(column)), side(heading)
+
+    centred = (Qt.AlignHCenter, Qt.AlignHCenter)
+    plain = GeometryPanel(_water())
+    _measure(plain, 0, 1)
+    assert sides(plain, _COL_VALUE) == centred
+
+    with_modes = _locmodes_panel()
+    _measure(with_modes, 0, 1)
+    assert sides(with_modes, _COL_VALUE) == centred
+    assert sides(with_modes, _COL_FREQ) == centred
+    with_modes.set_local_modes(None)                       # rows refilled: still centred
+    assert sides(with_modes, _COL_VALUE) == centred
+    assert not side(plain._items()[0].textAlignment(_COL_NAME)) & Qt.AlignHCenter
+
+
 def test_a_contact_into_the_next_cell_is_found_on_the_atom_there(qapp):
     """LOCMODES names the far atom of H3···O2 by its cell, (-1 0 0): it is the O2
     drawn a cell along −a, not the one bonded to O1."""
