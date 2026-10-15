@@ -82,3 +82,41 @@ def test_the_font_cache_is_warmed_on_a_thread_that_finishes():
     thread.join(timeout=120)
     assert not thread.is_alive()
     assert "matplotlib.font_manager" in sys.modules
+
+
+def test_what_the_first_file_needs_is_imported_on_a_thread_that_finishes():
+    """The first file of a session used to pay for these imports itself:
+    several times the time of the next file it opened."""
+    from crystalline import app
+
+    thread = app._warm_first_file_imports()
+    thread.join(timeout=120)
+    assert not thread.is_alive()
+    for name in app._FIRST_FILE_MODULES:
+        assert name in sys.modules, name
+
+
+def test_nothing_imported_off_the_main_thread_brings_qt_or_matplotlib():
+    """Those belong to the main thread: matplotlib picks its GUI backend on
+    import, and Qt's objects live on the thread that made them."""
+    loaded = _modules_after(
+        "import importlib\n"
+        "        from crystalline.app import _FIRST_FILE_MODULES\n"
+        "        for name in _FIRST_FILE_MODULES:\n"
+        "            importlib.import_module(name)")
+
+    assert not [m for m in loaded if m.startswith(("PySide6", "shiboken6", "matplotlib"))]
+
+
+def test_the_first_files_imports_start_once_the_window_is_up():
+    """Started before, they would compete with the window's own import, or with
+    its first draw, and hold the window back instead of the first file. Checked
+    on the source: running ``app.run`` needs a display."""
+    import inspect
+
+    from crystalline import app
+
+    source = inspect.getsource(app.run)
+    start = source.index("QTimer.singleShot(_FIRST_FILE_DELAY_MS, _warm_first_file_imports)")
+    assert source.index("window.show()") < start < source.index("app.exec()")
+    assert 0 < app._FIRST_FILE_DELAY_MS <= 1000           # after the first draw, before a file

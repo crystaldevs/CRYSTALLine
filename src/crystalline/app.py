@@ -58,6 +58,13 @@ def run(structure: Optional[Structure] = None) -> int:
     window.show()
     if splash is not None:
         splash.finish(window)
+    # Once the window is up and drawn, not before: started earlier, it competes
+    # for the interpreter with the window's own import or its first draw, and
+    # holds the window back instead of the first file — started as the window
+    # was shown, it drew 0.1 s later (2026-10-14).
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(_FIRST_FILE_DELAY_MS, _warm_first_file_imports)
     return app.exec()
 
 
@@ -129,6 +136,56 @@ def _warm_font_cache():
             pass
 
     thread = threading.Thread(target=build, name="font-cache", daemon=True)
+    thread.start()
+    return thread
+
+
+# What the first file opened in a session would otherwise import for itself, on
+# the file reader or the UI thread (-X importtime over the first opens of
+# thiourea, DAFADNP 1 GPa and the DAFADNP LOCMODES run, 2026-10-14): pymatgen's
+# bridge to ASE and its symmetry analyser, ase.build and the rest, about 0.4 s for
+# any CRYSTAL output, and pandas, 0.4 s more, which CRYSTALClear's get_locmodes
+# needs for a LOCMODES run. None of them imports Qt or matplotlib, which have to
+# stay on the main thread (tests/test_startup.py checks).
+# How long after the window is shown they start: past its first draw (about
+# 0.1 s), and long before anyone has chosen a file.
+_FIRST_FILE_DELAY_MS = 300
+
+_FIRST_FILE_MODULES = (
+    "pymatgen.io.ase",
+    "ase.build",
+    "pymatgen.symmetry.analyzer",
+    "pymatgen.core.lattice",
+    "pymatgen.optimization.neighbors",
+    "crystalline.crystalio.density",
+    "crystalline.core.bonds",
+    "pandas",
+)
+
+
+def _warm_first_file_imports():
+    """Import what opening the first file would, on a background thread. Returns the thread.
+
+    The first file of a session took several times as long as the next ones —
+    thiourea 0.6 s against 0.14 s — because it paid for these imports itself.
+    Run while the user is still choosing a file, they are done by the time one
+    is opened; a file opened sooner waits on the import already under way
+    rather than starting another (Python lets one thread import a module and
+    the others take the result), so it is never slower than before. A module
+    that will not import is left for the code that needs it to import, and
+    report.
+    """
+    import importlib
+    import threading
+
+    def load() -> None:
+        for name in _FIRST_FILE_MODULES:
+            try:
+                importlib.import_module(name)
+            except Exception:  # noqa: BLE001 - its user imports it again, and says why
+                pass
+
+    thread = threading.Thread(target=load, name="first-file-imports", daemon=True)
     thread.start()
     return thread
 
