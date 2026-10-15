@@ -155,7 +155,10 @@ def test_rotate_buttons_sit_beside_the_axis_buttons(qapp):
 
     # left / right / up / down + the two in-screen-plane (roll) buttons
     assert len(window._rotate_buttons) == 6
-    assert [b.text() for b in window._rotate_buttons] == ["◀", "▶", "▲", "▼", "↺", "↻"]
+    assert [b.property("glyph") for b in window._rotate_buttons] == [
+        "rotate-left.svg", "rotate-right.svg", "rotate-up.svg", "rotate-down.svg",
+        "rotate-anticlockwise.svg", "rotate-clockwise.svg"]
+    assert all(not b.icon().isNull() and not b.text() for b in window._rotate_buttons)
     assert all(b.autoRepeat() for b in window._rotate_buttons)  # hold to keep turning
 
     # They orbit the view, and unlike a/b/c alignment they need no cell.
@@ -227,7 +230,8 @@ def test_viewport_eventfilter_routes_the_delete_key(qapp):
 
     interactor = object()
     for key in (Qt.Key_Delete, Qt.Key_Backspace):
-        stub = types.SimpleNamespace(interactor=interactor, _drag=Mock(), delete_requested=Mock())
+        stub = types.SimpleNamespace(interactor=interactor, _drag=Mock(), delete_requested=Mock(),
+                                     _watched_window=None)
         event = types.SimpleNamespace(type=lambda: QEvent.KeyPress, key=lambda k=key: k)
         consumed = Viewport.eventFilter(stub, interactor, event)
         assert consumed is True  # event is eaten so VTK doesn't also act on it
@@ -250,7 +254,7 @@ def test_viewport_eventfilter_nudges_selection_while_editing(qapp):
     )
     editing = types.SimpleNamespace(
         interactor=interactor, _drag=Mock(), _editing=True, nudge_requested=Mock(),
-        _nudge_vector=lambda key, mods: "VEC",
+        _nudge_vector=lambda key, mods: "VEC", _watched_window=None,
     )
     assert Viewport.eventFilter(editing, interactor, event) is True  # consumed
     editing.nudge_requested.emit.assert_called_once_with("VEC")

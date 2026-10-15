@@ -120,6 +120,19 @@ class InfoPanel(QWidget):
         self._props = dict(output_props or {})
         self._render()
 
+    def set_output_props(self, output_props: Optional[dict]) -> None:
+        """Show the CRYSTAL output's own rows, leaving the crystallography alone.
+
+        They arrive after the structure (an output's account of its run costs
+        more to read than its geometry), so they are put in by themselves
+        rather than by analysing the cell again.
+        """
+        self._props = dict(output_props or {})
+        if self._structure is None:
+            return
+        _fill(self._output_form, list(self._props.items()))
+        self._output_group.setVisible(bool(self._props))
+
     def cell_choice(self) -> str:
         """``"computed"`` or ``"standard"`` — what the Cell box is set to."""
         return str(self._cell.currentData())

@@ -82,3 +82,42 @@ def test_the_font_cache_is_warmed_on_a_thread_that_finishes():
     thread.join(timeout=120)
     assert not thread.is_alive()
     assert "matplotlib.font_manager" in sys.modules
+
+
+def test_the_window_opens_without_scipy_s_spatial_index():
+    """A quarter of a second of every start, for a window that opens with
+    nothing in it. The 3D view imports it when it first finds bonds."""
+    pytest.importorskip("pyvista")
+    loaded = _modules_after("import crystalline.ui.main_window")
+
+    assert "scipy.spatial" not in loaded, "scipy.spatial is imported at startup again"
+
+
+def test_what_the_first_file_needs_is_imported_once_the_window_is_up():
+    """So that the first file opened does not pay for the imports instead:
+    half a second of pymatgen, sympy, spglib and ASE, plus the k-d tree."""
+    pytest.importorskip("scipy")
+    import inspect
+
+    from crystalline import app
+
+    thread = app._warm_for_the_first_file()
+    thread.join(timeout=120)
+    assert not thread.is_alive()
+    assert "scipy.spatial" in sys.modules
+    # ...started after the window is shown, not alongside its import, where
+    # the two would only take turns.
+    source = inspect.getsource(app)
+    assert source.index("window.show()") < source.index("_warm_for_the_first_file)")
+
+
+def test_the_warm_up_list_names_modules_that_exist():
+    """A name that has moved would be skipped without a word, and the first
+    file would quietly pay for it again."""
+    import importlib.util
+
+    from crystalline import app
+
+    missing = [name for name in app._FIRST_FILE_MODULES
+               if importlib.util.find_spec(name) is None]
+    assert missing == []

@@ -124,6 +124,9 @@ class _Part(QWidget):
         self.figures = 0
         self.cleared = 0
         self.closed = 0
+        # Standing in for the phonon panel: these tests open frequency runs,
+        # which is what puts the Phonons dock on screen.
+        self.modes = True
         self.renderer = type("R", (), {"settings": object()})()
         self.interactor = self   # the viewport's VTK widget, closed with the tab
         self.events = None       # the window's record of what happened, in order
@@ -139,6 +142,9 @@ class _Part(QWidget):
 
     def count(self):
         return self.figures
+
+    def has_modes(self):
+        return self.modes
 
     def clear(self):
         self.cleared += 1
@@ -164,6 +170,8 @@ class _Window(QMainWindow):
     _tab_for_page = MainWindow._tab_for_page
     _on_file_tab_changed = MainWindow._on_file_tab_changed
     _on_plot_dock_visibility = MainWindow._on_plot_dock_visibility
+    _phonons_available = MainWindow._phonons_available
+    _sync_phonon_dock = MainWindow._sync_phonon_dock
     _update_tab_labels = MainWindow._update_tab_labels
     _update_window_title = MainWindow._update_window_title
     _next_tab = MainWindow._next_tab
@@ -193,6 +201,10 @@ class _Window(QMainWindow):
         self.addDockWidget(Qt.BottomDockWidgetArea, self._plot_dock)
         self._plot_dock.hide()
         self._plot_dock.visibilityChanged.connect(self._on_plot_dock_visibility)
+        self._phonon_dock = QDockWidget("Phonons", self)
+        self._phonon_dock.setWidget(self._panel_stacks["phonon_panel"])
+        self.addDockWidget(Qt.RightDockWidgetArea, self._phonon_dock)
+        self._phonon_dock.hide()  # as the real window starts: no file, no modes
         self._file_tabs.currentChanged.connect(self._on_file_tab_changed)
         self._add_tab()
 
@@ -296,6 +308,23 @@ def test_the_editing_mode_follows_to_the_tab_arrived_at(qapp):
     window._file_tabs.setCurrentIndex(1)
     assert ice.viewport.editing is True
     assert ice.geometry_panel.editing is True and ice.structure_panel.editing is True
+
+
+def test_the_phonons_panel_comes_and_goes_with_the_frequencies(qapp):
+    """One dock serves every tab, so a geometry opened beside a frequency run
+    must not be left with the other file's list of modes on screen."""
+    window = _Window()
+    window.show()                                        # a dock is only visible in a shown window
+    frequencies = window.open("/runs/urea.out")
+    assert not window._phonon_dock.isHidden()            # it has modes
+
+    geometry = window.open("/runs/ice.out")
+    geometry.phonon_panel.modes = False                  # an optimisation, say
+    window._activate_tab(geometry)
+    assert window._phonon_dock.isHidden()
+
+    window._file_tabs.setCurrentIndex(window._tabs.index(frequencies))
+    assert not window._phonon_dock.isHidden()            # back with its file
 
 
 def test_plots_come_and_go_with_their_tab(qapp):
@@ -605,11 +634,15 @@ def _drawing_stub(monkeypatch):
     class _Stub(QObject):
         draw_now = viewport.Viewport.draw_now
         _draw_queued = viewport.Viewport._draw_queued
+        _wait_out_resize = viewport.Viewport._wait_out_resize
+        _size_unconfirmed = viewport.Viewport._size_unconfirmed
 
     stub = _Stub()
     stub.interactor = QWidget()
     stub._render_now = lambda: drawn.append("queued")   # QtInteractor.render: a turn later
     stub._render_held = stub._render_queued = stub._suspended = False
+    stub._drawn = stub._resized = False
+    stub._native_size = None                 # see test_renderer for those
     return stub, drawn
 
 

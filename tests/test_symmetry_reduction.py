@@ -489,7 +489,7 @@ def test_the_info_panel_reports_both_the_real_group_and_the_declared_one():
     structure.set_reduced_symmetry([tuple(map(tuple, r)) for r in p222.rotations])
     panel.show_structure(structure)
     after = _rows(panel, QFormLayout)
-    assert after["Space group:"].startswith("Pm-3m"), "the real symmetry still shows"
+    assert after["Space group:"].startswith("Pm3̄m"), "the real symmetry still shows"
     assert after["Treated as:"] == "P222 (No. 16)"
     assert after["Independent sites:"] == "5 (was 3)"
 

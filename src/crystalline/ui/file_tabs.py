@@ -191,20 +191,25 @@ def window_title(name: Optional[str], application: str) -> str:
     return f"{name} — {application.split(' — ')[0]}"
 
 
-def openable(paths: Iterable[str], action_of) -> tuple:
+def openable(paths: Iterable[str], action_of, can_import: bool = True) -> tuple:
     """Split dropped paths into ``(to_open, to_import, ignored)``.
 
     Every file that is a structure of its own opens, each in its own tab.
     Atoms to import (an .xyz, a .pdb) go into the structure on screen — but
     only when nothing is being opened alongside them, since the structure on
     screen is then about to be another one; and only the first, as before.
+
+    ``can_import`` is whether there is a structure to add them to. An atom list
+    is not a structure: it has no cell and no calculation behind it, only
+    coordinates, so with nothing open there is nothing for it to join and it is
+    left out rather than becoming the structure itself.
     """
     to_open, to_import, ignored = [], [], []
     for path in paths:
         action = action_of(path)
         if action == "open":
             to_open.append(path)
-        elif action == "import":
+        elif action == "import" and can_import:
             to_import.append(path)
         else:
             ignored.append(path)

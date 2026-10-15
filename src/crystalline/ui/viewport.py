@@ -55,6 +55,13 @@ _ARROW_KEYS = (Qt.Key_Left, Qt.Key_Right, Qt.Key_Up, Qt.Key_Down)
 _WHEEL_IDLE_MS = 250
 
 
+# How long a draw waits for macOS to confirm the view's new size before it is
+# made anyway: long enough for the confirmation that comes late while a worker
+# is reading, short enough that a confirmation which never comes costs a pause
+# rather than a view that stops drawing.
+_UNCONFIRMED_SIZE_MS = 1000
+
+
 class Viewport(QWidget):
     """3D view of the current structure: click to select, drag to move atoms."""
 
@@ -112,7 +119,28 @@ class Viewport(QWidget):
         self._render_held = False
         self._render_queued = False
         self._suspended = False   # held while something else is drawing (see held)
-        self._render_now = self.interactor.render
+        # Whether the view has put a picture on screen yet, and whether it has
+        # been resized since the event loop last turned: see _wait_out_resize.
+        self._drawn = False
+        self._resized = False
+        # The view's own window, watched for reaching the screen (_on_exposed)
+        # and for the size macOS has actually given it (_native_size): see
+        # _wait_out_resize.
+        self._watched_window = None
+        self._native_size = None
+        self._unconfirmed = QTimer(self)
+        self._unconfirmed.setSingleShot(True)
+        self._unconfirmed.setInterval(_UNCONFIRMED_SIZE_MS)
+        self._unconfirmed.timeout.connect(self._give_up_waiting)
+        # Drawn here, on the UI thread, not through QtInteractor.render: on
+        # macOS that starts a Python thread to emit a signal back to this one,
+        # and while a worker is busy in Python — reading an output's details
+        # just after its structure is shown — the little thread waits for the
+        # interpreter, and the frame with it: 430 ms, the first frame of a file
+        # that had just been opened. The trip exists for draws asked for from
+        # inside VTK's own callbacks; these are made from the event loop's
+        # timers (_draw_queued, _draw_held), as draw_now's always were.
+        self._render_now = lambda: BasePlotter.render(self.interactor)
 
         def request_render(*_args, **_kwargs):
             if self._suspended:
@@ -181,6 +209,92 @@ class Viewport(QWidget):
             if self.interactor.isVisible():
                 QTimer.singleShot(0, self._draw_held)
 
+    def _wait_out_resize(self) -> bool:
+        """Whether a draw asked for now has to wait for the next turn of the loop.
+
+        It does when the view has just been resized. VTK's widget takes the new
+        size at once, but the surface macOS shows it on is only brought to that
+        size once Cocoa has had a turn, and a frame drawn in between is drawn
+        for one size into a surface of another — and shown stretched, until the
+        next frame. Brucite came up squeezed for most of half a second that way:
+        the Phonons panel appears as its modes are put in, the view narrows
+        from 937 px to 644, and the structure's first frame was drawn 22 ms
+        later, in the same pass.
+
+        Only once the view has drawn something, though. A view that has never
+        drawn has nothing on screen but the white macOS fills a new window
+        with, and drawing it at once is the reason draw_now exists; one that
+        has drawn shows its previous frame meanwhile — on opening a file, the
+        empty scene the new tab came up with, so nothing out of shape.
+        """
+        if self._drawn and (self._resized or self._size_unconfirmed()):
+            self._render_held = True
+            if self._size_unconfirmed() and not self._unconfirmed.isActive():
+                self._unconfirmed.start()
+            return True
+        return False
+
+    def _size_unconfirmed(self) -> bool:
+        """Whether the view has a size its window has not been confirmed at yet.
+
+        Qt gives the view's native window its new geometry at once, but the
+        surface macOS shows it on changes when Cocoa says so, in a Resize event
+        of its own — which came 400 ms after the view had narrowed, the whole
+        time an output's details were being read on a worker. Brucite's first
+        frame was drawn in between, 644 px wide into a surface still 936 px
+        wide, and shown stretched to fit it. So once that event has been seen,
+        a size it has not confirmed is one not to draw at.
+        """
+        if self._native_size is None:
+            return False    # never confirmed one: nothing to compare (and no hold)
+        return self._native_size != (self.interactor.width(), self.interactor.height())
+
+    def _give_up_waiting(self) -> None:
+        """Draw anyway, if the confirmation never came: never a frozen view."""
+        self._native_size = None
+        self._draw_held()
+
+    def _watch_window(self) -> None:
+        """Watch the view's own window, which exists once the view has been shown."""
+        window = self.interactor.windowHandle()
+        if window is not None and window is not self._watched_window:
+            window.installEventFilter(self)
+            self._watched_window = window
+
+    def _on_exposed(self) -> None:
+        """Draw the view the moment its window reaches the screen.
+
+        On macOS a frame drawn before then never gets there, and until one is
+        drawn after, the view shows whatever was in the memory it was given —
+        which can be the last picture of a view just let go. Closing brucite's
+        tab left a new empty one that had drawn three frames, all before its
+        window was up, and none after: the screen showed brucite, squeezed from
+        the width it had beside the Phonons panel to the width it now had
+        without, under an "Untitled" tab, for as long as the next file took to
+        read. Qt's own rule for a window is to draw once it is exposed; this is
+        that rule, kept.
+
+        Drawn now rather than a turn later, since this is the moment the
+        picture is wanted; not while held (see :meth:`held`), when it is owed.
+        """
+        window = self._watched_window
+        if window is None or not window.isExposed() or not self.interactor.isVisible():
+            return
+        if self._suspended:
+            self._render_held = True
+            return
+        if self._drawn and self._size_unconfirmed():
+            self._wait_out_resize()   # held, and drawn once Cocoa confirms the size
+            return
+        self._render_held = self._render_queued = False
+        BasePlotter.render(self.interactor)
+        self._drawn = True
+
+    def _resize_settled(self) -> None:
+        """The loop has turned since the resize: draw what waited for it."""
+        self._resized = False
+        self._draw_held()
+
     @guard()
     def _draw_held(self) -> None:
         """Draw what was asked of the view while it could not be drawn into.
@@ -191,8 +305,11 @@ class Viewport(QWidget):
         the view went away again in between, what is owed stays owed.
         """
         if self._render_held and self.interactor.isVisible():
+            if self._wait_out_resize():
+                return
             self._render_held = False
             self._render_now()
+            self._drawn = True
 
     @guard()
     def _draw_queued(self) -> None:
@@ -201,7 +318,10 @@ class Viewport(QWidget):
             return  # drawn at once in the meantime (draw_now)
         self._render_queued = False
         if self.interactor.isVisible():
+            if self._wait_out_resize():
+                return
             self._render_now()
+            self._drawn = True
         else:
             self._render_held = True  # hidden in the meantime: drawn when shown
 
@@ -229,9 +349,12 @@ class Viewport(QWidget):
             return
         if not self.interactor.isVisible():
             return  # not on screen: held, and drawn when it is
-        self._render_held = False
         self._render_queued = False
+        if self._wait_out_resize():
+            return  # drawn on the next turn, once the surface has its new size
+        self._render_held = False
         BasePlotter.render(self.interactor)
+        self._drawn = True
 
     def _set_camera_busy(self, busy: bool) -> None:
         """Announce that the camera started or stopped moving (idempotent)."""
@@ -243,8 +366,28 @@ class Viewport(QWidget):
 
     @guard(False)
     def eventFilter(self, obj, event) -> bool:
+        if obj is self._watched_window:
+            if event.type() == QEvent.Expose:
+                self._on_exposed()
+            elif event.type() == QEvent.Resize:
+                self._native_size = (event.size().width(), event.size().height())
+                if self._render_held and not self._size_unconfirmed():
+                    self._unconfirmed.stop()
+                    QTimer.singleShot(0, self._draw_held)
+            return False
         if obj is self.interactor:
             etype = event.type()
+            if etype == QEvent.Paint and self._wait_out_resize():
+                # VTK's own paintEvent draws straight from C++, past every hold
+                # here: brucite's stretched frame was one of these, painted by
+                # Qt 24 ms before Cocoa confirmed the size it was painted at.
+                # Held like any other draw, and drawn once the size is good.
+                return True
+            if etype == QEvent.Show:
+                self._watch_window()
+            if etype == QEvent.Resize and not self._resized:
+                self._resized = True
+                QTimer.singleShot(0, self._resize_settled)
             if etype == QEvent.Show and self._render_held:
                 # Drawn once it is on screen, on the next turn of the loop, when
                 # its window is mapped: whatever was asked of it while hidden —

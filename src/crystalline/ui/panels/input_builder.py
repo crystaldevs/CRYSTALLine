@@ -242,9 +242,6 @@ class _SupercellGroup(QGroupBox):
         self.setChecked(checked)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(10, 6, 10, 10)
-        hint = QLabel("Expansion matrix; rows are the new cell vectors.")
-        hint.setWordWrap(True)
-        outer.addWidget(hint)
 
         self.cells = []
         for r in range(3):
@@ -459,12 +456,6 @@ class InputBuilderDialog(QDialog):
         form = _form()
         group.setLayout(form)
 
-        note = QLabel(
-            "A two-component SCF gives single-point energies only, with pure or "
-            "global-hybrid LDA/GGA functionals. It also switches off DIIS and symmetry."
-        )
-        note.setWordWrap(True)
-        form.addRow(note)
 
         self._soc = QCheckBox("Include the spin–orbit operator (SOC)")
         self._soc.setChecked(True)
@@ -910,12 +901,6 @@ class InputBuilderDialog(QDialog):
 
     def _anharm_page(self) -> QWidget:
         form = _form()
-        hint = QLabel(
-            "Anharmonic X–H (or X–D) stretching. The chosen hydrogen moves along "
-            "the direction to its first neighbour; no harmonic run is needed."
-        )
-        hint.setWordWrap(True)
-        form.addRow(hint)
 
         self._anharm_atom = plain_spin(1, 1, 100000)
         self._anharm_atom.setToolTip(

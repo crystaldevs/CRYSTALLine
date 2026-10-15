@@ -99,6 +99,7 @@ class BusyOverlay(ParentOverlay):
         # process down, far from the line that failed.
         with QPainter(self) as painter:
             painter.setRenderHint(QPainter.Antialiasing, True)
+            self._paint_under(painter)  # nothing stale under the tint
             palette = self.palette()
 
             scrim = QColor(palette.window().color())

@@ -812,3 +812,92 @@ def test_a_fitted_plane_has_no_position_to_slide(qapp):
     assert not panel._plane_offset.isEnabled()
     panel._plane_offset.set_value(0.4)              # must not raise
     assert panel.lattice_planes()[0].rms == pytest.approx(0.0)
+
+
+# ── the Position track follows the plane ─────────────────────────────────
+def _span_from_view(structure):
+    """The renderer's own answer, off screen: where a plane cuts the cell drawn."""
+    pv = pytest.importorskip("pyvista")
+    from crystalline.viz.renderer import StructureRenderer
+
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(structure)
+    return renderer.lattice_plane_span
+
+
+@pytest.mark.parametrize("miller, span", [
+    ((1, 0, 0), (0.0, 1.0)),
+    ((-1, 0, 0), (-1.0, 0.0)),      # only negative positions are in the cell
+    ((1, -1, 0), (-1.0, 1.0)),
+    ((1, 1, 1), (0.0, 3.0)),        # past the old track's end at 1
+    ((2, 0, 0), (0.0, 2.0)),
+])
+def test_a_plane_cuts_the_cell_between_its_own_bounds(miller, span):
+    """hx + ky + lz over the corners of the cell drawn."""
+    structure = _nacl()
+    span_of = _span_from_view(structure)
+
+    assert span_of(miller, np.asarray(structure.cell)) == pytest.approx(span)
+
+
+def test_a_supercell_widens_the_span():
+    """Indices stay those of the conventional cell; the region drawn grows."""
+    structure = _nacl()
+    span_of = _span_from_view(Structure.from_ase(structure.to_ase().repeat((2, 2, 2))))
+
+    assert span_of((1, 0, 0), np.asarray(structure.cell)) == pytest.approx((0.0, 2.0))
+
+
+def _panel_with_planes(qapp, *planes):
+    from crystalline.core import lattice_planes as lp
+
+    structure = _nacl()
+    panel = GeometryPanel(structure)
+    panel.set_plane_span(_span_from_view(structure))
+    panel.set_miller_cell(np.asarray(structure.cell))
+    for miller, family in planes:
+        panel.add_lattice_plane(lp.LatticePlane(miller, family=family))
+    return panel
+
+
+def _track(panel):
+    return panel._plane_offset.bounds()
+
+
+def test_the_track_is_the_selected_plane_s_own(qapp):
+    """A fixed -1 to 1 was half wasted on (100) and too short for (111): a
+    single (111) plane could not be taken past the first third of the cell."""
+    panel = _panel_with_planes(qapp, ((1, 1, 1), False), ((-1, 0, 0), False))
+
+    panel._plane_list.item(0).setSelected(True)
+    assert _track(panel) == (0.0, 3.0)
+
+    panel._plane_list.clearSelection()
+    panel._plane_list.item(1).setSelected(True)
+    assert _track(panel) == (-1.0, 0.0)
+
+
+def test_with_nothing_selected_the_track_spans_every_plane(qapp):
+    """It moves them all, so any position on it does something to one of them."""
+    panel = _panel_with_planes(qapp, ((1, 1, 1), False), ((-1, 0, 0), False))
+
+    assert _track(panel) == (-1.0, 3.0)
+
+
+def test_a_family_s_track_is_one_spacing(qapp):
+    """A family drawn from d and from d + 1 is the same set of planes."""
+    panel = _panel_with_planes(qapp, ((1, 1, 1), True))
+
+    assert _track(panel) == (0.0, 1.0)
+
+
+def test_moving_a_plane_does_not_move_its_track(qapp):
+    """The ends move only when the planes, their selection or the cell do —
+    never under a drag, which goes through the same path."""
+    panel = _panel_with_planes(qapp, ((1, 1, 1), False))
+    panel._plane_list.item(0).setSelected(True)
+
+    panel._plane_offset.set_value(2.5)
+
+    assert _track(panel) == (0.0, 3.0)
+    assert panel._planes[0].offset == pytest.approx(2.5)

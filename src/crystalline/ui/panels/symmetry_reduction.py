@@ -51,14 +51,6 @@ class SymmetryReductionDialog(QDialog):
         self._options: List[reduction.Subgroup] = []
 
         outer = QVBoxLayout(self)
-        note = WrappedLabel(
-            "Untick an operator to give it up. What is left has to be a group, "
-            "so others go with it — often many others, and sometimes there is "
-            "more than one way to do it. The choices appear on the right; the "
-            "count is how many atoms become free to move independently."
-        )
-        note.setStyleSheet("color: palette(mid);")
-        outer.addWidget(note)
 
         self._header = WrappedLabel()
         font = self._header.font()

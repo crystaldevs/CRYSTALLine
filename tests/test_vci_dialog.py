@@ -145,15 +145,15 @@ def test_only_the_chosen_representation_shows_its_options(qapp):
         [dialog.representation.itemData(i) for i in
          range(dialog.representation.count())].index("map")
     )
-    assert dialog._map_box.isVisibleTo(dialog)
-    assert not dialog._sankey_box.isVisibleTo(dialog)
+    assert dialog.signed.isVisibleTo(dialog) and dialog.annotate.isVisibleTo(dialog)
+    assert not dialog.weight.isVisibleTo(dialog)
 
     dialog.representation.setCurrentIndex(
         [dialog.representation.itemData(i) for i in
          range(dialog.representation.count())].index("sankey")
     )
-    assert dialog._sankey_box.isVisibleTo(dialog)
-    assert not dialog._map_box.isVisibleTo(dialog)
+    assert dialog.weight.isVisibleTo(dialog)
+    assert not dialog.signed.isVisibleTo(dialog) and not dialog.annotate.isVisibleTo(dialog)
 
 
 def test_the_recovered_modes_are_passed_through(qapp):
@@ -199,3 +199,66 @@ def test_the_defaults_are_the_documented_ones(qapp):
     assert options["representation"] == "map"
     assert options["signed"] is False
     assert options["weight"] == "square"
+
+
+# ── beside the plot ───────────────────────────────────────────────────────
+def _knobs(run):
+    from crystalline.ui.panels.vci_options import VCIOptions
+
+    knobs = VCIOptions(run)
+    moves = []
+    knobs.changed.connect(lambda: moves.append(knobs.options()))
+    return knobs, moves
+
+
+def test_beside_a_plot_the_window_is_pulled_and_drawn(qapp):
+    """Which states are drawn is found by looking, so the window is a live
+    control like any other: each move that can be drawn asks for a redraw."""
+    knobs, moves = _knobs(_molecular())
+
+    assert knobs.window() == (0.0, 300.0)       # where it opens: 11 states
+    knobs.fmax.setValue(450.0)                  # 16
+
+    assert moves and moves[-1]["frange"] == (0.0, 450.0)
+    assert "16 states" in knobs.count.text()
+
+
+def test_a_window_that_cannot_be_drawn_holds_the_plot_back(qapp):
+    """Said in the count line and the plot left as it was, rather than redrawn
+    into an error at every step of the slider on its way back."""
+    knobs, moves = _knobs(_molecular())
+    knobs.fmin.setValue(0.0)
+    moves.clear()
+
+    knobs.fmax.setValue(30.0 * (MAX_STATES + 10))      # far too many
+    knobs.threshold.setValue(0.1)                       # still too many: nothing
+    assert moves == []
+    assert "narrow the window" in knobs.count.text()
+
+    knobs.fmax.setValue(300.0)                          # back in range
+    assert moves and moves[-1]["threshold"] == pytest.approx(0.1)
+
+
+def test_the_knobs_take_a_plot_s_options_without_announcing_them(qapp):
+    """The plot already has them: echoing them back would redraw it for
+    nothing, every time it was opened or edited."""
+    knobs, moves = _knobs(_blocked())
+    wanted = dict(knobs.options(), representation="sankey", frange=(100.0, 300.0),
+                  irrep=2, threshold=0.05, weight="abs")
+
+    knobs.set_options(wanted)
+
+    assert moves == []
+    assert knobs.options() == wanted
+    assert knobs.weight.isVisibleTo(knobs) and not knobs.signed.isVisibleTo(knobs)
+
+
+def test_the_tab_is_named_by_what_is_drawn(qapp):
+    """The representation can be switched beside the plot, so the tab's name
+    is worked out from the plot's options, not kept from the dialog."""
+    from crystalline.ui.panels.vci_options import title
+
+    run = _molecular()
+
+    assert title(run, {"representation": "map"}).endswith("coefficient map")
+    assert title(run, {"representation": "sankey"}).endswith("state composition (sankey)")

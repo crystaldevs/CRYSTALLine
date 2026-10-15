@@ -55,11 +55,19 @@ class _StubWindow(QMainWindow):
         for name, area in _DOCKS:
             setattr(self, name, self._dock(name, QWidget(self), area))
         self._plot_dock.hide()  # as the real window starts
+        # Whether the file on screen has frequencies. The Phonons panel is the
+        # one that can have nothing to show (see tests/test_phonon_dock.py);
+        # the real window answers this from the tab on screen.
+        self.phonons = True
 
     _dock = MainWindow._dock
     _panel_docks = MainWindow._panel_docks
+    _panel_available = MainWindow._panel_available
     _restore_all_panels = MainWindow._restore_all_panels
     _show_display_panel = MainWindow._show_display_panel
+
+    def _phonons_available(self) -> bool:
+        return self.phonons
 
     # The View menu also steps between file tabs; there are none here.
     def _next_tab(self) -> None:
@@ -182,3 +190,34 @@ def test_a_hidden_title_bar_never_asks_for_a_negative_height(qapp):
     assert dock.titleBarWidget().sizeHint().height() == 0
     minimum = dock.layout().minimumSize()
     assert minimum.width() >= 0 and minimum.height() >= 0
+
+
+# ── a panel the file has nothing to put in ────────────────────────────────
+def test_the_phonons_entry_is_greyed_for_a_file_with_no_modes(qapp):
+    """Ticking it would bring back a panel listing nothing. Greyed, it says
+    instead that there is nothing to bring back."""
+    window = _window(qapp)
+    window.phonons = False
+
+    menus.sync_panel_actions(window)
+
+    assert not window._panel_actions["Phonons"].isEnabled()
+    assert all(window._panel_actions[title].isEnabled()
+               for title in ("Info", "Display", "Geometry", "Plots"))
+
+    window.phonons = True
+    menus.sync_panel_actions(window)
+    assert window._panel_actions["Phonons"].isEnabled()
+
+
+def test_restore_all_does_not_restore_a_panel_with_nothing_in_it(qapp):
+    """"All panels" means the ones this file has: a geometry does not get an
+    empty list of modes back."""
+    window = _window(qapp)
+    window.phonons = False
+    for name in ("_info_dock", "_phonon_dock", "_plot_dock"):
+        getattr(window, name).close()
+
+    window._restore_all_panels()
+
+    assert [t for t, d in window._panel_docks() if d.isHidden()] == ["Phonons"]

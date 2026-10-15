@@ -60,7 +60,16 @@ def test_the_status_line_names_the_group_and_its_centre(qapp):
     panel = SymmetryPanel(_cubic())
     panel._show.setChecked(True)
 
-    assert panel._status.text() == "Point symmetry m3̄m · 23 elements through (½, ½, ½)"
+    assert panel._status.text() == "Point symmetry m3̄m · 23 elements through (½,\u00a0½,\u00a0½)"
+
+
+def test_the_centre_is_never_broken_across_lines(qapp):
+    """It wrapped in a narrow panel as "(0, 0," and then "0)"."""
+    panel = SymmetryPanel(_cubic())
+    panel._show.setChecked(True)
+
+    site = panel._status.text().rsplit("through ", 1)[1]
+    assert " " not in site
 
 
 def test_a_structure_whose_symmetry_is_all_screws_shows_only_its_centre(qapp):

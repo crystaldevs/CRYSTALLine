@@ -65,16 +65,22 @@ class CrystalInfo:
             ("Atoms", str(self.n_atoms)),
             ("Dimensionality", self.dimensionality),
         ]
+        # Written as everywhere else in the app — P3̄m1, P2₁/n — rather than as
+        # spglib spells them for a keyboard, P-3m1 and P2_1/n.
+        from crystalline.core.cell_setting import _pretty
+
         if self.layer_group_symbol is not None:
-            rows.append(("Layer group", f"{self.layer_group_symbol} (No. {self.layer_group_number})"))
+            rows.append(("Layer group",
+                         f"{_pretty(self.layer_group_symbol)} (No. {self.layer_group_number})"))
         elif self.space_group_symbol is not None:
-            rows.append(("Space group", f"{self.space_group_symbol} (No. {self.space_group_number})"))
+            rows.append(("Space group",
+                         f"{_pretty(self.space_group_symbol)} (No. {self.space_group_number})"))
         if self.cell_note is not None:
             rows.append(("Cell", self.cell_note))
         if self.crystal_system is not None:
             rows.append(("Crystal system", self.crystal_system.capitalize()))
         if self.point_group is not None:
-            rows.append(("Point group", self.point_group))
+            rows.append(("Point group", _pretty(self.point_group)))
         if self.z is not None:
             rows.append(("Formula units Z", str(self.z)))
         if self.ndim == 2:

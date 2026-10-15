@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "CRYSTALLine"
-version = "0.2.5"
+version = "0.2.7"
 description = "A desktop GUI for building/editing CRYSTAL structures and visualising vibrational modes, built on CRYSTALClear."
 readme = "README.md"
 # pymatgen requires 3.11+ as of its 2025 releases, and PySide6/pyvista/ase all
@@ -86,7 +86,7 @@ crystalline = "crystalline.__main__:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"crystalline.resources" = ["*.svg"]
+"crystalline.resources" = ["*.svg", "*.png"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

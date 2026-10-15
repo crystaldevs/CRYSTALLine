@@ -58,6 +58,11 @@ def run(structure: Optional[Structure] = None) -> int:
     window.show()
     if splash is not None:
         splash.finish(window)
+    # Once the window is up and waiting for the user, not before: started
+    # alongside the window's own import, two imports would only take turns.
+    from PySide6.QtCore import QTimer
+
+    QTimer.singleShot(0, _warm_for_the_first_file)
     return app.exec()
 
 
@@ -129,6 +134,49 @@ def _warm_font_cache():
             pass
 
     thread = threading.Thread(target=build, name="font-cache", daemon=True)
+    thread.start()
+    return thread
+
+
+# What the first file of a session needs and an empty window does not: reading
+# it (CRYSTALClear, pymatgen, ASE), analysing its symmetry for the Info panel
+# (spglib, and pymatgen's analyser, which brings sympy — four hundred modules on
+# its own), and finding its bonds (scipy's k-d tree). Measured, not guessed:
+# imported in advance, these leave a first open within a few per cent of a
+# later one, where without them it cost half a second more.
+_FIRST_FILE_MODULES = (
+    "scipy.spatial",
+    "CRYSTALClear.crystal_io",
+    "pymatgen.core",
+    "pymatgen.symmetry.analyzer",
+    "pymatgen.io.cif",
+    "spglib",
+    "ase.io",
+)
+
+
+def _warm_for_the_first_file():
+    """Import what the first file opened will need, on a background thread.
+
+    Returns the thread. None of it is needed by the window itself, which opens
+    with nothing in it, and all of it used to be paid for either at startup
+    (``scipy.spatial``, a quarter of a second) or by the first file opened
+    (the rest, about half a second). Started once the window is on screen, it
+    is usually done before a file has even been chosen; a file opened sooner
+    waits for what it needs on the modules' import locks, as it would have
+    without this.
+    """
+    import importlib
+    import threading
+
+    def build() -> None:
+        for name in _FIRST_FILE_MODULES:
+            try:
+                importlib.import_module(name)
+            except Exception:  # noqa: BLE001 - imported again when needed, and reported then
+                pass
+
+    thread = threading.Thread(target=build, name="first-file", daemon=True)
     thread.start()
     return thread
 

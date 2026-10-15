@@ -91,12 +91,6 @@ class DensityDialog(QDialog):
         self._error = ""
 
         outer = QVBoxLayout(self)
-        intro = WrappedLabel(
-            "A charge density, a spin density or an electrostatic potential "
-            "from an ECH3 or POT3 run. Values are in the atomic units CRYSTAL "
-            "writes them in.")
-        intro.setStyleSheet("color: palette(mid);")
-        outer.addWidget(intro)
 
         columns = QHBoxLayout()
         left, right = QVBoxLayout(), QVBoxLayout()

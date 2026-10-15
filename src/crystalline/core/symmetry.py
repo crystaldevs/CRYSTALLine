@@ -102,6 +102,7 @@ class SymmetryAnalysis:
     group: Optional[str] = None       # "m3̄m", "D6h" — the group the elements form
     centre: Optional[np.ndarray] = None   # cartesian point they all pass through
     centre_site: str = ""             # that point in fractional (or Å) coordinates
+    note: str = ""                    # why the list is shorter than the group implies
 
     def summary(self) -> str:
         """``"Point symmetry m3̄m · 23 elements through (0, 0, 0)"`` — a status line.
@@ -111,12 +112,14 @@ class SymmetryAnalysis:
         what is drawn is always the former.
         """
         if not self.elements:
-            return (f"Point symmetry {self.group} — no elements" if self.group
+            line = (f"Point symmetry {self.group} — no elements" if self.group
                     else "No point symmetry")
+            return f"{line}. {self.note}" if self.note else line
         count = f"{len(self.elements)} element{'s' if len(self.elements) != 1 else ''}"
         parts = [f"Point symmetry {self.group}"] if self.group else []
         parts.append(f"{count} through {self.centre_site}")
-        return " · ".join(parts)
+        line = " · ".join(parts)
+        return f"{line}. {self.note}" if self.note else line
 
 
 # ── public entry point ────────────────────────────────────────────────────
@@ -147,12 +150,35 @@ def analyse(structure: Structure, symprec: float = 1e-2) -> SymmetryAnalysis:
                 if element is not None]
     merged = _merge(elements, cell)
     _name_planes(merged, np.asarray(atoms.get_positions()) - centre)
+    group = naming(kept)
     return SymmetryAnalysis(
         elements=merged,
-        group=naming(kept),
+        group=group,
         centre=centre,
         centre_site=describe_point(structure, centre),
+        note=_infinite_order_note(group),
     )
+
+
+def _infinite_order_note(group: Optional[str]) -> str:
+    """Why a linear molecule lists almost nothing, when its group says otherwise.
+
+    C∞v and D∞h are the two groups with an axis of infinite order: every
+    rotation about the molecule is a symmetry of it, as is every mirror plane
+    containing it, and for D∞h every two-fold axis across it. None of those
+    families can be listed or drawn one member at a time — any member drawn
+    would be an arbitrary choice presented as the element. What is left is the
+    handful there is exactly one of, which for D∞h is the inversion centre and
+    for C∞v is nothing at all. pymatgen, which names the group here, says the
+    same by returning only those operations.
+    """
+    if not group or "∞" not in group:
+        return ""
+    across = " and every two-fold axis across it" if group.startswith("D") else ""
+    return ("Linear: every rotation about the molecule's axis is a symmetry of "
+            f"it, as is every mirror plane containing that axis{across}. Those "
+            "families are infinite and cannot be listed one by one, so what is "
+            "here is what there is exactly one of.")
 
 
 def describe_point(structure: Structure, point) -> str:
@@ -207,7 +233,17 @@ def _operations(atoms, structure: Structure, symprec: float):
         rotation = np.asarray(operation.rotation_matrix, dtype=float)
         operations.append((rotation, centre - rotation @ centre))
     # A molecule's point group is exactly what pymatgen just named it.
-    return operations, None, lambda _kept: analyzer.sch_symbol
+    return operations, None, lambda _kept: _schoenflies(analyzer.sch_symbol)
+
+
+def _schoenflies(symbol: Optional[str]) -> Optional[str]:
+    """pymatgen's Schoenflies symbol, written the way it is written.
+
+    Its spelling for an axis of infinite order is an asterisk — ``D*h`` for
+    carbon dioxide, ``C*v`` for carbon monoxide — which is no one's convention
+    on paper and reads as a footnote mark.
+    """
+    return symbol.replace("*", "∞") if symbol else symbol
 
 
 def _crystal_naming(operations):

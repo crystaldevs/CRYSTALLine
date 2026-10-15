@@ -15,11 +15,9 @@ _SECTION_KEY = "sections/{}"
 
 
 def _settings():
-    from PySide6.QtCore import QSettings
+    from crystalline.ui.theme import _settings as settings
 
-    from crystalline.ui.theme import _SETTINGS_APPLICATION, _SETTINGS_ORGANISATION
-
-    return QSettings(_SETTINGS_ORGANISATION, _SETTINGS_APPLICATION)
+    return settings()
 
 
 def cell_choice() -> str:
@@ -65,4 +63,46 @@ def set_section_open(name: str, open_: bool) -> None:
         pass
 
 
-__all__ = ["cell_choice", "section_open", "set_cell_choice", "set_section_open"]
+# ── recent files ─────────────────────────────────────────────────────────
+_RECENT_KEY = "files/recent"
+RECENT_LIMIT = 10
+
+
+def recent_files() -> list:
+    """The files opened most recently, newest first, that are still there.
+
+    Real paths, so a file reached by two routes is one entry. One that has
+    since been moved or deleted is left out rather than offered and refused.
+    """
+    import json
+    import os
+
+    try:
+        stored = json.loads(str(_settings().value(_RECENT_KEY, "[]") or "[]"))
+    except Exception:  # noqa: BLE001 - unreadable: start afresh
+        return []
+    return [path for path in stored if isinstance(path, str) and os.path.isfile(path)]
+
+
+def remember_file(path: str) -> None:
+    """Put ``path`` at the top of the recent files (silently, if it can't be)."""
+    import json
+    import os
+
+    real = os.path.realpath(path)
+    kept = [real] + [p for p in recent_files() if p != real]
+    try:
+        _settings().setValue(_RECENT_KEY, json.dumps(kept[:RECENT_LIMIT]))
+    except Exception:  # noqa: BLE001 - can't persist; nothing else depends on it
+        pass
+
+
+def forget_recent_files() -> None:
+    try:
+        _settings().setValue(_RECENT_KEY, "[]")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+__all__ = ["RECENT_LIMIT", "cell_choice", "forget_recent_files", "recent_files",
+           "remember_file", "section_open", "set_cell_choice", "set_section_open"]

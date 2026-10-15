@@ -32,14 +32,14 @@ def test_the_info_panel_switches_between_the_two_cells(qapp):
     panel.set_cell_choice(COMPUTED)
     panel.show_structure(_p21n())
     computed = _rows(panel)
-    assert computed["Space group"] == "P2_1/n (No. 14)"
+    assert computed["Space group"] == "P2₁/n (No. 14)"
     assert computed["a, b, c (Å)"] == "8.2400, 13.4487, 8.9677"
 
     seen = []
     panel.cell_choice_changed.connect(seen.append)
     panel._cell.setCurrentIndex(panel._cell.findData(STANDARD))   # as a click would
     standard = _rows(panel)
-    assert standard["Space group"] == "P2_1/c (No. 14)"
+    assert standard["Space group"] == "P2₁/c (No. 14)"
     assert standard["a, b, c (Å)"] == "8.2400, 13.4487, 10.4338"
     assert standard["Cell volume (Å³)"] == computed["Cell volume (Å³)"]
     assert seen == [STANDARD]
