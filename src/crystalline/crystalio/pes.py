@@ -75,6 +75,10 @@ PLOT_FUNCTIONS = {"map": "plot_cry_pes_2D", "surface": "plot_cry_pes_3D"}
 DEFAULT_RANGE = 2.0
 
 DEFAULT_NSTATES = 5
+# How tall to draw the wavefunctions, in cm-1, when the run itself suggests
+# nothing — a mid-range vibrational wavenumber. A real run says better: see
+# PESRun.scale_wf, which reads it off the modes that were scanned.
+DEFAULT_WF_SCALE = 1000.0
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,23 @@ class PESRun:
     modes: Tuple[PESMode, ...]
     pairs: Tuple[PESPair, ...]      # strongest coupling first
     ntriplets: int
+
+    @property
+    def scale_wf(self) -> float:
+        """How tall to draw a wavefunction on this run's potentials, in cm⁻¹.
+
+        The level spacing is what a wavefunction is read against — it is drawn
+        on the potential's own axis, and the levels it belongs to are about
+        ħω apart — so a harmonic frequency of this run is the height that puts
+        one between its neighbours instead of flat along a level or over the
+        top of the well. The middle mode rather than any particular one: the
+        suggestion anchors a slider spanning a decade either side, and it has
+        to suit whichever cut is chosen next.
+        """
+        frequencies = sorted(mode.frequency for mode in self.modes if mode.frequency > 0)
+        if not frequencies:
+            return 0.0
+        return float(frequencies[len(frequencies) // 2])
 
     @property
     def summary(self) -> str:
@@ -323,6 +344,8 @@ def plot_pes(
     harmonic: bool = True,
     levels: bool = False,
     nstates: int = DEFAULT_NSTATES,
+    scale_wf: Optional[float] = None,
+    legend: bool = True,
     quantity: str = "anharmonic",
 ):
     """Draw a cut through ``out``'s PES and return the figure.
@@ -354,10 +377,17 @@ def plot_pes(
     if dimension == "1D":
         if mode is None:
             raise ValueError("a one-mode cut needs a mode")
-        return _to_figure(function(
+        figure = _to_figure(function(
             out, mode, xlim=[-span, span],
             harmonic=harmonic, levels=levels, nstates=nstates,
+            # None leaves the height to the plotter, which reads it off the
+            # level spacing; a number overrides it.
+            scale_wf=scale_wf or None,
+            legend=legend,
         ))
+        if levels:
+            _levels_inside_the_well(figure.axes[0])
+        return figure
 
     if modei is None or modej is None:
         raise ValueError("a two-mode cut needs two modes")
@@ -367,8 +397,49 @@ def plot_pes(
     ))
 
 
+def _levels_inside_the_well(ax) -> None:
+    """Draw each level only where the state can classically be.
+
+    CRYSTALClear rules every level across the whole window, so the lines run
+    straight through the walls of the potential and on to the edge — which is
+    not how a level diagram is read, and buries the curve under them. Each now
+    spans the stretch of the anharmonic potential below it around the minimum.
+    The wavefunctions are left whole: their tails past the walls are physics.
+    """
+    import numpy as np
+    from matplotlib.collections import LineCollection
+
+    curve = next((line for line in ax.get_lines()
+                  if line.get_label() == "cubic + quartic"), None)
+    if curve is None:
+        return
+    x = np.asarray(curve.get_xdata(), dtype=float)
+    v = np.asarray(curve.get_ydata(), dtype=float)
+    bottom = int(np.argmin(v))
+    for collection in ax.collections:
+        if not isinstance(collection, LineCollection):
+            continue
+        segments = collection.get_segments()
+        if len(segments) != 1 or len(segments[0]) != 2:
+            continue
+        (x0, e0), (x1, e1) = segments[0]
+        if not np.isclose(e0, e1):
+            continue                                   # not a level
+        below = v <= e0
+        if not below[bottom]:
+            continue
+        left = bottom
+        while left > 0 and below[left - 1]:
+            left -= 1
+        right = bottom
+        while right < len(x) - 1 and below[right + 1]:
+            right += 1
+        collection.set_segments([[(x[left], e0), (x[right], e0)]])
+
+
 __all__ = [
     "DEFAULT_NSTATES",
+    "DEFAULT_WF_SCALE",
     "DEFAULT_RANGE",
     "DIMENSIONS",
     "PLOT_FUNCTIONS",

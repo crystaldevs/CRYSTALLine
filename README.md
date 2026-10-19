@@ -13,6 +13,8 @@
 </p>
 
 <p align="center">
+  <a href="https://pypi.org/project/crystalline/"><img src="https://img.shields.io/pypi/v/crystalline" alt="PyPI version"></a>
+  <a href="https://github.com/crystaldevs/CRYSTALLine/actions/workflows/docs.yml"><img src="https://github.com/crystaldevs/CRYSTALLine/actions/workflows/docs.yml/badge.svg" alt="Documentation build"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue" alt="Python 3.11+">
   <img src="https://img.shields.io/badge/GUI-PySide6-41cd52" alt="PySide6">
   <img src="https://img.shields.io/badge/3D-PyVista%2FVTK-orange" alt="PyVista">

@@ -22,37 +22,6 @@ def _rock_salt():
     return Structure.from_ase(bulk("MgO", "rocksalt", a=4.21))
 
 
-def test_rows_still_to_read_are_said_to_be_coming(qapp):
-    """Shown with the structure before the rows about the run are read, the
-    group says they are on their way rather than being missing."""
-    panel = InfoPanel()
-    panel.set_output_props({}, reading=True)
-    panel.show_structure(_rock_salt(), {})
-    assert output_rows(panel) == [("", "Reading the output…")]
-
-    panel.set_output_props({"Code": "CRYSTAL23", "Task": "FREQCALC"})
-    assert output_rows(panel) == [("Code:", "CRYSTAL23"), ("Task:", "FREQCALC")]
-
-
-def test_an_edit_while_they_are_read_keeps_saying_so(qapp):
-    """An edit redraws the panel from the structure with the rows it has — none
-    yet — and the group must not vanish before they arrive."""
-    panel = InfoPanel()
-    panel.set_output_props({}, reading=True)
-    panel.show_structure(_rock_salt(), {})
-    panel.show_structure(_rock_salt(), {})              # as _refresh_info does after an edit
-    assert output_rows(panel) == [("", "Reading the output…")]
-
-
-def test_an_output_with_no_rows_shows_no_group(qapp):
-    """Read, and nothing to show: the group goes, as for a geometry file."""
-    panel = InfoPanel()
-    panel.set_output_props({}, reading=True)
-    panel.show_structure(_rock_salt(), {})
-    panel.set_output_props({})
-    assert output_rows(panel) == []
-
-
 def test_the_rows_alone_do_not_analyse_the_structure_again(qapp, monkeypatch):
     """They describe the run, not the geometry: the crystallography stands."""
     from crystalline.ui.panels import info_panel

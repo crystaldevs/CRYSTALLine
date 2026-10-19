@@ -84,18 +84,6 @@ def test_the_font_cache_is_warmed_on_a_thread_that_finishes():
     assert "matplotlib.font_manager" in sys.modules
 
 
-def test_what_the_first_file_needs_is_imported_on_a_thread_that_finishes():
-    """The first file of a session used to pay for these imports itself:
-    several times the time of the next file it opened."""
-    from crystalline import app
-
-    thread = app._warm_first_file_imports()
-    thread.join(timeout=120)
-    assert not thread.is_alive()
-    for name in app._FIRST_FILE_MODULES:
-        assert name in sys.modules, name
-
-
 def test_nothing_imported_off_the_main_thread_brings_qt_or_matplotlib():
     """Those belong to the main thread: matplotlib picks its GUI backend on
     import, and Qt's objects live on the thread that made them."""
@@ -108,15 +96,40 @@ def test_nothing_imported_off_the_main_thread_brings_qt_or_matplotlib():
     assert not [m for m in loaded if m.startswith(("PySide6", "shiboken6", "matplotlib"))]
 
 
-def test_the_first_files_imports_start_once_the_window_is_up():
-    """Started before, they would compete with the window's own import, or with
-    its first draw, and hold the window back instead of the first file. Checked
-    on the source: running ``app.run`` needs a display."""
+def test_the_window_opens_without_scipy_s_spatial_index():
+    """A quarter of a second of every start, for a window that opens with
+    nothing in it. The 3D view imports it when it first finds bonds."""
+    pytest.importorskip("pyvista")
+    loaded = _modules_after("import crystalline.ui.main_window")
+
+    assert "scipy.spatial" not in loaded, "scipy.spatial is imported at startup again"
+
+
+def test_what_the_first_file_needs_is_imported_once_the_window_is_up():
+    """So that the first file opened does not pay for the imports instead:
+    half a second of pymatgen, sympy, spglib and ASE, plus the k-d tree."""
+    pytest.importorskip("scipy")
     import inspect
 
     from crystalline import app
 
-    source = inspect.getsource(app.run)
-    start = source.index("QTimer.singleShot(_FIRST_FILE_DELAY_MS, _warm_first_file_imports)")
-    assert source.index("window.show()") < start < source.index("app.exec()")
-    assert 0 < app._FIRST_FILE_DELAY_MS <= 1000           # after the first draw, before a file
+    thread = app._warm_for_the_first_file()
+    thread.join(timeout=120)
+    assert not thread.is_alive()
+    assert "scipy.spatial" in sys.modules
+    # ...started after the window is shown, not alongside its import, where
+    # the two would only take turns.
+    source = inspect.getsource(app)
+    assert source.index("window.show()") < source.index("_warm_for_the_first_file)")
+
+
+def test_the_warm_up_list_names_modules_that_exist():
+    """A name that has moved would be skipped without a word, and the first
+    file would quietly pay for it again."""
+    import importlib.util
+
+    from crystalline import app
+
+    missing = [name for name in app._FIRST_FILE_MODULES
+               if importlib.util.find_spec(name) is None]
+    assert missing == []

@@ -105,3 +105,88 @@ def test_an_overlay_asks_for_a_window_of_its_own(host):
 
     for overlay in (DropHint(host), BusyOverlay(host)):
         assert overlay.testAttribute(Qt.WA_NativeWindow)
+
+
+# ── what shows under the tint ────────────────────────────────────────────
+class _Colour:
+    def __init__(self, rgb):
+        self.int_rgb = rgb
+
+
+class _View(QWidget):
+    """Stands for a 3D view: it paints itself on screen, so Qt holds no
+    picture of it — which is what left stale ones under the overlays."""
+
+    def __init__(self, parent, rgb):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_PaintOnScreen, True)
+        self.background_color = _Colour(rgb)
+
+
+def _hint_over(host, rgb, qapp):
+    from crystalline.ui.widgets import DropHint
+
+    view = _View(host, rgb)
+    view.setGeometry(0, 0, host.width(), host.height())
+    view.show()
+    hint = DropHint(host)
+    hint.show_hint("Open beta-PVDF_known.cif", "in a new tab")
+    qapp.processEvents()
+    return hint, view
+
+
+def _corner_pixel(hint):
+    """A pixel inside the hint, clear of its frame and its card."""
+    return hint.grab().toImage().pixelColor(4, 4)
+
+
+def test_the_drop_hint_paints_the_view_s_background_under_its_tint(host, qapp):
+    """Inside the hint used to be whatever Qt last held for that spot: an
+    earlier hint's card, a panel that stood there before the view widened.
+    Painted from the view's own background now, so the tint lies on that."""
+    red_hint, red_view = _hint_over(host, (200, 30, 30), qapp)
+    red = _corner_pixel(red_hint)
+    red_hint.hide_hint()
+    red_view.deleteLater()
+
+    blue_hint, _blue_view = _hint_over(host, (30, 30, 200), qapp)
+    blue = _corner_pixel(blue_hint)
+    blue_hint.hide_hint()
+
+    # Each follows its view's background, under the same faint tint.
+    assert red.red() > 150 and red.blue() < 100
+    assert blue.blue() > 150 and blue.red() < 100
+
+
+def test_only_what_paints_itself_is_painted_for(host, qapp):
+    """Ordinary widgets are in Qt's picture already, current; and a 3D view
+    in another window is not under this overlay at all."""
+    from crystalline.ui.widgets import DropHint
+
+    QWidget(host).setGeometry(0, 0, 100, 100)                # an ordinary widget
+    elsewhere = QWidget()
+    _View(elsewhere, (0, 255, 0)).setGeometry(0, 0, 100, 100)
+    elsewhere.show()
+    hint = DropHint(host)
+    hint.show_hint("Open x")
+    qapp.processEvents()
+
+    assert hint._views_under() == []
+    hint.hide_hint()
+    elsewhere.close()
+
+
+def test_the_busy_scrim_paints_the_view_s_background_too(host, qapp):
+    from crystalline.ui.widgets import BusyOverlay
+
+    view = _View(host, (200, 30, 30))
+    view.setGeometry(0, 0, host.width(), host.height())
+    view.show()
+    scrim = BusyOverlay(host)
+    scrim.start("Reading…")
+    qapp.processEvents()
+
+    pixel = scrim.grab().toImage().pixelColor(4, 4)
+    scrim.stop()
+
+    assert pixel.red() > pixel.blue() + 40    # the red view, under the scrim

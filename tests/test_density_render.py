@@ -543,6 +543,32 @@ def test_a_slice_gets_a_bar_when_asked_and_loses_it_when_cleared():
     assert len(renderer.plotter.scalar_bars) == 0
 
 
+
+def test_the_bar_title_is_held_clear_of_the_top_label_at_any_export_scale():
+    """The top label is centred on the bar's top edge, so without a gap half of
+    it ran into a wide title. The gap is in text heights, so a 2x export, which
+    draws the text twice the size, gets twice the gap."""
+    from crystalline.viz import renderer as R
+
+    renderer, _cell = _slice_renderer()
+    field, options = renderer._density_view
+    renderer.set_density(field, D.replace(options, colour_bar=True),
+                         miller_cell=renderer._density_miller_cell)
+    (bar,) = renderer.plotter.scalar_bars.values()
+    window = renderer.plotter.ren_win
+    label = R._BAR_LABEL_SIZE * window.GetDPI() / 72.0
+
+    window.Render()                 # the plotter's own render() waits for a show
+    on_screen = bar.GetVerticalTitleSeparation()
+    assert on_screen == round(R._BAR_TITLE_GAP * label) > label / 2
+
+    window.SetTileScale(2)
+    try:
+        renderer._space_bar_title(renderer.plotter.renderer)
+        assert bar.GetVerticalTitleSeparation() == round(R._BAR_TITLE_GAP * label * 2)
+    finally:
+        window.SetTileScale(1)
+
 def test_a_plain_surface_has_nothing_to_key():
     field, _centre = _hexagonal_blob()
     renderer = StructureRenderer_with(np.empty((0, 3)), D.lattice_of(field))

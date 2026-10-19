@@ -15,8 +15,8 @@ unaffected.
 
 The tab comes up as soon as the structure is read. The Info panel's
 **CRYSTAL output** rows (code, task, functional, energy and the like) are read
-after it, and until they arrive the panel says "Reading the output…": on a
-large output this saves about half a second before the structure is on screen.
+after it, once every file being opened is on screen, and appear a moment later:
+on a large output this saves about half a second before the structure is shown.
 
 ## Working in the calculation's folder
 

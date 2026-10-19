@@ -245,6 +245,7 @@ def plot_anscan(
     harmpot: bool = False,
     scanpot: bool = True,
     nstates: Optional[int] = None,
+    legend: bool = True,
 ):
     """Draw ``out``'s anharmonic scan and return the figure.
 
@@ -268,6 +269,7 @@ def plot_anscan(
         harmpot=harmpot,
         scanpot=scanpot,
         nstates=nstates,
+        legend=legend,
     ))
 
 

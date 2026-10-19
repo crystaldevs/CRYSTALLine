@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import math
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -67,15 +67,18 @@ SPIN_ALONGSIDE = "up"
 # given the colour, style and width that were asked for. Found first, styled
 # second — so a Fermi line asked for in black cannot be confused with the black
 # zero lines beside it.
-FERMI_COLOUR = "forestgreen"
+# The house colours (see figure_style): the bands in the figure's ink, so the
+# DOS projections beside them carry the colour; spin down in the house red;
+# the Fermi level in the house green, which the projections never use.
+FERMI_COLOUR = "#3f9e4d"
 
-BAND_COLOUR = "#1f3a93"
-BETA_COLOUR = "#c0392b"
+BAND_COLOUR = "#14212b"
+BETA_COLOUR = "#c2414b"
 
 # A qualitative palette for the DOS projections, with no green in it — green
 # is the Fermi level's.
-PROJECTION_COLOURS = ("#1f77b4", "#d62728", "#9467bd", "#8c564b", "#e377c2",
-                      "#7f7f7f", "#bcbd22", "#17becf", "#ff7f0e", "#393b79")
+PROJECTION_COLOURS = ("#0b7a96", "#d9822b", "#8e5bb5", "#c2414b", "#5b6878",
+                      "#c9a227", "#1f4e79", "#b5657f", "#7a8b3a", "#4fa3b8")
 
 # A gap wider than this below the Fermi level is taken as the top of the core.
 # Valence manifolds are separated by less (urea's 2s-2p gap is 8.7 eV, LiF's
@@ -113,7 +116,21 @@ class DosInfo:
 
 
 def describe_bands(path: str) -> BandsInfo:
-    """Read a band file (``BAND.DAT``, ``*.BAND``, ``fort.25``) for the dialog."""
+    """Read a band file (``BAND.DAT``, ``*.BAND``, ``fort.25``) for the dialog.
+
+    Remembered for this version of the file (see
+    :mod:`~crystalline.crystalio.remembered`): the dialog reads every band
+    file in the folder to rank them, then the chosen one again to pair it and
+    again to set itself up, and opening it again read them all once more.
+    The plot does not come through here: it modifies what it reads, so it
+    reads afresh.
+    """
+    from crystalline.crystalio import remembered
+
+    return remembered.read("bands-info", (path,), lambda: _describe_bands(path), light=True)
+
+
+def _describe_bands(path: str) -> BandsInfo:
     bands = _read_bands(path)
     energies = np.asarray(bands.bands, dtype=float)
     return BandsInfo(path=path, spin=int(bands.spin), efermi=float(bands.efermi),
@@ -124,7 +141,16 @@ def describe_bands(path: str) -> BandsInfo:
 
 
 def describe_dos(path: str) -> DosInfo:
-    """Read a DOS file (``DOSS.DAT``, ``*.DOSS``, ``fort.25``) for the dialog."""
+    """Read a DOS file (``DOSS.DAT``, ``*.DOSS``, ``fort.25``) for the dialog.
+
+    Remembered, as :func:`describe_bands` is.
+    """
+    from crystalline.crystalio import remembered
+
+    return remembered.read("dos-info", (path,), lambda: _describe_dos(path), light=True)
+
+
+def _describe_dos(path: str) -> DosInfo:
     doss = _read_dos(path)
     data = np.asarray(doss.doss, dtype=float)
     energies, values = data[:, 0, ...], data[:, 1:, ...]
@@ -316,8 +342,14 @@ def pair_files(bands: Sequence[str], doss: Sequence[str],
 
 
 def _efermi_of(reader, path: str) -> Optional[float]:
+    """The Fermi level ``path`` records, read through its remembered description.
+
+    So that ranking a folder, pairing its files and setting the dialog up all
+    share one read of each file, rather than one each.
+    """
+    describe = describe_bands if reader is _read_bands else describe_dos
     try:
-        return float(reader(path).efermi)
+        return float(describe(path).efermi)
     except Exception:  # noqa: BLE001 - an unreadable file simply pairs with nothing
         return None
 
@@ -561,6 +593,32 @@ class ElectronicOptions:
     _extra: dict = field(default_factory=dict)
 
 
+def legend_names_anything(mode: str, projections: int, bands_polarised: bool,
+                          dos_polarised: bool, overlay: bool = True) -> bool:
+    """Whether a legend on this plot would tell anything apart.
+
+    Only then is one drawn, and only then is it offered. A band structure on
+    its own is one set of lines, with nothing to name until it is
+    spin-polarised and α has to be told from β. A DOS names its projections,
+    which takes two of them; its spins are told apart only when the
+    projections are split into panels — on one axis CRYSTALClear names α and β
+    alike, so the spin adds nothing there. Beside the bands, either: several
+    projections, or the bands' two spins.
+    """
+    several = projections > 1
+    if mode == BANDS:
+        return bool(bands_polarised)
+    if mode == DOS:
+        return several or (bool(dos_polarised) and not overlay)
+    return several or bool(bands_polarised)
+
+
+def plot_title(mode: str) -> str:
+    """What a tab drawn in ``mode`` is called."""
+    return {BANDS: "Band structure", DOS: "Density of states",
+            BANDS_AND_DOS: "Bands + DOS"}[mode]
+
+
 def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = None,
                     options: Optional[ElectronicOptions] = None):
     """Draw a band structure, a DOS, or the two side by side. Returns a Figure."""
@@ -577,6 +635,12 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
 
     bands = _read_bands(bands_path) if need_bands else None
     doss = _read_dos(dos_path) if need_dos else None
+    # A legend of one entry, or of none, is not drawn whatever was asked: it
+    # names the one thing on the plot, which its tab already does.
+    drawn = len(_projections(options.projections, doss.n_proj)) if doss is not None else 0
+    options = replace(options, legend=options.legend and legend_names_anything(
+        options.mode, drawn, bands is not None and int(bands.spin) == 2,
+        doss is not None and int(doss.spin) == 2, options.overlay_projections))
 
     # Everything is read in eV, relative to E_F. An absolute plot moves the data
     # up by E_F *before* CRYSTALClear converts units, so the shift and the unit
@@ -608,6 +672,7 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
             if options.unit != "eV":
                 beta = beta / _HARTREE_EV
             _overlay_beta(figure, beta, bands.n_kpoints, options)
+        _tidy_k_axis(figure.axes[0])
         energy_axis = "y"
 
     elif options.mode == DOS:
@@ -647,15 +712,34 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
             legend=options.legend and len(chosen) > 1, **common))
         if bands.spin == 2:
             _restyle_beta(figure.axes[0], bands.n_kpoints, options)
+        _tidy_k_axis(figure.axes[0])
         _legend_beside(figure, figure.axes[-1])
         energy_axis = "y"
 
     _style_fermi(figure, energy_axis, fermi_at, options)
     _label_energy(figure, energy_axis, options)
+    if options.title:
+        from crystalline.crystalio.figure_style import keep_title
+
+        keep_title(figure)      # typed into the dialog: wanted
     return figure
 
 
 # ── finishing touches CRYSTALClear does not offer ─────────────────────────
+def _tidy_k_axis(ax) -> None:
+    """Ticks only at the high-symmetry points along a band path.
+
+    The house style puts minor ticks on every axis and ticks along the top as
+    well (see figure_style); along k they mark nothing — the distance between
+    two corners of the path is not a quantity anyone reads off — so the k axis
+    keeps only its labelled points, at the bottom.
+    """
+    from matplotlib.ticker import NullLocator
+
+    ax.xaxis.set_minor_locator(NullLocator())
+    ax.tick_params(axis="x", which="both", top=False)
+
+
 def _style_fermi(figure, axis: str, at: float, options: ElectronicOptions) -> None:
     """Move CRYSTALClear's Fermi lines to ``at`` and style them — or hide them.
 
@@ -827,7 +911,9 @@ __all__ = [
     "deck_labels",
     "name_ticks",
     "pair_files",
+    "legend_names_anything",
     "path_labels",
+    "plot_title",
     "read_band_decks",
     "plot_electronic",
     "suggest_window",

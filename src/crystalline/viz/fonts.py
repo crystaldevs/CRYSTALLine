@@ -23,7 +23,7 @@ from typing import Optional
 # 163 VTK modules, where PyVista needs 57, and costs about 0.6 s of every start.
 from vtkmodules.vtkCommonCore import VTK_FONT_FILE
 
-__all__ = ["unicode_font", "use_unicode_font"]
+__all__ = ["match_screen_dpi", "unicode_font", "use_unicode_font"]
 
 
 @lru_cache(maxsize=1)
@@ -53,3 +53,26 @@ def use_unicode_font(actor) -> None:
         text.SetFontFile(font)
     except Exception:  # noqa: BLE001 - purely cosmetic; never break a redraw
         pass
+
+
+def match_screen_dpi(window, pixel_ratio: float) -> bool:
+    """Draw ``window``'s text at the size its font size says, on this screen.
+
+    A font size is in points, and VTK turns it into pixels as ``size x DPI /
+    72`` — with the DPI the render window was *told*, which nothing tells it:
+    it stays at 72 on every screen. On a Retina screen the window is two pixels
+    to every point of the widget it fills, so a label set at 15 came out 15
+    pixels tall there, which is 7.5 points: half the size it is on an ordinary
+    screen, and half the size the same number means in the rest of the app.
+    Told 72 x the screen's pixel ratio, it draws the label at the same size on
+    both. Returns whether that changed anything, since text that changed size
+    has to be drawn again.
+    """
+    dpi = int(round(72 * float(pixel_ratio or 1.0)))
+    try:
+        if int(window.GetDPI()) == dpi:
+            return False
+        window.SetDPI(dpi)
+        return True
+    except Exception:  # noqa: BLE001 - no window yet: text stays as VTK sizes it
+        return False

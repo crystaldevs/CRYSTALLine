@@ -58,13 +58,11 @@ def run(structure: Optional[Structure] = None) -> int:
     window.show()
     if splash is not None:
         splash.finish(window)
-    # Once the window is up and drawn, not before: started earlier, it competes
-    # for the interpreter with the window's own import or its first draw, and
-    # holds the window back instead of the first file — started as the window
-    # was shown, it drew 0.1 s later (2026-10-14).
+    # Once the window is up and waiting for the user, not before: started
+    # alongside the window's own import, two imports would only take turns.
     from PySide6.QtCore import QTimer
 
-    QTimer.singleShot(_FIRST_FILE_DELAY_MS, _warm_first_file_imports)
+    QTimer.singleShot(0, _warm_for_the_first_file)
     return app.exec()
 
 
@@ -140,52 +138,48 @@ def _warm_font_cache():
     return thread
 
 
-# What the first file opened in a session would otherwise import for itself, on
-# the file reader or the UI thread (-X importtime over the first opens of
-# thiourea, DAFADNP 1 GPa and the DAFADNP LOCMODES run, 2026-10-14): pymatgen's
-# bridge to ASE and its symmetry analyser, ase.build and the rest, about 0.4 s for
-# any CRYSTAL output, and pandas, 0.4 s more, which CRYSTALClear's get_locmodes
-# needs for a LOCMODES run. None of them imports Qt or matplotlib, which have to
-# stay on the main thread (tests/test_startup.py checks).
-# How long after the window is shown they start: past its first draw (about
-# 0.1 s), and long before anyone has chosen a file.
-_FIRST_FILE_DELAY_MS = 300
-
+# What the first file of a session needs and an empty window does not: reading
+# it (CRYSTALClear, pymatgen, ASE), analysing its symmetry for the Info panel
+# (spglib, and pymatgen's analyser, which brings sympy — four hundred modules on
+# its own), and finding its bonds (scipy's k-d tree). Measured, not guessed:
+# imported in advance, these leave a first open within a few per cent of a
+# later one, where without them it cost half a second more. And pandas, which
+# CRYSTALClear's get_locmodes needs to read a LOCMODES run's local modes and
+# crystal_io does not import: 0.4 s more on the first such run (2026-10-14).
 _FIRST_FILE_MODULES = (
-    "pymatgen.io.ase",
-    "ase.build",
+    "scipy.spatial",
+    "CRYSTALClear.crystal_io",
+    "pymatgen.core",
     "pymatgen.symmetry.analyzer",
-    "pymatgen.core.lattice",
-    "pymatgen.optimization.neighbors",
-    "crystalline.crystalio.density",
-    "crystalline.core.bonds",
+    "pymatgen.io.cif",
+    "spglib",
+    "ase.io",
     "pandas",
 )
 
 
-def _warm_first_file_imports():
-    """Import what opening the first file would, on a background thread. Returns the thread.
+def _warm_for_the_first_file():
+    """Import what the first file opened will need, on a background thread.
 
-    The first file of a session took several times as long as the next ones —
-    thiourea 0.6 s against 0.14 s — because it paid for these imports itself.
-    Run while the user is still choosing a file, they are done by the time one
-    is opened; a file opened sooner waits on the import already under way
-    rather than starting another (Python lets one thread import a module and
-    the others take the result), so it is never slower than before. A module
-    that will not import is left for the code that needs it to import, and
-    report.
+    Returns the thread. None of it is needed by the window itself, which opens
+    with nothing in it, and all of it used to be paid for either at startup
+    (``scipy.spatial``, a quarter of a second) or by the first file opened
+    (the rest, about half a second). Started once the window is on screen, it
+    is usually done before a file has even been chosen; a file opened sooner
+    waits for what it needs on the modules' import locks, as it would have
+    without this.
     """
     import importlib
     import threading
 
-    def load() -> None:
+    def build() -> None:
         for name in _FIRST_FILE_MODULES:
             try:
                 importlib.import_module(name)
-            except Exception:  # noqa: BLE001 - its user imports it again, and says why
+            except Exception:  # noqa: BLE001 - imported again when needed, and reported then
                 pass
 
-    thread = threading.Thread(target=load, name="first-file-imports", daemon=True)
+    thread = threading.Thread(target=build, name="first-file", daemon=True)
     thread.start()
     return thread
 

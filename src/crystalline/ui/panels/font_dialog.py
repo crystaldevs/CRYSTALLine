@@ -31,7 +31,6 @@ from crystalline.crystalio.plotting import (
     FONT_FAMILIES,
     installed_font_names,
 )
-from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 # Marks the entry that swaps the family list for a free choice of installed font.
 _OTHER = "\x00other"
@@ -78,12 +77,6 @@ class PlotFontDialog(QDialog):
         form.addRow("Size (pt)", self.size)
         layout.addLayout(form)
 
-        note = WrappedLabel(
-            "Applies to plots opened from now on; figures already in the "
-            "Plots dock keep the font they were drawn with.", self
-        )
-        note.setEnabled(False)
-        layout.addWidget(note)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         buttons.accepted.connect(self.accept)

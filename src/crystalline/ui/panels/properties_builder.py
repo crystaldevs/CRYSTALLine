@@ -66,14 +66,6 @@ class PropertiesBuilderDialog(QDialog):
         self._structure = structure
 
         outer = QVBoxLayout(self)
-        note = QLabel(
-            "A .d3 runs after the SCF and reads its wave function, so it carries "
-            "no geometry or basis — run it in the same folder as the completed "
-            ".out, with the same file name."
-        )
-        note.setWordWrap(True)
-        note.setStyleSheet("color: palette(mid);")
-        outer.addWidget(note)
 
         body = QHBoxLayout()
         body.addWidget(self._controls(), 0)

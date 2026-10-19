@@ -37,6 +37,17 @@ from crystalline.ui.panels.controls import RichTextDelegate
 from crystalline.ui.safety import guard
 from crystalline.core.structure import Structure
 
+
+def _unbroken_coordinates(text: str) -> str:
+    """``text`` with each bracketed point kept on one line.
+
+    The status line wraps in a narrow panel, and broke inside the centre it
+    names — "(0, 0," on one line and "0)" on the next.
+    """
+    import re
+
+    return re.sub(r"\([^()]*\)", lambda m: m.group(0).replace(" ", "\u00a0"), text)
+
 # The three groups, in the order the analysis sorts its elements.
 _GROUPS = (
     # Crystals are labelled in Hermann–Mauguin and molecules in Schoenflies, as
@@ -292,7 +303,7 @@ class SymmetryPanel(QWidget):
         self._tree.blockSignals(blocked)
         # Where the elements meet is said once, here, rather than on every row:
         # point symmetry puts all of them through the same centre.
-        self._status.setText(analysis.summary())
+        self._status.setText(_unbroken_coordinates(analysis.summary()))
         self._status.setToolTip(
             "The symmetry operations that hold this point of the structure fixed.\n"
             "A crystal's screw axes and glide planes are not among them: they move\n"

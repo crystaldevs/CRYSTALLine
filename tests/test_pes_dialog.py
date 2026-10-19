@@ -121,3 +121,189 @@ def test_the_title_names_the_cut(qapp):
 
     dialog.dimension.setCurrentIndex(1)
     assert dialog.title() == "PES 7 × 12"
+
+
+# ── the knobs that sit beside the plot ────────────────────────────────────
+def test_the_dialog_and_the_plot_carry_the_same_controls(qapp):
+    """One widget, hosted twice: tuned in the dialog or tuned beside the plot,
+    it is the same control and cannot drift."""
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    dialog = PESDialog(_run())
+
+    assert isinstance(dialog.options_widget, PESOptions)
+    assert dialog.span is dialog.options_widget.span
+    assert dialog.levels is dialog.options_widget.levels
+
+
+def test_a_cut_puts_away_the_knobs_it_has_no_use_for(qapp):
+    """A one-mode cut has overlays and no surface; a two-mode map the reverse.
+    Hidden rather than greyed: a section that cannot apply at all still asks
+    to be read before it can be dismissed."""
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    knobs = PESOptions()
+    knobs.show()
+
+    knobs.set_options({"dimension": "1D", "levels": True})
+    assert knobs.harmonic.isVisible() and knobs.nstates.isVisible()
+    assert not knobs.representation.isVisible()
+
+    knobs.set_options({"dimension": "2D", "levels": True})
+    assert knobs.representation.isVisible() and knobs.quantity.isVisible()
+    assert not knobs.harmonic.isVisible() and not knobs.nstates.isVisible()
+    knobs.hide()
+
+
+def test_turning_a_knob_says_so_once(qapp):
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    knobs = PESOptions()
+    said = []
+    knobs.changed.connect(lambda: said.append(knobs.options()))
+
+    knobs.span.setValue(4.0)
+
+    assert [o["span"] for o in said] == [4.0]
+
+
+def test_the_widget_answers_with_plot_pes_keywords(qapp):
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    options = PESOptions().options()
+
+    assert set(options) == {"span", "harmonic", "levels", "nstates", "scale_wf",
+                            "legend", "quantity", "representation"}
+
+
+def test_the_wavefunction_height_is_offered_only_while_states_are_solved(qapp):
+    """They are drawn on the potential's own axes, in cm⁻¹: left to itself a
+    wavefunction is either a flat line or runs off the top."""
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    knobs = PESOptions()
+    knobs.show()
+    knobs.set_options({"dimension": "1D", "levels": False})
+    assert not knobs.scale_wf.isEnabled()
+
+    knobs.levels.setChecked(True)
+    assert knobs.scale_wf.isEnabled()
+
+    knobs.scale_wf.setValue(400.0)
+    assert knobs.options()["scale_wf"] == 400.0
+    knobs.hide()
+
+
+def test_the_scale_opens_at_the_run_s_own_level_spacing(qapp):
+    """A wavefunction is read against the spacing of the levels it belongs to,
+    so that is where the slider starts — and it spans a decade either side,
+    since a height is judged by ratio."""
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    run = _run()
+    assert run.scale_wf == 1008.0            # the middle mode of 1007/1008/1012
+
+    knobs = PESOptions(run.scale_wf)
+
+    assert knobs.scale_wf.value() == pytest.approx(1008.0)
+    assert knobs.scale_wf.minimum() == pytest.approx(100.8)
+    assert knobs.scale_wf.maximum() == pytest.approx(10080.0)
+
+
+def test_a_run_that_suggests_nothing_still_opens_somewhere_usable(qapp):
+    from crystalline.crystalio.pes import PESRun
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    knobs = PESOptions(PESRun(modes=(), pairs=(), ntriplets=0).scale_wf)
+
+    assert knobs.scale_wf.value() > 0
+
+
+def test_the_chosen_cut_is_remembered_by_its_modes(qapp):
+    """Reopening the dialog to find mode 7 selected again, not row 1 of
+    whatever this run happens to hold."""
+    from crystalline.ui.panels.dialog_state import capture, restore
+
+    first = PESDialog(_run())
+    first.modes.setCurrentRow(2)                    # mode 12
+    first.filter.setCurrentIndex(1)
+    chosen = first.selection_state()
+    assert chosen["mode"] == 12
+
+    again = PESDialog(_run())
+    restore(again, capture(first))
+
+    assert again.selection_state()["mode"] == 12
+    assert again.options()["mode"] == 12
+
+
+def test_a_mode_this_run_does_not_have_is_skipped(qapp):
+    """Another run scanned other modes; asking for one it lacks must leave the
+    dialog usable rather than empty or raising."""
+    from crystalline.crystalio.pes import PESMode, PESRun
+
+    other = PESRun(modes=(PESMode(mode=3, frequency=900.0, eta3=-1.0, eta4=2.0),),
+                   pairs=(), ntriplets=0)
+    dialog = PESDialog(other)
+
+    dialog.set_selection_state({"mode": 12, "pair": [7, 12], "filter": None})
+
+    assert dialog.options()["mode"] == 3            # the row it already had
+
+
+def test_the_dialog_opens_wide_enough_for_the_rows_it_must_show(qapp):
+    """A row reads "Mode 12 — 888.5 cm⁻¹ (η₃ -377.9, η₄ +838.1 cm⁻¹)", and how
+    wide that is depends on the run: sized to the widest of them, it fits on
+    one line instead of under a horizontal scrollbar."""
+    from crystalline.crystalio.pes import PESMode, PESRun
+    from crystalline.ui.panels import controls as module
+
+    long_labels = PESRun(
+        modes=tuple(PESMode(mode=m, frequency=f, eta3=a, eta4=b) for m, f, a, b in
+                    ((12, 888.5, -377.9, 838.1), (14, 3767.0, -1871.7, 787.8))),
+        pairs=(), ntriplets=0)
+    dialog = PESDialog(long_labels)
+    dialog.show()
+
+    assert module.CHOOSER_MIN_WIDTH <= dialog.width() <= module.CHOOSER_MAX_WIDTH
+    assert dialog.width() >= dialog.modes.sizeHintForColumn(0)   # no sideways scrolling
+    assert dialog.height() <= module.CHOOSER_MAX_HEIGHT
+    assert dialog.modes.height() >= 180
+    dialog.hide()
+
+
+def test_switching_the_cut_does_not_resize_the_window(qapp):
+    """It used to call adjustSize() on every change, which threw away whatever
+    size the window had — the default among them."""
+    dialog = PESDialog(_run())
+    dialog.show()
+    was = dialog.size()
+
+    dialog.dimension.setCurrentIndex(1)      # one mode -> a pair
+    qapp.processEvents()
+
+    # Not shrunk back to its hint, which is what adjustSize() did. It may grow
+    # by a few pixels: the pair picker's own minimum is a little taller than
+    # the mode list's, and a layout minimum is not something to fight.
+    assert dialog.width() == was.width()
+    assert dialog.height() >= was.height()
+    dialog.hide()
+
+
+def test_the_legend_tick_sits_with_the_overlays_it_names(qapp):
+    """On by default, as on a spectrum. It names the parabola and the states
+    drawn over the potential, so it goes away with them for a pair cut — a
+    contour map is read against its colourbar, and its plotter takes no
+    legend at all."""
+    from crystalline.ui.panels.pes_options import PESOptions
+
+    knobs = PESOptions(1000.0)
+    knobs.show()
+    assert knobs.options()["legend"] is True
+
+    knobs.set_options({"dimension": "2D"})
+    assert not knobs.legend.isVisible()
+
+    knobs.set_options({"dimension": "1D", "legend": False})
+    assert knobs.legend.isVisible() and knobs.options()["legend"] is False
+    knobs.hide()
