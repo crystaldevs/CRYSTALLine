@@ -2,9 +2,10 @@
 
 The characterisation of normal modes says, for every normal mode, how much of
 it is each internal coordinate's local mode. A run has hundreds of modes and a
-bar each, so there is no single figure to show: the window of modes is the
-dialog's first question, as the window of states is for the VCI. The same
-controls go beside the plot (:mod:`crystalline.ui.panels.cnm_options`).
+bar each, so there is no single figure to show: which modes is the dialog's
+first question, ticked in a list of them all by number, or a span at once by
+frequency. The same controls go beside the plot
+(:mod:`crystalline.ui.panels.cnm_options`).
 
 A series is a different question — what becomes of one mode as the pressure
 rises, say — and its dialog asks what only the user knows: which runs make up
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
 from crystalline.crystalio.cnm import DEFAULT_SERIES_AXIS, CNMRun, series_labels
 from crystalline.ui.panels import cnm_options
 from crystalline.ui.panels.cnm_options import CNMOptions
+from crystalline.ui.panels.controls import chooser_size
 from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 _OUTPUTS = "CRYSTAL output (*.out *.outp);;All files (*)"
@@ -59,31 +61,45 @@ class CNMDialog(QDialog):
         self.options_widget = CNMOptions(run, self)
         layout.addWidget(self.options_widget)
         # Named here as well: dialog_state remembers a dialog by walking the
-        # widgets it holds.
-        for name in ("fmin", "fmax", "ticks", "threshold", "legend"):
+        # widgets it holds. Not the window's two boxes: they tick a span when
+        # moved, and set back they would tick theirs over the modes ticked
+        # (which it keeps through selection_state below).
+        for name in ("ticks", "threshold", "legend"):
             setattr(self, name, getattr(self.options_widget, name))
 
         self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
         self._buttons.accepted.connect(self.accept)
         self._buttons.rejected.connect(self.reject)
         layout.addWidget(self._buttons)
-        # An empty or overfull window cannot be accepted.
+        # Nothing ticked, or too much, cannot be accepted.
         ok = self._buttons.button(QDialogButtonBox.Ok)
-        self.options_widget.window_checked.connect(ok.setEnabled)
+        self.options_widget.selection_checked.connect(ok.setEnabled)
         ok.setEnabled(self.options_widget.acceptable())
+        # As wide as the other list dialogs; as tall as it needs, the list
+        # showing ten modes and scrolling through the rest. The list dialogs'
+        # own height left the extra above the summary, not in the list.
+        width, _height = chooser_size(self, [self.options_widget.modes])
+        self.resize(width, self.sizeHint().height())
 
-    def fit_window(self, around: Optional[int] = None) -> None:
-        """Open on the run's own window when the remembered one does not suit it.
+    # dialog_state keeps what a dialog has selected through these two: here,
+    # the modes ticked.
+    def selection_state(self) -> list:
+        return self.options_widget.ticked()
 
-        A window remembered from another run can catch none of this one's
-        modes, or too many; and one that misses the mode selected in the
-        Phonons panel misses what was most likely being asked about.
+    def set_selection_state(self, state) -> None:
+        self.options_widget.set_ticked(state or ())
+
+    def fit_selection(self, around: Optional[int] = None) -> None:
+        """Open on the modes around ``around`` when what was ticked does not suit.
+
+        Modes remembered from another run can be none of this one's, or too
+        many; and a choice that leaves out the mode selected in the Phonons
+        panel leaves out what was most likely being asked about.
         """
         widget = self.options_widget
-        low, high = widget.window()
-        if widget.acceptable() and (around is None or around in self._run.modes_in(low, high)):
+        if widget.acceptable() and (around is None or around in widget.ticked()):
             return
-        widget.set_window(*self._run.default_window(around))
+        widget.set_ticked(self._run.default_modes(around))
 
     def options(self) -> dict:
         """The chosen settings, as :func:`plot_cnm` keyword arguments."""

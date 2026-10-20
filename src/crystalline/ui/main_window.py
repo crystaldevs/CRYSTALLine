@@ -1872,7 +1872,7 @@ class MainWindow(QMainWindow):
 
         dialog = CNMDialog(run, self)
         self._restore_dialog(dialog, "cnm")
-        dialog.fit_window(self._selected_gamma_mode())
+        dialog.fit_selection(self._selected_gamma_mode())
         if dialog.exec() != QDialog.Accepted:
             return
         self._remember_dialog(dialog, "cnm")
@@ -1884,7 +1884,7 @@ class MainWindow(QMainWindow):
             lambda **o: plot_cnm(run, colours=colours, **o), dialog,
             controls=lambda: cnm_options.CNMOptions(run),
             name=lambda options: cnm_options.title(run, options))
-        # Wider as the window takes in more bars, and the legend more columns.
+        # Wider as more modes are ticked, and the legend takes more columns.
         recipe.aspect = lambda options: figure_aspect(run, options)
         try:
             figure, _options = recipe.redrawn()
@@ -1895,7 +1895,7 @@ class MainWindow(QMainWindow):
         def pick(x: float) -> None:
             # A bar is a mode: clicking it shows the mode moving, as clicking a
             # peak of a spectrum does.
-            drawn = run.modes_in(*recipe.options["frange"])
+            drawn = sorted(recipe.options["modes"])
             index = int(round(x))
             if 0 <= index < len(drawn):
                 self._select_mode_near(run.frequency(drawn[index]))

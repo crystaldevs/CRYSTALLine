@@ -114,8 +114,10 @@ not listed with an older one.
   symmetry are summed into one group, named after its first coordinate and its
   atoms (`1 NO`); when the symmetry cannot be checked against the geometry,
   each coordinate is drawn on its own, and the dialog says why. The modes drawn
-  are those in a window of frequencies, at most 40; it opens around the mode
-  selected in the **Phonons** panel. Contributions under the threshold are
+  are ticked in a list of all the run's, by number with their frequencies, at
+  most 40; **Tick span** ticks every mode between two frequencies at once, and
+  single modes can then be ticked or unticked. The list opens with the modes
+  around the one selected in the **Phonons** panel ticked. Contributions under the threshold are
   summed into the grey residues at the top of each bar, and the panel says how
   many groups are left above it: raising the threshold shortens the legend.
   The bars are labelled with their frequencies or their mode numbers, and a
@@ -133,7 +135,7 @@ not listed with an older one.
   one that does not appear in the first run carries the label of the run it
   first appears in, as `412 CNOH (0.2)`.
 
-Each group keeps its colour while the window and the threshold are changed.
+Each group keeps its colour while the modes and the threshold are changed.
 
 ## Properties read from the output
 

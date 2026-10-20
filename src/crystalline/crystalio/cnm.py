@@ -16,7 +16,8 @@ module is the single point of contact with both:
   so a series needs every run's eigenvectors.
 
 A run is read once (:func:`cnm_run`) and drawn as often as its controls are
-moved. CRYSTALClear colours a group it is not given a colour for at random —
+moved; one run's modes are chosen by number (a window of frequencies only
+ticks a span of them at once). CRYSTALClear colours a group it is not given a colour for at random —
 differently at every draw — so the groups are given the house colours here,
 and each plot keeps the colour it gave a group for as long as it is open.
 
@@ -118,15 +119,19 @@ class CNMRun:
     def count_in(self, fmin: float, fmax: float) -> int:
         return len(self.modes_in(fmin, fmax))
 
-    def groups_in(self, fmin: float, fmax: float, threshold: float = DEFAULT_THRESHOLD) -> int:
-        """How many groups the window's bars show, each in a colour and named in
-        the legend: those that reach ``threshold`` (%) in one of its modes, as
+    def groups_in(self, modes: Sequence[int], threshold: float = DEFAULT_THRESHOLD) -> int:
+        """How many groups the bars of ``modes`` show, each in a colour and named
+        in the legend: those that reach ``threshold`` (%) in one of them, as
         ``plot_cry_cnm`` keeps them."""
-        modes = self.modes_in(fmin, fmax)
+        modes = [m for m in modes if m in self.modes]
         table = getattr(self.output, "cnm_sym", None)
         if not modes or table is None:
             return 0
         return int((table.loc[modes] >= float(threshold)).any(axis=0).sum())
+
+    def default_modes(self, around: Optional[int] = None) -> List[int]:
+        """The modes ticked to begin with: those of :meth:`default_window`."""
+        return self.modes_in(*self.default_window(around))
 
     def default_window(self, around: Optional[int] = None) -> Tuple[float, float]:
         """A window of :data:`DEFAULT_WINDOW_MODES` modes, in cm⁻¹, edges rounded out.
@@ -273,12 +278,12 @@ def figure_aspect(run: CNMRun, options: dict) -> float:
     Half an inch a bar on a figure five inches tall, and an inch and a third
     for each column of the legend beside them; never narrower than 4:3.
     """
-    low, high = options.get("frange") or run.default_window()
-    bars = min(run.count_in(low, high), MAX_MODES)
+    modes = options.get("modes") or run.default_modes()
+    bars = min(len(modes), MAX_MODES)
     legend = 0.0
     if options.get("legend", True):
         threshold = options.get("threshold", DEFAULT_THRESHOLD)
-        legend = 1.35 * legend_columns(run.groups_in(low, high, threshold))
+        legend = 1.35 * legend_columns(run.groups_in(modes, threshold))
     return max(4 / 3, (0.45 * bars + 0.9 + legend) / 5.0)
 
 
@@ -409,22 +414,28 @@ def _restyle(figure, memory: Dict[str, str], legend: bool) -> None:
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────
-def plot_cnm(run: CNMRun, *, frange: Sequence[float], threshold: float = DEFAULT_THRESHOLD,
+def plot_cnm(run: CNMRun, *, modes: Sequence[int], threshold: float = DEFAULT_THRESHOLD,
              ticks: str = "freq", legend: bool = True,
              colours: Optional[Dict[str, str]] = None):
-    """The CNM of the modes of ``run`` in the window ``frange`` (cm⁻¹), as a figure.
+    """The CNM of ``modes`` of ``run`` (CRYSTAL's numbers), one bar each, as a figure.
 
-    ``colours`` is the plot's memory of which group it drew in which colour
-    (see :func:`assign_colours`); a plot drawn again passes the same dict.
+    The bars stand in the order of the modes, whatever order they are given
+    in. ``colours`` is the plot's memory of which group it drew in which
+    colour (see :func:`assign_colours`); a plot drawn again passes the same
+    dict.
     """
     from crystalline.crystalio.plotting import _plot_module
 
     CCplt = _plot_module()
-    modes = run.modes_in(*frange)
+    modes = sorted(set(int(m) for m in modes))
+    unknown = [m for m in modes if m not in run.modes]
+    if unknown:
+        raise ValueError("not characterised in this run: mode "
+                         + ", ".join(str(m) for m in unknown))
     if not modes:
-        raise ValueError("no normal modes in this window")
+        raise ValueError("no normal modes chosen")
     if len(modes) > MAX_MODES:
-        raise ValueError(f"{len(modes)} modes in this window, more than {MAX_MODES}")
+        raise ValueError(f"{len(modes)} modes chosen, more than {MAX_MODES}")
     figure, _ax, _used = CCplt.plot_cry_cnm(
         run.output, modes=modes, threshold=float(threshold), xticks=ticks)
     _restyle(figure, colours if colours is not None else {}, legend)

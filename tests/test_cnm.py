@@ -62,12 +62,12 @@ def test_the_window_opens_on_the_mode_selected_if_there_is_one():
 
 def test_the_groups_a_window_shows_are_those_over_the_threshold():
     """As plot_cry_cnm keeps them: a group reaching the threshold in any of the
-    window's modes gets a colour and a line of the legend."""
+    modes drawn gets a colour and a line of the legend."""
     run = _run()
-    assert run.groups_in(90, 110) == 2                       # mode 4: 60 and 39.5, not 0.5
-    assert run.groups_in(90, 110, threshold=0.5) == 3
-    assert run.groups_in(90, 320, threshold=40.0) == 2       # 1 NO at 60, 9 CH at 90
-    assert run.groups_in(2000, 3000) == 0
+    assert run.groups_in([4]) == 2                           # mode 4: 60 and 39.5, not 0.5
+    assert run.groups_in([4], threshold=0.5) == 3
+    assert run.groups_in([4, 5, 6], threshold=40.0) == 2     # 1 NO at 60, 9 CH at 90
+    assert run.groups_in([]) == 0 and run.groups_in([99]) == 0
 
 
 def test_the_legend_and_the_figure_widen_with_what_they_hold():
@@ -76,10 +76,10 @@ def test_the_legend_and_the_figure_widen_with_what_they_hold():
     assert cnm.legend_columns(rows) == 2
     many = tuple(100.0 + i for i in range(30))
     run = _run(groups=("1 NO",), frequencies=many, table=[[100.0]] * 30)
-    narrow = cnm.figure_aspect(run, {"frange": (100, 102), "legend": False})
-    wide = cnm.figure_aspect(run, {"frange": (100, 129), "legend": False})
+    narrow = cnm.figure_aspect(run, {"modes": (4, 5, 6), "legend": False})
+    wide = cnm.figure_aspect(run, {"modes": tuple(range(4, 34)), "legend": False})
     assert narrow == pytest.approx(4 / 3) and wide > narrow
-    assert cnm.figure_aspect(run, {"frange": (100, 129), "legend": True}) > wide
+    assert cnm.figure_aspect(run, {"modes": tuple(range(4, 34)), "legend": True}) > wide
 
 
 def test_a_series_is_as_wide_as_its_runs_and_the_legend_it_drew():
@@ -91,8 +91,8 @@ def test_a_series_is_as_wide_as_its_runs_and_the_legend_it_drew():
 
 @_DRAWS
 def test_a_figure_says_how_many_columns_its_legend_has():
-    assert getattr(cnm.plot_cnm(_run(), frange=(90, 320)), cnm.LEGEND_COLUMNS) == 1
-    assert getattr(cnm.plot_cnm(_run(), frange=(90, 320), legend=False), cnm.LEGEND_COLUMNS) == 0
+    assert getattr(cnm.plot_cnm(_run(), modes=(4, 5, 6)), cnm.LEGEND_COLUMNS) == 1
+    assert getattr(cnm.plot_cnm(_run(), modes=(4, 5, 6), legend=False), cnm.LEGEND_COLUMNS) == 0
 
 
 def test_the_summary_says_whether_the_coordinates_are_grouped():
@@ -179,7 +179,7 @@ def test_the_bars_are_drawn_in_the_house_colours():
     from crystalline.crystalio.figure_style import INK
 
     memory = {}
-    figure = cnm.plot_cnm(_run(), frange=(90, 320), colours=memory)
+    figure = cnm.plot_cnm(_run(), modes=(6, 4, 5), colours=memory)      # any order
     ax = figure.axes[0]
     faces = {c.get_label(): to_hex(c.patches[0].get_facecolor()) for c in ax.containers}
     colours = cnm.palette()
@@ -196,11 +196,11 @@ def test_the_bars_are_drawn_in_the_house_colours():
 def test_a_number_on_a_bar_is_in_the_colour_that_reads_on_it():
     from crystalline.crystalio.figure_style import INK
 
-    figure = cnm.plot_cnm(_run(), frange=(90, 110), colours={})   # mode 4 alone
+    figure = cnm.plot_cnm(_run(), modes=(4,), colours={})        # mode 4 alone
     texts = {t.get_text(): t.get_color() for t in figure.axes[0].texts}
     assert texts["60"] == "white"                            # on the deep cyan
     assert texts["39"] == INK                                # on the orange, light enough
-    figure = cnm.plot_cnm(_run(), frange=(90, 110), colours={"1 NO": "#eaba8a"})
+    figure = cnm.plot_cnm(_run(), modes=(4,), colours={"1 NO": "#eaba8a"})
     assert {t.get_text(): t.get_color() for t in figure.axes[0].texts}["60"] == INK
 
 
@@ -209,9 +209,9 @@ def test_moving_the_threshold_keeps_every_group_in_its_colour():
     from matplotlib.colors import to_hex
 
     memory = {}
-    cnm.plot_cnm(_run(), frange=(90, 320), colours=memory)
+    cnm.plot_cnm(_run(), modes=(4, 5, 6), colours=memory)
     before = dict(memory)
-    figure = cnm.plot_cnm(_run(), frange=(90, 320), threshold=35.0, colours=memory)
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), threshold=35.0, colours=memory)
     faces = {c.get_label(): to_hex(c.patches[0].get_facecolor())
              for c in figure.axes[0].containers if c.get_label() != cnm.RESIDUES}
     assert faces and all(before[group] == colour for group, colour in faces.items())
@@ -219,25 +219,27 @@ def test_moving_the_threshold_keeps_every_group_in_its_colour():
 
 @_DRAWS
 def test_without_a_legend_there_is_none():
-    figure = cnm.plot_cnm(_run(), frange=(90, 320), legend=False)
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), legend=False)
     assert figure.axes[0].get_legend() is None
 
 
 @_DRAWS
-def test_a_window_with_no_modes_or_too_many_is_not_drawn():
+def test_no_modes_too_many_or_ones_the_run_has_not_are_not_drawn():
     with pytest.raises(ValueError, match="no normal modes"):
-        cnm.plot_cnm(_run(), frange=(2000, 3000))
+        cnm.plot_cnm(_run(), modes=())
+    with pytest.raises(ValueError, match="not characterised in this run: mode 2, 99"):
+        cnm.plot_cnm(_run(), modes=(4, 2, 99))
     many = tuple(100.0 + i for i in range(cnm.MAX_MODES + 1))
     run = _run(groups=("1 NO",), frequencies=many, table=[[100.0]] * len(many))
     with pytest.raises(ValueError, match="more than"):
-        cnm.plot_cnm(run, frange=(0, 1000))
+        cnm.plot_cnm(run, modes=run.modes)
 
 
 @_DRAWS
 def test_the_bars_are_labelled_with_frequencies_or_mode_numbers():
-    figure = cnm.plot_cnm(_run(), frange=(90, 320), ticks="freq")
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), ticks="freq")
     assert [t.get_text() for t in figure.axes[0].get_xticklabels()] == ["100.0", "205.0", "310.0"]
-    figure = cnm.plot_cnm(_run(), frange=(90, 320), ticks="mode")
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), ticks="mode")
     assert [t.get_text() for t in figure.axes[0].get_xticklabels()] == ["4", "5", "6"]
 
 
@@ -250,23 +252,57 @@ def qapp():
     return QApplication.instance() or QApplication([])
 
 
-def test_the_controls_count_what_the_window_catches(qapp):
+def _ticked_items(widget):
+    from PySide6.QtCore import Qt
+
+    return [widget.modes.item(i) for i in range(widget.modes.count())
+            if widget.modes.item(i).checkState() == Qt.Checked]
+
+
+def test_every_mode_is_listed_by_number_and_frequency(qapp):
     from crystalline.ui.panels.cnm_options import CNMOptions
 
-    many = tuple(100.0 + 5 * i for i in range(60))
+    widget = CNMOptions(_run())
+    assert [widget.modes.item(i).text() for i in range(widget.modes.count())] == [
+        "Mode 4, 100.0 cm⁻¹", "Mode 5, 205.0 cm⁻¹", "Mode 6, 310.0 cm⁻¹",
+        "Mode 7, 1500.0 cm⁻¹"]
+
+
+def test_the_window_ticks_a_span_and_single_modes_are_ticked_after(qapp):
+    """Filippo's checklist: a mode asked about is known by its number, and the
+    ones wanted are not always next to each other."""
+    from PySide6.QtCore import Qt
+
+    from crystalline.ui.panels.cnm_options import CNMOptions
+
+    many = tuple(100.0 + 5 * i for i in range(60))           # modes 4–63
     widget = CNMOptions(_run(groups=("1 NO",), frequencies=many, table=[[100.0]] * 60))
     checked, changed = [], []
-    widget.window_checked.connect(checked.append)
+    widget.selection_checked.connect(checked.append)
     widget.changed.connect(lambda: changed.append(True))
 
     widget.fmax.setValue(1000.0)                             # all 60
-    assert "60 modes, too many" in widget.count.text() and checked[-1] is False
+    assert "60 modes ticked, too many" in widget.count.text() and checked[-1] is False
     assert not changed                                       # nothing to draw
     widget.fmin.setValue(150.0)
     widget.fmax.setValue(200.0)
-    assert widget.count.text() == "11 modes in this window" and checked[-1] is True
-    assert changed
-    assert widget.groups.text() == "1 group above the threshold"
+    assert widget.ticked() == list(range(14, 25))
+    assert widget.count.text() == "11 modes ticked: 14–24" and checked[-1] is True
+    assert changed and widget.groups.text() == "1 group above the threshold"
+
+    changed.clear()
+    widget.modes.item(40 - 4).setCheckState(Qt.Checked)      # mode 40, far off the span
+    widget.modes.item(20 - 4).setCheckState(Qt.Unchecked)
+    assert widget.ticked() == [14, 15, 16, 17, 18, 19, 21, 22, 23, 24, 40]
+    assert widget.count.text() == "11 modes ticked: 14–19, 21–24, 40"
+    assert len(changed) == 2
+    # The window's handles follow what is ticked, and ticked nothing by it.
+    assert widget.fmin.value() <= 150.0 and widget.fmax.value() >= many[40 - 4]
+    assert len(_ticked_items(widget)) == 11
+
+    for item in _ticked_items(widget):
+        item.setCheckState(Qt.Unchecked)
+    assert widget.count.text() == "no modes ticked" and checked[-1] is False
 
 
 def test_a_threshold_that_leaves_too_many_groups_is_said(qapp):
@@ -284,7 +320,7 @@ def test_the_controls_give_back_what_they_were_set_to(qapp):
     from crystalline.ui.panels.cnm_options import CNMOptions
 
     widget = CNMOptions(_run())
-    options = {"frange": (90.0, 320.0), "threshold": 2.5, "ticks": "mode", "legend": False}
+    options = {"modes": (4, 6), "threshold": 2.5, "ticks": "mode", "legend": False}
     announced = []
     widget.changed.connect(lambda: announced.append(True))
     widget.set_options(options)
@@ -307,10 +343,42 @@ def test_the_dialog_opens_on_the_mode_selected(qapp):
 
     frequencies = tuple(100.0 + 10 * i for i in range(30))
     dialog = CNMDialog(_run(groups=("1 NO",), frequencies=frequencies, table=[[100.0]] * 30))
-    dialog.fit_window(around=None)
+    dialog.fit_selection(around=None)
     assert dialog.options_widget.acceptable()
-    dialog.fit_window(around=30)                             # outside: it moves there
-    assert 30 in dialog._run.modes_in(*dialog.options_widget.window())
+    dialog.fit_selection(around=30)                          # not ticked: ticked round it
+    assert 30 in dialog.options_widget.ticked()
+    assert len(dialog.options_widget.ticked()) == cnm.DEFAULT_WINDOW_MODES
+
+
+def test_the_dialog_keeps_the_modes_ticked(qapp):
+    """Through dialog_state, as the plot is edited or the next one opened: the
+    modes ticked, not the window, which would tick its span over them."""
+    from crystalline.ui.panels import dialog_state
+    from crystalline.ui.panels.cnm_dialog import CNMDialog
+
+    dialog = CNMDialog(_run())
+    dialog.set_selection_state([4, 7])
+    dialog.threshold.setValue(3.0)
+    state = dialog_state.capture(dialog)
+    assert "fmin" not in state and "fmax" not in state
+
+    again = CNMDialog(_run())
+    dialog_state.restore(again, state)
+    assert again.options() == {"modes": (4, 7), "threshold": 3.0, "ticks": "freq",
+                               "legend": True}
+    again.fit_selection(around=None)                         # it suits: kept
+    assert again.options_widget.ticked() == [4, 7]
+
+
+@pytest.mark.parametrize("modes, name", [
+    ((95, 96, 97, 98, 150), "CNM, modes 95–98, 150"),
+    ((100,), "CNM, mode 100"),
+    (tuple(range(4, 40, 2)), "CNM, 18 modes, 4–38"),          # too long to spell out
+])
+def test_a_tab_is_named_after_its_modes(modes, name):
+    from crystalline.ui.panels.cnm_options import title
+
+    assert title(_run(), {"modes": modes}) == name
 
 
 def _series_dialog(paths):
@@ -416,7 +484,7 @@ def test_a_bar_clicked_selects_its_mode(window, monkeypatch):
     window._show_cnm(_run())
 
     tab = window.plot_panel.current_tab()
-    assert tab is not None and tab.recipe.title(tab.recipe.options).startswith("CNM ")
-    drawn = _run().modes_in(*tab.recipe.options["frange"])
+    assert tab is not None and tab.recipe.title(tab.recipe.options).startswith("CNM, mode")
+    drawn = sorted(tab.recipe.options["modes"])
     tab._on_pick(1.1)                                        # the second bar
     assert picked == [_run().frequency(drawn[1])]
