@@ -136,6 +136,10 @@ not listed with an older one.
   first appears in, as `412 CNOH (0.2)`.
 
 Each group keeps its colour while the modes and the threshold are changed.
+Under **Colours**, beside either plot, every group drawn has a dropdown of
+colours: the house colours by name, the residues' pale grey, or any other
+through **Other…**. A colour chosen stays with its group as the plot is drawn
+again.
 
 ## Properties read from the output
 

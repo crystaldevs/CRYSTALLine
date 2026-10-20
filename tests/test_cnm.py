@@ -143,6 +143,14 @@ def test_a_series_needs_two_runs_labelled_apart_with_eigenvectors():
 
 
 # ── colours ───────────────────────────────────────────────────────────────
+def test_the_house_colours_have_names():
+    pytest.importorskip("matplotlib")
+    named = cnm.named_palette()
+    assert [n for n, _ in named[:2]] == ["Cyan", "Orange"]
+    assert named[8][0] == "Light cyan" and named[16][0] == "Dark cyan"
+    assert [c for _, c in named] == list(cnm.palette())
+
+
 def test_the_groups_lead_with_the_house_colours():
     pytest.importorskip("matplotlib")
     from crystalline.crystalio.figure_style import CYCLE
@@ -215,6 +223,31 @@ def test_moving_the_threshold_keeps_every_group_in_its_colour():
     faces = {c.get_label(): to_hex(c.patches[0].get_facecolor())
              for c in figure.axes[0].containers if c.get_label() != cnm.RESIDUES}
     assert faces and all(before[group] == colour for group, colour in faces.items())
+
+
+@_DRAWS
+def test_a_colour_chosen_for_a_group_is_drawn_and_kept():
+    """Chosen by name, the residues too; and once chosen it stays, through a
+    draw that does not ask again, as the plot's memory holds it."""
+    from matplotlib.colors import to_hex
+
+    memory = {}
+    chosen = {"2 NO": "#123456", cnm.RESIDUES: "#abcdef"}
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), group_colours=chosen, colours=memory)
+    assert dict(cnm.drawn_groups(figure))["2 NO"] == "#123456"
+    assert dict(cnm.drawn_groups(figure))[cnm.RESIDUES] == "#abcdef"
+    legend = {t.get_text(): to_hex(h.get_facecolor()) for t, h in
+              zip(figure.axes[0].get_legend().get_texts(),
+                  figure.axes[0].get_legend().legend_handles)}
+    assert legend["2 NO"] == "#123456"                       # the legend as the bars
+    again = cnm.plot_cnm(_run(), modes=(4, 5, 6), threshold=0.4, colours=memory)
+    assert dict(cnm.drawn_groups(again))["2 NO"] == "#123456"
+
+
+@_DRAWS
+def test_the_groups_drawn_are_listed_in_the_legend_s_order_residues_last():
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), colours={})
+    assert [g for g, _ in cnm.drawn_groups(figure)] == ["1 NO", "2 NO", "9 CH", cnm.RESIDUES]
 
 
 @_DRAWS
@@ -320,11 +353,53 @@ def test_the_controls_give_back_what_they_were_set_to(qapp):
     from crystalline.ui.panels.cnm_options import CNMOptions
 
     widget = CNMOptions(_run())
-    options = {"modes": (4, 6), "threshold": 2.5, "ticks": "mode", "legend": False}
+    options = {"modes": (4, 6), "threshold": 2.5, "ticks": "mode", "legend": False,
+               "group_colours": {"1 NO": "#ff0000"}}
     announced = []
     widget.changed.connect(lambda: announced.append(True))
     widget.set_options(options)
     assert widget.options() == options and not announced
+
+
+def test_each_group_drawn_gets_a_colour_dropdown(qapp, monkeypatch):
+    """Filippo's request: the colour of every group, chosen from a dropdown
+    beside it — the house colours by name, or any other through Other…"""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QColorDialog
+
+    from crystalline.ui.panels.cnm_options import CNMOptions
+
+    widget = CNMOptions(_run())
+    assert widget._colour_section.header.isHidden()          # nothing drawn yet
+    drawn = [("1 NO", "#0b7a96"), ("2 NO", "#d9822b"), (cnm.RESIDUES, cnm.RESIDUES_COLOUR)]
+    widget.figure_drawn(SimpleNamespace(axes=[]))            # an empty figure: still none
+    monkeypatch.setattr(cnm_options_module(), "drawn_groups", lambda _figure: drawn)
+    widget.figure_drawn(object())
+    assert not widget._colour_section.header.isHidden()
+    rows = widget.colours.groups
+    assert [rows.topLevelItem(i).text(0) for i in range(rows.topLevelItemCount())] == [
+        "1 NO", "2 NO", cnm.RESIDUES]
+
+    changed = []
+    widget.changed.connect(lambda: changed.append(True))
+    box = widget.colours.box("2 NO")
+    assert box.currentText() == "Orange"
+    box.activated.emit(box.findText("Dark navy"))
+    assert widget.options()["group_colours"] == {"2 NO": box.colour()} and changed
+    assert box.colour() == dict(cnm.named_palette())["Dark navy"]
+
+    monkeypatch.setattr(QColorDialog, "getColor", staticmethod(lambda *a, **k: QColor("#ff00ff")))
+    residues = widget.colours.box(cnm.RESIDUES)
+    assert residues.currentText() == "Pale grey"
+    residues.activated.emit(residues.findText("Other…"))
+    assert widget.options()["group_colours"][cnm.RESIDUES] == "#ff00ff"
+    assert residues.currentText() == "#ff00ff"               # listed, and shown
+
+
+def cnm_options_module():
+    from crystalline.ui.panels import cnm_options
+
+    return cnm_options
 
 
 def test_a_series_is_followed_from_a_mode_of_its_first_run(qapp):
@@ -333,9 +408,10 @@ def test_a_series_is_followed_from_a_mode_of_its_first_run(qapp):
     widget = CNMSeriesOptions(_run())
     assert [widget.mode.itemText(i) for i in range(widget.mode.count())][:2] == [
         "Mode 4, 100.0 cm⁻¹", "Mode 5, 205.0 cm⁻¹"]
-    widget.set_options({"mode": 6, "threshold": 3.0, "min_overlap": 0.7, "legend": False})
+    widget.set_options({"mode": 6, "threshold": 3.0, "min_overlap": 0.7, "legend": False,
+                        "group_colours": {"1 NO (0.2)": "#00ff00"}})
     assert widget.options() == {"mode": 6, "threshold": 3.0, "min_overlap": 0.7,
-                                "legend": False}
+                                "legend": False, "group_colours": {"1 NO (0.2)": "#00ff00"}}
 
 
 def test_the_dialog_opens_on_the_mode_selected(qapp):
@@ -365,7 +441,7 @@ def test_the_dialog_keeps_the_modes_ticked(qapp):
     again = CNMDialog(_run())
     dialog_state.restore(again, state)
     assert again.options() == {"modes": (4, 7), "threshold": 3.0, "ticks": "freq",
-                               "legend": True}
+                               "legend": True, "group_colours": {}}
     again.fit_selection(around=None)                         # it suits: kept
     assert again.options_widget.ticked() == [4, 7]
 
@@ -488,3 +564,25 @@ def test_a_bar_clicked_selects_its_mode(window, monkeypatch):
     drawn = sorted(tab.recipe.options["modes"])
     tab._on_pick(1.1)                                        # the second bar
     assert picked == [_run().frequency(drawn[1])]
+
+
+
+@_DRAWS
+def test_a_colour_chosen_beside_the_plot_redraws_it(window, monkeypatch, qtbot):
+    from matplotlib.colors import to_hex
+    from PySide6.QtWidgets import QDialog
+
+    from crystalline.ui.panels.cnm_dialog import CNMDialog
+
+    monkeypatch.setattr(CNMDialog, "exec", lambda self: QDialog.Accepted)
+    window._show_cnm(_run())
+    tab = window.plot_panel.current_tab()
+    box = tab.controls.colours.box("1 NO")
+    assert box is not None and box.currentText() == "Cyan"
+    figure = tab.figure
+    box.activated.emit(box.findText("Red"))
+    qtbot.waitUntil(lambda: tab.figure is not figure, timeout=10000)
+
+    bars = {c.get_label(): to_hex(c.patches[0].get_facecolor()) for c in tab.figure.axes[0].containers}
+    assert bars["1 NO"] == dict(cnm.named_palette())["Red"]
+    assert tab.controls.colours.box("1 NO").currentText() == "Red"   # the list follows

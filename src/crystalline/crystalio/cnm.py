@@ -319,9 +319,38 @@ def palette() -> Tuple[str, ...]:
             + tuple(mix(c, INK, 0.35) for c in CYCLE))
 
 
+# What the house colours are called where one is chosen: the curve colours in
+# figure_style.CYCLE's order, each then lighter and darker, as palette() has them.
+_COLOUR_NAMES = ("cyan", "orange", "green", "purple", "red", "slate", "gold", "navy")
+
+
+def named_palette() -> Tuple[Tuple[str, str], ...]:
+    """``(name, colour)`` for every colour of :func:`palette`, in its order:
+    "Cyan", …, then "Light cyan", …, then "Dark cyan", …"""
+    names = ([n.capitalize() for n in _COLOUR_NAMES]
+             + [f"Light {n}" for n in _COLOUR_NAMES]
+             + [f"Dark {n}" for n in _COLOUR_NAMES])
+    return tuple(zip(names, palette()))
+
+
 # Everything under the threshold: quiet, as the brand guide asks of whatever is
 # not the point (its border grey), with ink on it.
 RESIDUES_COLOUR = "#d8dbe2"
+
+
+def drawn_groups(figure) -> List[Tuple[str, str]]:
+    """``(group, colour)`` for every group a CNM figure shows, in the legend's
+    order, the residues last: what can be given a colour of its own."""
+    from matplotlib.colors import to_hex
+    from matplotlib.container import BarContainer
+
+    if figure is None or not figure.axes:
+        return []
+    found = [(c.get_label(), to_hex(c.patches[0].get_facecolor()))
+             for c in figure.axes[0].containers
+             if isinstance(c, BarContainer) and c.patches]
+    return ([g for g in found if g[0] != RESIDUES]
+            + [g for g in found if g[0] == RESIDUES])
 
 
 def assign_colours(groups: Sequence[str], memory: Dict[str, str]) -> Dict[str, str]:
@@ -358,13 +387,16 @@ def _text_colour(face) -> str:
     return "white" if 0.2126 * r + 0.7152 * g + 0.0722 * b <= 0.5 else INK
 
 
-def _restyle(figure, memory: Dict[str, str], legend: bool) -> None:
+def _restyle(figure, memory: Dict[str, str], legend: bool,
+             chosen: Optional[Dict[str, str]] = None) -> None:
     """The house colours and lines on a CNM figure CRYSTALClear has drawn.
 
     The bars are recoloured group by group (a ``BarContainer`` per group,
     labelled with it), the numbers printed on them take the colour that reads
     on their new bar, and the legend is drawn again from the bars — it holds
-    copies of their colours, not the bars — or taken away.
+    copies of their colours, not the bars — or taken away. ``chosen`` are the
+    colours the user gave groups (the residues among them): they go into the
+    plot's memory, so a group keeps one once chosen, whatever else changes.
     """
     from matplotlib.container import BarContainer
 
@@ -373,9 +405,10 @@ def _restyle(figure, memory: Dict[str, str], legend: bool) -> None:
     ax = figure.axes[0]
     bars = [c for c in ax.containers if isinstance(c, BarContainer)]
     groups = [c.get_label() for c in bars if c.get_label() != RESIDUES]
+    memory.update(chosen or {})
     colours = assign_colours(groups, memory)
     for container in bars:
-        face = RESIDUES_COLOUR if container.get_label() == RESIDUES \
+        face = memory.get(RESIDUES, RESIDUES_COLOUR) if container.get_label() == RESIDUES \
             else colours[container.get_label()]
         for patch in container.patches:
             patch.set_facecolor(face)
@@ -416,13 +449,15 @@ def _restyle(figure, memory: Dict[str, str], legend: bool) -> None:
 # ── drawing ─────────────────────────────────────────────────────────────────
 def plot_cnm(run: CNMRun, *, modes: Sequence[int], threshold: float = DEFAULT_THRESHOLD,
              ticks: str = "freq", legend: bool = True,
+             group_colours: Optional[Dict[str, str]] = None,
              colours: Optional[Dict[str, str]] = None):
     """The CNM of ``modes`` of ``run`` (CRYSTAL's numbers), one bar each, as a figure.
 
     The bars stand in the order of the modes, whatever order they are given
-    in. ``colours`` is the plot's memory of which group it drew in which
-    colour (see :func:`assign_colours`); a plot drawn again passes the same
-    dict.
+    in. ``group_colours`` are colours chosen for groups by name (``"1 NO"``,
+    or :data:`RESIDUES`). ``colours`` is the plot's memory of which group it
+    drew in which colour (see :func:`assign_colours`); a plot drawn again
+    passes the same dict.
     """
     from crystalline.crystalio.plotting import _plot_module
 
@@ -438,7 +473,7 @@ def plot_cnm(run: CNMRun, *, modes: Sequence[int], threshold: float = DEFAULT_TH
         raise ValueError(f"{len(modes)} modes chosen, more than {MAX_MODES}")
     figure, _ax, _used = CCplt.plot_cry_cnm(
         run.output, modes=modes, threshold=float(threshold), xticks=ticks)
-    _restyle(figure, colours if colours is not None else {}, legend)
+    _restyle(figure, colours if colours is not None else {}, legend, group_colours)
     return figure
 
 
@@ -446,6 +481,7 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
                     threshold: float = DEFAULT_THRESHOLD,
                     min_overlap: float = DEFAULT_MIN_OVERLAP,
                     axis: str = DEFAULT_SERIES_AXIS, legend: bool = True,
+                    group_colours: Optional[Dict[str, str]] = None,
                     colours: Optional[Dict[str, str]] = None):
     """Mode ``mode`` of the first run followed along ``runs``, one bar per run.
 
@@ -453,6 +489,7 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
     series; ``axis`` names what they are (CRYSTALClear adds the frequency to
     it). A bar reached through an overlap below ``min_overlap``, and every bar
     after it, is hatched: from there the mode followed may be another.
+    ``group_colours`` and ``colours`` as for :func:`plot_cnm`.
     """
     from crystalline.crystalio.plotting import _plot_module
 
@@ -469,7 +506,7 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
         figure, _ax, _used = CCplt.plot_cry_cnm_pressure(
             [run.output for run in runs], int(mode), labels=[str(l) for l in labels],
             threshold=float(threshold), min_overlap=float(min_overlap), xlabel=axis)
-    _restyle(figure, colours if colours is not None else {}, legend)
+    _restyle(figure, colours if colours is not None else {}, legend, group_colours)
     return figure
 
 
@@ -485,8 +522,10 @@ __all__ = [
     "TICKS",
     "assign_colours",
     "cnm_run",
+    "drawn_groups",
     "figure_aspect",
     "legend_columns",
+    "named_palette",
     "palette",
     "plot_cnm",
     "plot_cnm_series",

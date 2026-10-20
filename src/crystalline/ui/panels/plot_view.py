@@ -72,7 +72,8 @@ class PlotRecipe:
     # name follows the options rather than being fixed when the tab is made.
     title: Optional[Callable[[Dict[str, Any]], str]] = None
     # The controls that belong beside the plot: a widget with ``options()``,
-    # ``set_options()`` and a ``changed`` signal. Given one, the tab shows it
+    # ``set_options()`` and a ``changed`` signal (and, if it wants to see each
+    # figure as it lands, a ``figure_drawn(figure)``). Given one, the tab shows it
     # and redraws as it is turned, which is the whole point of keeping a recipe
     # — a width is judged against the peaks it merges, and the only way to know
     # is to look while it moves. Only for a plot that is cheap to draw again.
@@ -379,6 +380,7 @@ class _PlotTab(QWidget):
             across.addWidget(self.controls_column, 0)
         layout.addLayout(across, 1)
         layout.addWidget(self._build_toolbar())
+        self._tell_controls(figure)
         if self._on_pick is not None:
             self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
             # Connected *after* the toolbar's own cursor handler (built above),
@@ -751,7 +753,19 @@ class _PlotTab(QWidget):
         # Pan and zoom belong to the canvas that has gone; the buttons that
         # showed them pressed are now about a canvas in its resting state.
         self._sync_mode_buttons()
+        self._tell_controls(figure)
         self.canvas.draw_idle()
+
+    def _tell_controls(self, figure) -> None:
+        """Show the controls the figure now in the tab, if they want to see it.
+
+        For a control about what a figure turned out to hold rather than what
+        was asked of it: the groups a CNM plot shows, which are known only once
+        it is drawn, each in the colour it was given.
+        """
+        hook = getattr(self.controls, "figure_drawn", None)
+        if callable(hook):
+            hook(figure)
 
     @staticmethod
     def _release(canvas, figure) -> None:

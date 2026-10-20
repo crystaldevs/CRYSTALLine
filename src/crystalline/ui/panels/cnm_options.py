@@ -11,6 +11,11 @@ the frequency beside it (Filippo, 2026-10-20: the modes asked about are known
 by number, and are not always next to each other). A window of frequencies is
 kept for ticking a span at once, as a band is known by where it sits.
 
+Every group the figure shows can be given a colour of its own, from a
+dropdown beside its name (Filippo, 2026-10-20): the house colours by name, or
+any other. The list is the figure's, read from it as each draw lands, since a
+series' groups are known only once its runs have been matched.
+
 A choice can hold no mode, or more bars than a figure can hold. Beside a plot
 that is said in the count line and the plot is left as it was, rather than
 redrawn into an error.
@@ -18,17 +23,22 @@ redrawn into an error.
 
 from __future__ import annotations
 
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QColorDialog,
     QComboBox,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -38,8 +48,12 @@ from crystalline.crystalio.cnm import (
     DEFAULT_THRESHOLD,
     MAX_MODES,
     READABLE_GROUPS,
+    RESIDUES,
+    RESIDUES_COLOUR,
     TICKS,
     CNMRun,
+    drawn_groups,
+    named_palette,
 )
 from crystalline.ui.panels.controls import Section, range_row, slider_row
 
@@ -52,6 +66,11 @@ _LEGEND_TIP = "Name the groups of internal coordinates beside the bars."
 _LIST_ROWS = 10
 # A title longer than this names the modes by count and span instead.
 _TITLE_CHARACTERS = 24
+# Rows of the colour list shown before it scrolls, and the side of a swatch.
+_COLOUR_ROWS = 8
+_SWATCH = 14
+# The last entry of a colour dropdown, which opens the colour picker.
+_OTHER = "Other…"
 
 
 def spans(modes: Sequence[int]) -> str:
@@ -82,6 +101,142 @@ def series_title(options: dict) -> str:
     """A tab title naming the mode followed: ``"CNM of mode 100 along 6 runs"``."""
     runs = len(options.get("paths") or ())
     return f"CNM of mode {options.get('mode')} along {runs} runs"
+
+
+def _swatch(colour: str) -> QIcon:
+    """A small square of ``colour``, edged so a pale one still shows."""
+    pixmap = QPixmap(_SWATCH, _SWATCH)
+    pixmap.fill(QColor(colour))
+    painter = QPainter(pixmap)
+    painter.setPen(QColor(0, 0, 0, 90))
+    painter.drawRect(0, 0, _SWATCH - 1, _SWATCH - 1)
+    painter.end()
+    return QIcon(pixmap)
+
+
+class _ColourBox(QComboBox):
+    """A dropdown of colours: the house ones by name, the residues' grey, the
+    one shown if it is none of these, and Other… for any colour at all."""
+
+    #: A colour was chosen, as ``#rrggbb``.
+    chosen = Signal(str)
+
+    def __init__(self, colour: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._colour = QColor(colour).name()
+        for name, value in named_palette() + (("Pale grey", RESIDUES_COLOUR),):
+            self.addItem(_swatch(value), name, QColor(value).name())
+        self.addItem(_OTHER, None)
+        self._show(self._colour)
+        self.activated.connect(self._on_activated)
+
+    def colour(self) -> str:
+        return self._colour
+
+    def _show(self, colour: str) -> None:
+        """Show ``colour`` as the current entry, listing it first if it is new."""
+        index = self.findData(colour)
+        if index < 0:
+            self.insertItem(0, _swatch(colour), colour, colour)
+            index = 0
+        blocked = self.blockSignals(True)
+        self.setCurrentIndex(index)
+        self.blockSignals(blocked)
+
+    def _on_activated(self, index: int) -> None:
+        value = self.itemData(index)
+        if value is None:                                   # Other…
+            picked = QColorDialog.getColor(QColor(self._colour), self, "Choose colour")
+            if not picked.isValid():
+                self._show(self._colour)
+                return
+            value = picked.name()
+        self._colour = value
+        self._show(value)
+        self.chosen.emit(value)
+
+
+class GroupColours(QWidget):
+    """Every group a CNM figure shows, each with a dropdown of its colour.
+
+    Read from the figure as it lands (:meth:`show_groups`), so the list is
+    what is drawn, in the legend's order; :meth:`chosen` is what the user set,
+    by group, which the next draw is asked to keep.
+    """
+
+    changed = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._chosen: Dict[str, str] = {}
+        self._shown: List[Tuple[str, str]] = []
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.groups = QTreeWidget(self)
+        self.groups.setColumnCount(2)
+        self.groups.setHeaderHidden(True)
+        self.groups.setRootIsDecorated(False)
+        self.groups.setSelectionMode(QAbstractItemView.NoSelection)
+        self.groups.setFocusPolicy(Qt.NoFocus)
+        header = self.groups.header()
+        header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setStretchLastSection(True)
+        self.groups.setToolTip("The colour of each group of internal coordinates, "
+                               "kept as the plot is drawn again.")
+        layout.addWidget(self.groups)
+
+    def chosen(self) -> Dict[str, str]:
+        """The colours the user chose, by group."""
+        return dict(self._chosen)
+
+    def set_chosen(self, colours: Optional[Dict[str, str]]) -> None:
+        """Take ``colours`` as the user's choice, without announcing it."""
+        self._chosen = dict(colours or {})
+        shown, self._shown = self._shown, []
+        self.show_groups([(g, self._chosen.get(g, c)) for g, c in shown])
+
+    def show_groups(self, groups: Sequence[Tuple[str, str]]) -> None:
+        """List ``(group, colour)`` as drawn; nothing is rebuilt if it is the same."""
+        groups = [(g, QColor(c).name()) for g, c in groups]
+        if groups == self._shown:
+            return
+        self._shown = groups
+        self.groups.clear()
+        for group, colour in groups:
+            item = QTreeWidgetItem([group])
+            item.setToolTip(0, "Contributions under the threshold, summed"
+                            if group == RESIDUES else f"The group of internal "
+                            f"coordinate {group.split()[0]} and those equivalent to it")
+            self.groups.addTopLevelItem(item)
+            box = _ColourBox(colour)
+            box.chosen.connect(lambda value, g=group: self._on_chosen(g, value))
+            self.groups.setItemWidget(item, 1, box)
+        rows = max(self.groups.sizeHintForRow(0), 24) if groups else 24
+        self.groups.setFixedHeight(rows * min(max(len(groups), 1), _COLOUR_ROWS) + 4)
+
+    def box(self, group: str) -> Optional[_ColourBox]:
+        """The dropdown of ``group``, or ``None`` if it is not shown."""
+        for i in range(self.groups.topLevelItemCount()):
+            item = self.groups.topLevelItem(i)
+            if item.text(0) == group:
+                return self.groups.itemWidget(item, 1)
+        return None
+
+    def _on_chosen(self, group: str, colour: str) -> None:
+        self._chosen[group] = colour
+        self._shown = [(g, colour if g == group else c) for g, c in self._shown]
+        self.changed.emit()
+
+
+def _colour_section(layout) -> Tuple[object, GroupColours]:
+    """A Colours section holding a :class:`GroupColours`, hidden until a figure
+    has been drawn: in a dialog, before there is one, it has nothing to list."""
+    section = Section(layout, "Colours")
+    colours = GroupColours()
+    section.add_wide(colours)
+    section.set_visible(False)
+    return section, colours
 
 
 def _threshold(section) -> object:
@@ -164,6 +319,9 @@ class CNMOptions(QWidget):
         self.legend.toggled.connect(lambda _on: self._emit())
         groups.add_wide(self.legend)
 
+        self._colour_section, self.colours = _colour_section(layout)
+        self.colours.changed.connect(self._emit)
+
         self.set_ticked(run.default_modes())
 
     # ── state ───────────────────────────────────────────────────────────
@@ -205,6 +363,7 @@ class CNMOptions(QWidget):
             "threshold": self.threshold.value(),
             "ticks": self.ticks.currentData(),
             "legend": self.legend.isChecked(),
+            "group_colours": self.colours.chosen(),
         }
 
     def set_options(self, options: Optional[dict]) -> None:
@@ -222,9 +381,17 @@ class CNMOptions(QWidget):
                 self.ticks.setCurrentIndex(index)
             if options.get("legend") is not None:
                 self.legend.setChecked(bool(options["legend"]))
+            if options.get("group_colours") is not None:
+                self.colours.set_chosen(options["group_colours"])
         finally:
             self.blockSignals(blocked)
         self._check()
+
+    def figure_drawn(self, figure) -> None:
+        """The figure now beside these controls: list its groups, in their colours."""
+        groups = drawn_groups(figure)
+        self._colour_section.set_visible(bool(groups))
+        self.colours.show_groups(groups)
 
     # ── changes ─────────────────────────────────────────────────────────
     def _emit(self) -> None:
@@ -336,6 +503,9 @@ class CNMSeriesOptions(QWidget):
         self.legend.toggled.connect(lambda _on: self.changed.emit())
         groups.add_wide(self.legend)
 
+        self._colour_section, self.colours = _colour_section(layout)
+        self.colours.changed.connect(self.changed.emit)
+
     def options(self) -> dict:
         """What this widget decides, as :func:`plot_cnm_series` keyword arguments."""
         return {
@@ -343,7 +513,14 @@ class CNMSeriesOptions(QWidget):
             "threshold": self.threshold.value(),
             "min_overlap": self.min_overlap.value(),
             "legend": self.legend.isChecked(),
+            "group_colours": self.colours.chosen(),
         }
+
+    def figure_drawn(self, figure) -> None:
+        """The figure now beside these controls: list its groups, in their colours."""
+        groups = drawn_groups(figure)
+        self._colour_section.set_visible(bool(groups))
+        self.colours.show_groups(groups)
 
     def set_options(self, options: Optional[dict]) -> None:
         if not options:
@@ -358,8 +535,10 @@ class CNMSeriesOptions(QWidget):
                     getattr(self, name).setValue(float(options[name]))
             if options.get("legend") is not None:
                 self.legend.setChecked(bool(options["legend"]))
+            if options.get("group_colours") is not None:
+                self.colours.set_chosen(options["group_colours"])
         finally:
             self.blockSignals(blocked)
 
 
-__all__ = ["CNMOptions", "CNMSeriesOptions", "series_title", "spans", "title"]
+__all__ = ["CNMOptions", "CNMSeriesOptions", "GroupColours", "series_title", "spans", "title"]
