@@ -3394,12 +3394,17 @@ class MainWindow(QMainWindow):
             current, waiting = self._pending_reads[0][0], waiting - 1
         if not self._reading or current is None:
             label.hide()
-            return
-        text = f"Reading {os.path.basename(current)}…"
-        if waiting:
-            text += f"  {waiting} more to come"
-        label.setText(text)
-        label.show()
+        else:
+            text = f"Reading {os.path.basename(current)}…"
+            if waiting:
+                text += f"  {waiting} more to come"
+            label.setText(text)
+            label.show()
+        # The status bar laid out now, not a turn later: the label goes just
+        # after _settle_tab has laid the new tab out, and left to Qt the atom
+        # count was seen in the label's place for a frame or two before moving
+        # over — on the first file of every session sampled (6 of 6, 2026-10-19).
+        QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
 
     def _show_read_file(self, path: str, read: "_ReadFile", front: bool = True) -> FileTab:
         """Put a file that has been read into a tab.
