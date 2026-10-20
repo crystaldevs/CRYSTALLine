@@ -78,7 +78,8 @@ On macOS the tabs are stepped through with {kbd}`⌘⇧]` and {kbd}`⌘⇧[`.
 ## Plot
 
 Electronic bands & DOS… · Vibrational spectra… · VCI states… · Anharmonic
-scan… · Anharmonic PES… · elastic properties · equation of state · phonon band
+scan… · Anharmonic PES… · Characterisation of normal modes… · A normal mode
+along a series… · elastic properties · equation of state · phonon band
 structure… · phonon density of states… · simulated XRD… · Crystalline
 orbitals… · Clear orbital · Plot font…
 

@@ -536,6 +536,8 @@ def _build_plot_menu(window) -> None:
     """
     from crystalline.crystalio import available_plots, crystalclear_available
     from crystalline.crystalio.anscan import plottable as anscan_plottable
+    from crystalline.crystalio.cnm import plottable as cnm_plottable
+    from crystalline.crystalio.cnm import series_plottable as cnm_series_plottable
     from crystalline.crystalio.pes import plottable as pes_plottable
     from crystalline.crystalio.vci import plottable as vci_plottable
 
@@ -589,6 +591,27 @@ def _build_plot_menu(window) -> None:
         window._pes_action = QAction("Anharmonic PES…", window)
         window._pes_action.triggered.connect(window._open_pes)
         plot_menu.addAction(window._pes_action)
+    # And for a LOCMODES run's characterisation of its normal modes: hundreds
+    # of modes, a bar each, so which of them is the choice — and, along a
+    # series of runs, which runs and what each stands for (see
+    # crystalline.crystalio.cnm). Listed only when the installed CRYSTALClear
+    # reads the decomposition, which 0.2.17 does not.
+    if cnm_plottable():
+        window._cnm_action = QAction("Characterisation of normal modes…", window)
+        window._cnm_action.setToolTip(
+            "How much of each normal mode is each internal coordinate's local "
+            "mode, from a LOCMODES run"
+        )
+        window._cnm_action.triggered.connect(window._open_cnm)
+        plot_menu.addAction(window._cnm_action)
+    if cnm_series_plottable():
+        window._cnm_series_action = QAction("A normal mode along a series…", window)
+        window._cnm_series_action.setToolTip(
+            "The characterisation of one normal mode followed along LOCMODES "
+            "runs at increasing pressure, say"
+        )
+        window._cnm_series_action.triggered.connect(window._open_cnm_series)
+        plot_menu.addAction(window._cnm_series_action)
     # Crystalline orbitals are not a matplotlib figure at all — they are drawn in
     # the 3D view over the structure — but this is where someone looks for "plot
     # something the run computed", so the entry belongs here.

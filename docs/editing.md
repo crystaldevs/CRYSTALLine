@@ -114,7 +114,9 @@ coordinates is not the plain angle of the atoms. A measurement that is none of
 the internal coordinates leaves the four columns empty, and sorts below the
 rest. Reading the section needs CRYSTALClear 0.2.17 or later; 0.2.17 leaves out
 a coordinate whose cell index CRYSTAL prints with no spaces, as `(-1-1-1)`,
-which the release after it reads.
+which the release after it reads. How much of each normal mode every internal
+coordinate is, the same section's characterisation of normal modes, is drawn
+from the Plot menu (see [local modes](plots.md#local-modes)).
 
 LOCMODES does not always list every coordinate of a set the crystal's symmetry
 makes equivalent, and equivalent coordinates share a local mode. A measurement
