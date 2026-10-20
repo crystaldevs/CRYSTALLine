@@ -183,6 +183,41 @@ def test_a_row_that_does_not_hold_together_is_left_out():
     assert repaired.cells[-1] == (-1, -1, -1) and repaired.atoms == (94, 74, 18, 32)
 
 
+def test_a_number_that_overflowed_its_field_leaves_its_row_out():
+    """CRYSTAL prints ***** for a number too wide for its column, which
+    CRYSTALClear after 0.2.17 reads as NaN: not a number, so not guessed at."""
+    from crystalline.crystalio.locmodes import _coordinate
+
+    row = {"ic index": 1, "Atom 1 label": 1, "Atom 1": "O", "Atom 2 label": 2, "Atom 2": "O",
+           "Atom 2 cell index": "( 0 0 0)", "Bond Length": 1.45, "k^a": 4.2, "m^a": 8.0,
+           "w^a": float("nan")}
+    assert _coordinate(row, M.DISTANCE, 2, "Bond Length", False, natoms=4) is None
+
+
+def test_the_tables_are_read_without_crystalclears_own_symmetry(monkeypatch):
+    """CRYSTALClear after 0.2.17 groups the coordinates by symmetry unless told
+    not to, with a check of the geometry that raises on a file it cannot read
+    (the synthetic run has no dimension block). The Measure section finds
+    equivalent coordinates itself, so it asks for the tables alone; 0.2.17
+    takes no such argument and is asked for nothing."""
+    import CRYSTALClear.crystal_io as crystal_io
+
+    from crystalline.crystalio import locmodes
+
+    class Old:
+        def get_locmodes(self):
+            pass
+
+    class New:
+        def get_locmodes(self, symmetry=True, symprec=1e-5):
+            pass
+
+    monkeypatch.setattr(crystal_io, "Crystal_output", Old)
+    assert not locmodes.reads_by_symmetry() and locmodes._tables_only() == {}
+    monkeypatch.setattr(crystal_io, "Crystal_output", New)
+    assert locmodes.reads_by_symmetry() and locmodes._tables_only() == {"symmetry": False}
+
+
 def test_a_row_naming_an_atom_the_cell_has_not_got_is_left_out():
     from crystalline.crystalio.locmodes import _coordinate
 
@@ -203,7 +238,13 @@ def test_a_file_is_read_with_its_local_modes(monkeypatch):
     monkeypatch.setattr(crystalio, "read_local_modes", lambda path: ("the modes of", path))
     plain = sample_path("thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out")
     read = mw._read_file(plain)
+    assert read.local_modes is None and read.local_modes_note is None   # none to read
+    assert read.capabilities["locmodes"] is False
+
+    monkeypatch.setattr(crystalio, "has_local_modes", lambda path: True)
+    read = mw._read_file(plain)
     assert read.local_modes == ("the modes of", plain) and read.local_modes_note is None
+    assert read.capabilities["locmodes"] is True
 
     def unreadable(_path):
         raise crystalio.LocalModesError("local modes need CRYSTALClear 0.2.17 or later")

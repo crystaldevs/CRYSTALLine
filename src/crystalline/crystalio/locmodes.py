@@ -3,10 +3,11 @@
 ``Crystal_output.get_locmodes()`` (CRYSTALClear 0.2.17 on) turns the section
 into three tables, one each for bonds, angles and dihedrals, with every
 internal coordinate's atoms, the cell each atom is in, its value and its local
-force constant, mass and frequency. (A fourth, the decomposition of the normal
-modes into the local ones, is not used here yet.) This module turns those
-tables into :class:`crystalline.core.local_modes.LocalModes`, with the one
-thing they leave out: where CRYSTAL has the atoms.
+force constant, mass and frequency. (The decomposition of the normal modes
+into the local ones is drawn by :mod:`crystalline.crystalio.cnm`, not read
+here.) This module turns those tables into
+:class:`crystalline.core.local_modes.LocalModes`, with the one thing they leave
+out: where CRYSTAL has the atoms.
 
 That has to come from the output too, and from a particular block of it. The
 cell indices are counted from CRYSTAL's Cartesian coordinates of the primitive
@@ -21,7 +22,14 @@ does not hold together — atoms that are not numbers, a cell index that is not
 three of them, a value that is not a number — is left out rather than guessed
 at. CRYSTALClear 0.2.17 drops a cell index printed with no spaces at all,
 ``(-1-1-1)``, and shifts the rest of that row one column left: such a row is
-one of these.
+one of these. The release after it reads those rows, and gives a number that
+overflowed its field (``*****``) as NaN, which is not a number either.
+
+That release can also group the coordinates by the crystal's symmetry, a check
+of its own on the geometry that fails on a file it cannot check. The Measure
+section finds equivalent coordinates itself (see
+:meth:`~crystalline.core.local_modes.LocalModes.find_by_symmetry`), so the
+tables are read without it.
 
 Kept Qt-free, like the sibling modules.
 """
@@ -29,6 +37,7 @@ Kept Qt-free, like the sibling modules.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import math
 import re
@@ -96,7 +105,7 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
         # CRYSTALClear prints as it parses; that belongs in no terminal.
         with contextlib.redirect_stdout(io.StringIO()):
             out = Crystal_output(path)
-            out.get_locmodes()
+            out.get_locmodes(**_tables_only())
         lines = list(out.data)
         start = _first(lines, _SCREENED)
         positions, types = _cartesian_positions(lines, start)
@@ -110,6 +119,37 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
     if not coordinates:
         raise LocalModesError("the LOCMODES section lists no internal coordinates")
     return LocalModes(positions, lattice, tuple(coordinates), types, operation_count)
+
+
+def reads_by_symmetry() -> bool:
+    """Whether ``get_locmodes`` takes ``symmetry``: CRYSTALClear after 0.2.17.
+
+    That release reads the rows 0.2.17 drops, and can group the coordinates
+    by the crystal's symmetry; it is still called 0.2.17 until it is released,
+    so it is known by what it takes, never by its version.
+    """
+    try:
+        from CRYSTALClear.crystal_io import Crystal_output
+    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
+        return False
+    method = getattr(Crystal_output, "get_locmodes", None)
+    if method is None:
+        return False
+    try:
+        return "symmetry" in inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _tables_only() -> dict:
+    """``get_locmodes``'s arguments for the tables alone.
+
+    ``symmetry=False`` where it takes one (CRYSTALClear after 0.2.17), which
+    otherwise groups the coordinates by symmetry by default: nothing here uses
+    the groups, and the check behind them raises on an output whose geometry
+    it cannot read.
+    """
+    return {"symmetry": False} if reads_by_symmetry() else {}
 
 
 # ── the blocks around the tables ──────────────────────────────────────────
@@ -256,4 +296,4 @@ def _cell(text) -> Tuple[int, int, int]:
     return values[0], values[1], values[2]
 
 
-__all__ = ["LocalModesError", "has_local_modes", "read_local_modes"]
+__all__ = ["LocalModesError", "has_local_modes", "read_local_modes", "reads_by_symmetry"]

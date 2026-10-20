@@ -3909,7 +3909,7 @@ class MainWindow(QMainWindow):
 # may parse, but never touch a widget.
 
 # What an open output is probed for, to enable the menus that need it.
-_PROBES = ("plots", "orbitals", "vci", "anscan", "pes")
+_PROBES = ("plots", "orbitals", "vci", "anscan", "pes", "locmodes")
 
 
 def _probe(key: str, output_path: Optional[str]):
@@ -3932,6 +3932,8 @@ def _probe(key: str, output_path: Optional[str]):
         return crystalio.has_anscan(output_path)
     if key == "pes":
         return crystalio.has_pes(output_path)
+    if key == "locmodes":
+        return crystalio.has_local_modes(output_path)
     raise KeyError(f"no probe {key!r}")
 
 
@@ -3975,14 +3977,17 @@ def _read_file(path: str) -> _ReadFile:
         except Exception:  # noqa: BLE001 - asked again, and reported, by the window
             pass
     # Read here, with the rest, rather than when a measurement asks: a tenth of
-    # a second on a large run, and pandas to import the first time.
+    # a second on a large run, and pandas to import the first time. Only for
+    # an output the probe found a LOCMODES section in, so that every other
+    # output is scanned for one once.
     local_modes, local_modes_note = None, None
-    try:
-        local_modes = read_local_modes(output_path)
-    except LocalModesError as exc:
-        local_modes_note = str(exc)
-    except Exception as exc:  # noqa: BLE001 - never let this break loading a file
-        local_modes_note = f"the LOCMODES section could not be read ({exc})"
+    if capabilities.get("locmodes"):
+        try:
+            local_modes = read_local_modes(output_path)
+        except LocalModesError as exc:
+            local_modes_note = str(exc)
+        except Exception as exc:  # noqa: BLE001 - never let this break loading a file
+            local_modes_note = f"the LOCMODES section could not be read ({exc})"
     # The run's own rows are not read here: see _read_details.
     return _ReadFile(loaded, output_path, adps, None, capabilities,
                      local_modes, local_modes_note)
