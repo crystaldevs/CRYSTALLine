@@ -116,9 +116,6 @@ class CNMRun:
         return [mode for mode, frequency in zip(self.modes, self.frequencies)
                 if low <= frequency <= high]
 
-    def count_in(self, fmin: float, fmax: float) -> int:
-        return len(self.modes_in(fmin, fmax))
-
     def groups_in(self, modes: Sequence[int], threshold: float = DEFAULT_THRESHOLD) -> int:
         """How many groups the bars of ``modes`` show, each in a colour and named
         in the legend: those that reach ``threshold`` (%) in one of them, as
@@ -161,34 +158,21 @@ def _spacegroup(text: str) -> str:
 
 
 # ── what the installed CRYSTALClear can do ─────────────────────────────────
-def _crystalclear():
-    """``(Crystal_output, plot module)``, or ``(None, None)`` if they will not import."""
+def plottable() -> bool:
+    """Whether the installed CRYSTALClear can read a run's CNM and draw it,
+    for one run and along a series.
+
+    All of it arrived together, in 0.2.18: ``get_locmodes`` learnt to read the
+    decomposition (and to group it by symmetry, its ``symmetry`` argument) in
+    the same change that added ``plot_cry_cnm`` and ``plot_cry_cnm_pressure``.
+    0.2.17 reads the local modes the Measure section shows, and offers no CNM.
+    """
     try:
         from CRYSTALClear import plot as CCplt
-        from CRYSTALClear.crystal_io import Crystal_output
     except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return None, None
-    return Crystal_output, CCplt
-
-
-def plottable() -> bool:
-    """Whether the installed CRYSTALClear can read a run's CNM and draw it.
-
-    Both arrived together, in 0.2.18: ``get_locmodes`` learnt to read the
-    decomposition (and to group it by symmetry, its ``symmetry`` argument) in
-    the same change that added ``plot_cry_cnm``. 0.2.17 reads the local modes
-    the Measure section shows, and offers no CNM.
-    """
-    Crystal_output, CCplt = _crystalclear()
-    if Crystal_output is None or not hasattr(CCplt, "plot_cry_cnm"):
         return False
-    return reads_by_symmetry()
-
-
-def series_plottable() -> bool:
-    """Whether it can also follow a mode along a series of runs."""
-    _Crystal_output, CCplt = _crystalclear()
-    return plottable() and hasattr(CCplt, "plot_cry_cnm_pressure")
+    drawn = all(hasattr(CCplt, name) for name in ("plot_cry_cnm", "plot_cry_cnm_pressure"))
+    return drawn and reads_by_symmetry()
 
 
 # ── reading ─────────────────────────────────────────────────────────────────
@@ -540,8 +524,6 @@ __all__ = [
     "plot_cnm",
     "plot_cnm_series",
     "plottable",
-    "reads_by_symmetry",
     "series_aspect",
     "series_labels",
-    "series_plottable",
 ]

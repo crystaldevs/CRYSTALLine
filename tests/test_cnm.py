@@ -41,23 +41,21 @@ def _run(groups=("1 NO", "2 NO", "9 CH"), frequencies=(100.0, 205.0, 310.0, 1500
 
 
 # ── a run's modes ─────────────────────────────────────────────────────────
-def test_a_window_counts_the_modes_in_it():
+def test_a_span_of_frequencies_holds_the_modes_in_it():
     run = _run()
     assert run.modes_in(90, 210) == [4, 5]
-    assert run.count_in(210, 90) == 2                       # either way round
-    assert run.count_in(2000, 3000) == 0
+    assert run.modes_in(210, 90) == [4, 5]                  # either way round
+    assert run.modes_in(2000, 3000) == []
     assert run.label(5) == "Mode 5, 205.0 cm⁻¹"
 
 
-def test_the_window_opens_on_the_mode_selected_if_there_is_one():
+def test_the_modes_ticked_first_are_round_the_mode_selected_if_there_is_one():
     frequencies = tuple(100.0 + 10 * i for i in range(30))
     run = _run(groups=("1 NO",), frequencies=frequencies, table=[[100.0]] * 30)
-    low, high = run.default_window()
-    assert run.modes_in(low, high)[0] == 4                   # from the lowest
-    assert run.count_in(low, high) == cnm.DEFAULT_WINDOW_MODES
-    low, high = run.default_window(around=25)
-    assert 25 in run.modes_in(low, high)
-    assert run.count_in(low, high) == cnm.DEFAULT_WINDOW_MODES
+    first = run.default_modes()
+    assert first[0] == 4 and len(first) == cnm.DEFAULT_WINDOW_MODES   # from the lowest
+    first = run.default_modes(around=25)
+    assert 25 in first and len(first) == cnm.DEFAULT_WINDOW_MODES
 
 
 def test_the_groups_a_window_shows_are_those_over_the_threshold():
@@ -113,7 +111,7 @@ def test_crystalclear_0217_offers_no_cnm(monkeypatch):
             pass
 
     monkeypatch.setattr(crystal_io, "Crystal_output", Old)
-    assert not cnm.plottable() and not cnm.series_plottable()
+    assert not cnm.plottable()
 
 
 # ── a series ──────────────────────────────────────────────────────────────
@@ -619,7 +617,6 @@ def test_without_a_crystalclear_that_reads_it_there_is_no_entry(qapp, monkeypatc
     from _window import close_window, make_window
 
     monkeypatch.setattr(cnm, "plottable", lambda: False)
-    monkeypatch.setattr(cnm, "series_plottable", lambda: False)
     made = make_window(monkeypatch, tmp_path)
     try:
         assert getattr(made, "_cnm_action", None) is None

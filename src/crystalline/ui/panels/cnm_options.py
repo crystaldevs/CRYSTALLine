@@ -243,6 +243,18 @@ def _colour_section(layout) -> Tuple[object, GroupColours]:
     return section, colours
 
 
+class _ColouredGroups:
+    """What both CNM controls do with each figure: list its groups, in their
+    colours (a :class:`GroupColours` in ``self.colours``, inside
+    ``self._colour_section``)."""
+
+    def figure_drawn(self, figure) -> None:
+        """The figure now beside these controls: list its groups, in their colours."""
+        groups = drawn_groups(figure)
+        self._colour_section.set_visible(bool(groups))
+        self.colours.show_groups(groups)
+
+
 def _threshold(section) -> object:
     box = slider_row(section, "Threshold (%)", DEFAULT_THRESHOLD, 0.0, 20.0, 0.5,
                      decimals=1)
@@ -250,7 +262,7 @@ def _threshold(section) -> object:
     return box
 
 
-class CNMOptions(QWidget):
+class CNMOptions(_ColouredGroups, QWidget):
     """The modes ticked and how the bars are drawn, with a signal when they change."""
 
     #: Any control was touched and what it asks for can be drawn; the reader
@@ -341,6 +353,16 @@ class CNMOptions(QWidget):
         follow, to the span of what is ticked, without ticking anything.
         """
         wanted = {int(m) for m in modes}
+        self._tick_only(wanted)
+        self._follow()
+        self._check()
+        first = next((i for i in range(self.modes.count())
+                      if self.modes.item(i).checkState() == Qt.Checked), None)
+        if first is not None:
+            self.modes.scrollToItem(self.modes.item(first), QAbstractItemView.PositionAtTop)
+
+    def _tick_only(self, wanted) -> None:
+        """Tick the modes in ``wanted`` and untick the rest, without a signal per item."""
         blocked = self.modes.blockSignals(True)
         try:
             for i in range(self.modes.count()):
@@ -349,12 +371,6 @@ class CNMOptions(QWidget):
                                    else Qt.Unchecked)
         finally:
             self.modes.blockSignals(blocked)
-        self._follow()
-        self._check()
-        first = next((i for i in range(self.modes.count())
-                      if self.modes.item(i).checkState() == Qt.Checked), None)
-        if first is not None:
-            self.modes.scrollToItem(self.modes.item(first), QAbstractItemView.PositionAtTop)
 
     def acceptable(self) -> bool:
         """Whether something, and not too much, is ticked to draw."""
@@ -391,11 +407,6 @@ class CNMOptions(QWidget):
             self.blockSignals(blocked)
         self._check()
 
-    def figure_drawn(self, figure) -> None:
-        """The figure now beside these controls: list its groups, in their colours."""
-        groups = drawn_groups(figure)
-        self._colour_section.set_visible(bool(groups))
-        self.colours.show_groups(groups)
 
     # ── changes ─────────────────────────────────────────────────────────
     def _emit(self) -> None:
@@ -414,14 +425,7 @@ class CNMOptions(QWidget):
             return
         low, high = sorted((self.fmin.value(), self.fmax.value()))
         wanted = set(self._run.modes_in(low, high))
-        blocked = self.modes.blockSignals(True)
-        try:
-            for i in range(self.modes.count()):
-                item = self.modes.item(i)
-                item.setCheckState(Qt.Checked if item.data(Qt.UserRole) in wanted
-                                   else Qt.Unchecked)
-        finally:
-            self.modes.blockSignals(blocked)
+        self._tick_only(wanted)
         self._check()
         self._emit()
 
@@ -466,7 +470,7 @@ class CNMOptions(QWidget):
         self.selection_checked.emit(0 < count <= MAX_MODES)
 
 
-class CNMSeriesOptions(QWidget):
+class CNMSeriesOptions(_ColouredGroups, QWidget):
     """Which mode is followed along a series, and how its bars are drawn and labelled.
 
     The label under each bar is the run's, written in the set-up dialog and
@@ -592,11 +596,6 @@ class CNMSeriesOptions(QWidget):
         self._labels = labels
         self.changed.emit()
 
-    def figure_drawn(self, figure) -> None:
-        """The figure now beside these controls: list its groups, in their colours."""
-        groups = drawn_groups(figure)
-        self._colour_section.set_visible(bool(groups))
-        self.colours.show_groups(groups)
 
     def set_options(self, options: Optional[dict]) -> None:
         if not options:

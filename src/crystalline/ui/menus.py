@@ -537,7 +537,6 @@ def _build_plot_menu(window) -> None:
     from crystalline.crystalio import available_plots, crystalclear_available
     from crystalline.crystalio.anscan import plottable as anscan_plottable
     from crystalline.crystalio.cnm import plottable as cnm_plottable
-    from crystalline.crystalio.cnm import series_plottable as cnm_series_plottable
     from crystalline.crystalio.pes import plottable as pes_plottable
     from crystalline.crystalio.vci import plottable as vci_plottable
 
@@ -604,7 +603,6 @@ def _build_plot_menu(window) -> None:
         )
         window._cnm_action.triggered.connect(window._open_cnm)
         plot_menu.addAction(window._cnm_action)
-    if cnm_series_plottable():
         window._cnm_series_action = QAction("A normal mode along a series…", window)
         window._cnm_series_action.setToolTip(
             "The characterisation of one normal mode followed along LOCMODES "

@@ -299,8 +299,5 @@ class CNMSeriesDialog(QDialog):
         self._problem.setVisible(bool(problem))
         self._buttons.button(QDialogButtonBox.Ok).setEnabled(not problem)
 
-    def title(self) -> str:
-        return cnm_options.series_title({**self.options(), "mode": "…"})
-
 
 __all__ = ["CNMDialog", "CNMSeriesDialog"]
