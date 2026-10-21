@@ -105,8 +105,8 @@ the local modes of its internal coordinates: how much of a mode is an N–O
 stretch, how much a C–N–O bend. The force constants of the local modes are
 shown in the Geometry panel (see [local modes](editing.md#local-modes)); the
 decomposition, its characterisation of the normal modes (CNM), is drawn from
-the **Plot** menu. Both entries need a CRYSTALClear newer than 0.2.17, and are
-not listed with an older one.
+the **Plot** menu. Both entries need CRYSTALClear 0.2.18, which is installed
+with CRYSTALLine, and are not listed with an older one.
 
 - **Characterisation of normal modes…** draws one stacked bar per normal mode
   of the open output, each split into the contributions of its internal

@@ -185,7 +185,7 @@ def test_a_row_that_does_not_hold_together_is_left_out():
 
 def test_a_number_that_overflowed_its_field_leaves_its_row_out():
     """CRYSTAL prints ***** for a number too wide for its column, which
-    CRYSTALClear after 0.2.17 reads as NaN: not a number, so not guessed at."""
+    CRYSTALClear 0.2.18 reads as NaN: not a number, so not guessed at."""
     from crystalline.crystalio.locmodes import _coordinate
 
     row = {"ic index": 1, "Atom 1 label": 1, "Atom 1": "O", "Atom 2 label": 2, "Atom 2": "O",
@@ -195,7 +195,7 @@ def test_a_number_that_overflowed_its_field_leaves_its_row_out():
 
 
 def test_the_tables_are_read_without_crystalclears_own_symmetry(monkeypatch):
-    """CRYSTALClear after 0.2.17 groups the coordinates by symmetry unless told
+    """CRYSTALClear 0.2.18 groups the coordinates by symmetry unless told
     not to, with a check of the geometry that raises on a file it cannot read
     (the synthetic run has no dimension block). The Measure section finds
     equivalent coordinates itself, so it asks for the tables alone; 0.2.17

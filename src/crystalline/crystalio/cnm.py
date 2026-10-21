@@ -2,7 +2,7 @@
 
 LOCMODES decomposes each normal mode into the local modes of the run's internal
 coordinates: how much of mode 100 is the N–O stretch, how much the C–N–O bend.
-CRYSTALClear (from the release after 0.2.17) reads that decomposition with
+CRYSTALClear (from 0.2.18) reads that decomposition with
 ``Crystal_output.get_locmodes`` and, asked to, sums it over the coordinates the
 crystal's symmetry makes equivalent — the eight N–O bonds of a P2₁/c cell with
 two molecules are one column rather than eight. It draws it two ways, and this
@@ -174,7 +174,7 @@ def _crystalclear():
 def plottable() -> bool:
     """Whether the installed CRYSTALClear can read a run's CNM and draw it.
 
-    Both arrived together, after 0.2.17: ``get_locmodes`` learnt to read the
+    Both arrived together, in 0.2.18: ``get_locmodes`` learnt to read the
     decomposition (and to group it by symmetry, its ``symmetry`` argument) in
     the same change that added ``plot_cry_cnm``. 0.2.17 reads the local modes
     the Measure section shows, and offers no CNM.
@@ -204,7 +204,7 @@ def cnm_run(path: str) -> CNMRun:
     from CRYSTALClear.units import thz_to_cm
 
     if not plottable():
-        raise RuntimeError("the CNM needs a CRYSTALClear newer than 0.2.17")
+        raise RuntimeError("the CNM needs CRYSTALClear 0.2.18 or later")
     with contextlib.redirect_stdout(io.StringIO()):  # it prints as it parses
         output = Crystal_output(path)
         note = None

@@ -1,6 +1,6 @@
 """The characterisation of normal modes (CNM) of a LOCMODES run, and its figures.
 
-CRYSTALClear reads and draws it from the release after 0.2.17; with 0.2.17 the
+CRYSTALClear reads and draws it from 0.2.18; with 0.2.17 the
 figures are not offered, and the tests that draw are skipped. They draw from a
 stand-in for its ``Crystal_output`` — the decomposition as a table, the
 frequencies — rather than from a run: the synthetic H₂O₂ output has a CNM but
@@ -17,7 +17,7 @@ from crystalline.crystalio import cnm
 from crystalline.crystalio.cnm import CNMRun
 
 _DRAWS = pytest.mark.skipif(not cnm.plottable(),
-                            reason="CRYSTALClear 0.2.17 draws no CNM")
+                            reason="CRYSTALClear before 0.2.18 draws no CNM")
 
 
 def _run(groups=("1 NO", "2 NO", "9 CH"), frequencies=(100.0, 205.0, 310.0, 1500.0),

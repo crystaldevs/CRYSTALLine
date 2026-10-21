@@ -22,7 +22,7 @@ does not hold together — atoms that are not numbers, a cell index that is not
 three of them, a value that is not a number — is left out rather than guessed
 at. CRYSTALClear 0.2.17 drops a cell index printed with no spaces at all,
 ``(-1-1-1)``, and shifts the rest of that row one column left: such a row is
-one of these. The release after it reads those rows, and gives a number that
+one of these. 0.2.18 reads those rows, and gives a number that
 overflowed its field (``*****``) as NaN, which is not a number either.
 
 That release can also group the coordinates by the crystal's symmetry, a check
@@ -122,11 +122,12 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
 
 
 def reads_by_symmetry() -> bool:
-    """Whether ``get_locmodes`` takes ``symmetry``: CRYSTALClear after 0.2.17.
+    """Whether ``get_locmodes`` takes ``symmetry``: CRYSTALClear 0.2.18 on.
 
     That release reads the rows 0.2.17 drops, and can group the coordinates
-    by the crystal's symmetry; it is still called 0.2.17 until it is released,
-    so it is known by what it takes, never by its version.
+    by the crystal's symmetry. It is known by what it takes, not by its
+    version: a copy of CRYSTALClear's ``main`` installed before the release
+    carried the same version number as the one before.
     """
     try:
         from CRYSTALClear.crystal_io import Crystal_output
@@ -144,7 +145,7 @@ def reads_by_symmetry() -> bool:
 def _tables_only() -> dict:
     """``get_locmodes``'s arguments for the tables alone.
 
-    ``symmetry=False`` where it takes one (CRYSTALClear after 0.2.17), which
+    ``symmetry=False`` where it takes one (CRYSTALClear 0.2.18 on), which
     otherwise groups the coordinates by symmetry by default: nothing here uses
     the groups, and the check behind them raises on an output whose geometry
     it cannot read.

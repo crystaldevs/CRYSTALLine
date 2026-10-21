@@ -95,13 +95,24 @@ def _crystalclear_features() -> Result:
         from CRYSTALClear.crystal_io import Crystal_output
     except Exception as exc:  # noqa: BLE001
         return ("CRYSTALClear features", False, f"unavailable ({exc})")
+    notes = []
     missing = [name for name in ("get_ADP", "get_calculation_info")
                if not hasattr(Crystal_output, name)]
     if missing:
+        notes.append(f"no {', '.join(missing)} — thermal ellipsoids and some Info "
+                     f"rows will be missing")
+    # The LOCMODES plots (0.2.18) are left out of the Plot menu without a word
+    # when the installed CRYSTALClear cannot draw them; this is where it is said.
+    from crystalline.crystalio import cnm
+
+    if not cnm.plottable():
+        notes.append("no characterisation of normal modes (0.2.18) — the CNM "
+                     "plots of a LOCMODES run will not be offered")
+    if notes:
         return ("CRYSTALClear features", None,
-                f"no {', '.join(missing)} — thermal ellipsoids and some Info rows "
-                f"will be missing. Upgrade with: pip install -U CRYSTALClear")
-    return ("CRYSTALClear features", True, "ADP and calculation info available")
+                "; ".join(notes) + ". Upgrade with: pip install -U CRYSTALClear")
+    return ("CRYSTALClear features", True,
+            "ADP, calculation info and the CNM plots available")
 
 
 def _display() -> Result:

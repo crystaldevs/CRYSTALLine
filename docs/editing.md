@@ -112,9 +112,9 @@ over a row gives the coordinate as CRYSTAL numbers it, with the cell of each
 atom outside the reference one and CRYSTAL's own value, which for some
 coordinates is not the plain angle of the atoms. A measurement that is none of
 the internal coordinates leaves the four columns empty, and sorts below the
-rest. Reading the section needs CRYSTALClear 0.2.17 or later; 0.2.17 leaves out
-a coordinate whose cell index CRYSTAL prints with no spaces, as `(-1-1-1)`,
-which the release after it reads. How much of each normal mode every internal
+rest. Reading the section needs CRYSTALClear 0.2.18, which is installed with
+CRYSTALLine (0.2.17 reads it too, but leaves out a coordinate whose cell index
+CRYSTAL prints with no spaces, as `(-1-1-1)`). How much of each normal mode every internal
 coordinate is, the same section's characterisation of normal modes, is drawn
 from the Plot menu (see [local modes](plots.md#local-modes)).
 
