@@ -85,27 +85,15 @@ def _conventional_expansion(
     if not structure.is_periodic or np.allclose(structure.cell, 0.0):
         return identity
 
-    # Lazy imports: keep `core` importable without pymatgen/ase build tools.
+    # Lazy import: keep `core` importable without ase's build tools.
     from ase.build import make_supercell
-    from pymatgen.io.ase import AseAtomsAdaptor
-    from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-    pmg = AseAtomsAdaptor().get_structure(source)
-    sga = SpacegroupAnalyzer(pmg, symprec=symprec)
-
-    # Only expand when the loaded cell really is the primitive one; if it is
-    # already the conventional cell (or otherwise not primitive), it is its own
-    # conventional cell — expanding again would wrongly multiply the atoms.
-    primitive = sga.find_primitive()
-    if primitive is None or len(source) != len(primitive):
+    matrix = _centring_matrix(source, symprec)
+    if matrix is None or abs(int(round(np.linalg.det(matrix)))) <= 1:
+        # A P lattice, a cell that is already conventional, or one that is not
+        # the primitive cell of a standard one: it is drawn as it is, since
+        # expanding it would multiply the atoms for nothing.
         return identity
-
-    # M maps primitive → conventional lattice vectors, in the lattice basis
-    # (orientation-independent, so it applies to the loaded cell as-is).
-    conv_to_prim = np.asarray(sga.get_conventional_to_primitive_transformation_matrix(), dtype=float)
-    matrix = np.rint(np.linalg.inv(conv_to_prim)).astype(int)
-    if abs(int(round(np.linalg.det(matrix)))) <= 1:
-        return identity  # P lattice: conventional == primitive
 
     tagged = source.copy()
     tagged.set_array(_SOURCE_INDEX_KEY, np.arange(len(source)))
@@ -251,6 +239,68 @@ def _replicate_modes(modes, mapping, offsets) -> PhononModes:
 # that simply has no ADPs — still returns the three-value form the caller asked
 # for, instead of a two-value one it would fail to unpack.
 _NO_PAYLOAD = object()
+
+
+def _centring_matrix(atoms, symprec: float) -> Optional[np.ndarray]:
+    """The integer ``M`` with ``conventional_vectors = M · loaded_vectors``.
+
+    From spglib's dataset *of the loaded cell*: its ``transformation_matrix``
+    ``P`` takes that basis to the standard conventional one, ``(a_s b_s c_s) =
+    (a b c) P⁻¹``, so ``M = (P⁻¹)ᵀ`` for vectors held as rows. Not pymatgen's
+    conventional-to-primitive matrix, which relates pymatgen's own two standard
+    cells and fits a loaded cell only when CRYSTAL chose the same primitive
+    vectors. For β-PVDF's A-centred cell, with a along the chain, it does not,
+    and gives a doubled cell at 117°, 117° and 55° instead of the orthorhombic
+    box.
+
+    ``None`` when there is no symmetry to go on, or when ``M`` is not an integer
+    matrix — the loaded cell is then not the primitive cell of a standard one.
+    """
+    try:
+        import spglib
+
+        dataset = spglib.get_symmetry_dataset(
+            (atoms.cell.array, atoms.get_scaled_positions(wrap=False), atoms.numbers),
+            symprec=symprec)
+        if dataset is None:
+            return None
+        exact = np.linalg.inv(np.asarray(dataset.transformation_matrix, dtype=float)).T
+    except Exception:  # noqa: BLE001 - no symmetry found: the cell is drawn as loaded
+        return None
+    matrix = np.rint(exact)
+    if not np.allclose(exact, matrix, atol=1e-6):
+        return None
+    return _facing_the_loaded_cell(matrix.astype(int), np.asarray(atoms.cell.array))
+
+
+# The half turns of a cell about one of its own axes: two vectors reversed.
+_HALF_TURNS = ((1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1))
+
+
+def _facing_the_loaded_cell(matrix: np.ndarray, loaded: np.ndarray) -> np.ndarray:
+    """``matrix``, turned half a turn if that points its vectors the loaded cell's way.
+
+    spglib's basis can have two vectors reversed: the same lattice, the same
+    setting, but a box drawn on the far side of the origin from the atoms
+    CRYSTAL placed. Only the half turns that leave the cell's lengths and angles
+    exactly as they are qualify, so a setting's own conventions — an obtuse
+    monoclinic β, say — are kept; of those, the one whose vectors lie closest to
+    the loaded cell's, each to the one of the same name, is taken.
+    """
+    vectors = matrix @ loaded
+    metric = vectors @ vectors.T
+    tolerance = 1e-6 * max(1.0, float(np.abs(metric).max()))
+    best, best_score = matrix, None
+    for signs in _HALF_TURNS:
+        turn = np.diag(signs)
+        if not np.allclose(turn @ metric @ turn, metric, atol=tolerance):
+            continue
+        turned = turn @ vectors
+        score = sum(float(np.dot(t, l) / (np.linalg.norm(t) * np.linalg.norm(l)))
+                    for t, l in zip(turned, loaded))
+        if best_score is None or score > best_score + 1e-9:
+            best, best_score = turn @ matrix, score
+    return best
 
 
 def to_conventional(structure: Structure, symprec: float = 1e-2) -> Structure:
