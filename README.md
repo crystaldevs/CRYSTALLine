@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="CRYSTALLine" width="440">
+  <img src="https://raw.githubusercontent.com/crystaldevs/CRYSTALLine/main/docs/logo.png" alt="CRYSTALLine" width="440">
 </p>
 
 <p align="center">
@@ -55,7 +55,7 @@ The [documentation](https://crystaldevs.github.io/CRYSTALLine/) describes each
 of these in turn.
 
 <p align="center">
-  <img src="docs/screen1.png" alt="The CRYSTALLine main window" width="900">
+  <img src="https://raw.githubusercontent.com/crystaldevs/CRYSTALLine/main/docs/screen1.png" alt="The CRYSTALLine main window" width="900">
 </p>
 
 ## License

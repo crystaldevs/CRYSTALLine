@@ -332,6 +332,29 @@ def representations() -> Tuple[Tuple[str, str], ...]:
                  if hasattr(CCplt, PLOT_FUNCTIONS[key]))
 
 
+#: How wide the potential is drawn, in points: CRYSTALClear's own width for it.
+DEFAULT_LINEWIDTH = 2.0
+
+
+def scale_line_widths(ax, linewidth: float, drawn_at: float = DEFAULT_LINEWIDTH) -> None:
+    """Draw the potential ``linewidth`` wide, and everything else in proportion.
+
+    The plotters draw the potential at ``drawn_at`` and the states finer — the
+    wavefunctions at half of it, the levels thinner still — so one number, the
+    potential's width, sets all of them and keeps that hierarchy.
+    """
+    from matplotlib.collections import LineCollection
+
+    factor = float(linewidth) / float(drawn_at)
+    if factor == 1.0:
+        return
+    for line in ax.get_lines():
+        line.set_linewidth(line.get_linewidth() * factor)
+    for collection in ax.collections:
+        if isinstance(collection, LineCollection):
+            collection.set_linewidths([w * factor for w in collection.get_linewidths()])
+
+
 def plot_pes(
     out,
     *,
@@ -347,6 +370,7 @@ def plot_pes(
     scale_wf: Optional[float] = None,
     legend: bool = True,
     quantity: str = "anharmonic",
+    linewidth: float = DEFAULT_LINEWIDTH,
 ):
     """Draw a cut through ``out``'s PES and return the figure.
 
@@ -356,7 +380,8 @@ def plot_pes(
     edge of the window says less than the extrapolation needed to contain it.
 
     ``representation`` chooses between the contour map and the 3D surface, and
-    is ignored by a one-mode cut, which is a curve either way.
+    is ignored by a one-mode cut, which is a curve either way; ``linewidth``
+    (see :func:`scale_line_widths`) only means something on a one-mode cut.
     """
     from crystalline.crystalio.plotting import PlotUnavailable, _plot_module, _to_figure
 
@@ -387,6 +412,7 @@ def plot_pes(
         ))
         if levels:
             _levels_inside_the_well(figure.axes[0])
+        scale_line_widths(figure.axes[0], linewidth)
         return figure
 
     if modei is None or modej is None:
@@ -438,6 +464,7 @@ def _levels_inside_the_well(ax) -> None:
 
 
 __all__ = [
+    "DEFAULT_LINEWIDTH",
     "DEFAULT_NSTATES",
     "DEFAULT_WF_SCALE",
     "DEFAULT_RANGE",
@@ -446,6 +473,7 @@ __all__ = [
     "QUANTITIES",
     "REPRESENTATIONS",
     "representations",
+    "scale_line_widths",
     "PESMode",
     "PESPair",
     "PESRun",

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QSizePolicy, QSpinBox,
                                QVBoxLayout, QWidget)
 
 from crystalline.crystalio.pes import (
+    DEFAULT_LINEWIDTH,
     DEFAULT_NSTATES,
     DEFAULT_WF_SCALE,
     DEFAULT_RANGE,
@@ -104,20 +105,27 @@ class PESOptions(QWidget):
             "Opens at this run's level spacing, which is what they are read "
             "against."
         )
+        self._overlays = overlays
+
+        # How it is drawn, folded as on every other plot. A one-mode cut only:
+        # a map is read against its colourbar, and has no lines to widen.
+        look = Section(layout, "Appearance", collapsed=True)
+        self.linewidth = slider_row(
+            look, "Line width", DEFAULT_LINEWIDTH, 0.3, 4.0, 0.1, decimals=1,
+            on_change=lambda _value: self.changed.emit(),
+        )
+        self.linewidth.setToolTip(
+            "The potential's width, in points; the states are drawn finer, "
+            "in proportion."
+        )
         # As on a spectrum: named by default, off when the box gets in the
-        # way. Here among the overlays, because the legend names *them* — the
-        # harmonic parabola and the states drawn over the potential — and a
-        # contour map has a colourbar rather than a legend, so a pair cut has
-        # no use for it either.
+        # way of what it names.
         self.legend = QCheckBox("Legend")
         self.legend.setChecked(True)
-        self.legend.setToolTip(
-            "Name the curves drawn over the potential.\n"
-            "A one-mode cut only; a map is read against its colourbar."
-        )
+        self.legend.setToolTip("Name the curves drawn over the potential.")
         self.legend.toggled.connect(lambda _on: self.changed.emit())
-        overlays.add_wide(self.legend)
-        self._overlays = overlays
+        look.add_wide(self.legend)
+        self._look = look
 
         surface = Section(layout, "Surface")
         self.quantity = QComboBox()
@@ -154,6 +162,7 @@ class PESOptions(QWidget):
             "nstates": self.nstates.value(),
             "scale_wf": self.scale_wf.value() or None,
             "legend": self.legend.isChecked(),
+            "linewidth": self.linewidth.value(),
             "quantity": self.quantity.currentData(),
             "representation": self.representation.currentData() or "map",
         }
@@ -170,6 +179,8 @@ class PESOptions(QWidget):
                 self.nstates.setValue(int(options["nstates"]))
             if options.get("scale_wf"):
                 self.scale_wf.setValue(float(options["scale_wf"]))
+            if options.get("linewidth") is not None:
+                self.linewidth.setValue(float(options["linewidth"]))
             for name in ("harmonic", "levels", "legend"):
                 if options.get(name) is not None:
                     getattr(self, name).setChecked(bool(options[name]))
@@ -187,6 +198,7 @@ class PESOptions(QWidget):
         # Hidden, not greyed: a one-mode cut has no surface at all, and a
         # greyed section still asks to be read before it can be dismissed.
         self._overlays.set_visible(one_mode)
+        self._look.set_visible(one_mode)
         self._surface.set_visible(not one_mode)
         self._set_wavefunction_rows(one_mode and self.levels.isChecked())
 

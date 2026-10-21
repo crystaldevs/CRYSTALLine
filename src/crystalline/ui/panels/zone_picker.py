@@ -87,8 +87,8 @@ _CHAIN_AXIS_REACH = 1.6
 
 # A label sits just clear of its own marker, as a multiple of the marker's
 # radius — both are world lengths, so the gap on screen is the same at every
-# zoom. The numbers that used to ride along underneath now go in the corner
-# legend, which is what lets the labels sit this close without colliding.
+# zoom. The numbers go in the corner legend rather than under the labels,
+# which is what lets the labels sit this close without colliding.
 _LABEL_OFFSET = 2.4
 
 # One colour per leg of the path, reused around when a path is longer than the
@@ -631,13 +631,13 @@ class ZonePickerDialog(QDialog):
         count — rotating the zone by starting on the background is the most
         ordinary thing anyone does here.
         """
-        import vtk
+        from vtkmodules.vtkRenderingCore import vtkPropPicker
 
         x, y = self._view.plotter.iren.interactor.GetEventPosition()
         start = getattr(self, "_press_at", None)
         if start is None or abs(x - start[0]) > _CLICK_SLOP or abs(y - start[1]) > _CLICK_SLOP:
             return
-        picker = vtk.vtkPropPicker()
+        picker = vtkPropPicker()
         picker.PickProp(x, y, self._view.plotter.renderer)
         hit = picker.GetViewProp()
         if any(hit is actor for actor, _centre in self._actors.values()):
@@ -1043,9 +1043,9 @@ def _text_width(text: str, size: int, dpi: int) -> int:
     """
     if not text:
         return 0
-    import vtk
+    from vtkmodules.vtkRenderingCore import vtkTextProperty, vtkTextRenderer
 
-    prop = vtk.vtkTextProperty()
+    prop = vtkTextProperty()
     prop.SetFontSize(size)
     font = unicode_font()
     if font is not None:
@@ -1053,7 +1053,7 @@ def _text_width(text: str, size: int, dpi: int) -> int:
         prop.SetFontFile(font)
     box = [0, 0, 0, 0]
     try:
-        if vtk.vtkTextRenderer.GetInstance().GetBoundingBox(prop, text, box, dpi):
+        if vtkTextRenderer.GetInstance().GetBoundingBox(prop, text, box, dpi):
             return int(box[1] - box[0]) + 1
     except Exception:  # noqa: BLE001 - no text renderer: fall back to an estimate
         pass
@@ -1071,10 +1071,10 @@ def _billboard(plotter, position, text: str, colour: str, size: int,
     say why. A billboard actor has no such opinion: it faces the camera, sits
     where it is put, and is always drawn.
     """
-    import vtk
     from pyvista import Color
+    from vtkmodules.vtkRenderingCore import vtkBillboardTextActor3D
 
-    actor = vtk.vtkBillboardTextActor3D()
+    actor = vtkBillboardTextActor3D()
     actor.SetInput(text)
     actor.SetPosition(*[float(v) for v in position])
     actor.SetDisplayOffset(int(offset[0]), int(offset[1]))
@@ -1132,10 +1132,10 @@ def _enable_mathtext() -> None:
     """Let VTK render ``$\\Gamma$`` and ``$k_x$`` instead of nothing.
 
     VTK's built-in font carries no Greek and cannot set a subscript, so those
-    labels came out blank. Its MathText backend can do both — but only if
+    labels would come out blank. Its MathText backend can do both — but only if
     ``vtkRenderingMatplotlib`` has been imported, which registers it. Importing
-    it is the whole of the fix, and it is not an error if the build lacks it:
-    the labels fall back to plain text.
+    it is all it takes, and it is not an error if the build lacks it: the labels
+    fall back to plain text.
     """
     try:
         import vtkmodules.vtkRenderingMatplotlib as _mathtext  # noqa: F401

@@ -638,6 +638,10 @@ class PhononPanel(QWidget):
         """Public stop — called when the user starts editing the structure."""
         self._stop()
 
+    def play(self) -> None:
+        """Public play — a peak clicked in a spectrum asks to see its mode move."""
+        self._play()
+
     def invalidate_on_edit(self, positions: np.ndarray) -> None:
         """Reconcile the panel after a structural edit.
 

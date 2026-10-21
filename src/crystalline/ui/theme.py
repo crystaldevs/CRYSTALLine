@@ -455,6 +455,14 @@ def stylesheet(palette: Palette) -> str:
         image: url("{close_hover}");
         background: {p.border};
     }}
+    /* A row of tabs too long for its bar scrolls with a swipe or the wheel, and
+       to whichever tab is chosen; what is cut off at either end fades out (see
+       SlidingTabBar). Qt's two scroll arrows are given no width, so they take
+       no room and draw nothing, while the bar still scrolls as it does with
+       them. The tear Qt draws at a cut-off edge goes with them. */
+    SlidingTabBar::scroller {{ width: 0px; }}
+    SlidingTabBar QToolButton {{ border: none; padding: 0px; margin: 0px; }}
+    SlidingTabBar::tear {{ image: none; width: 0px; border: none; }}
 
     /* Dock tabs. A second selector for the same tab: these are not inside a
        QTabWidget, so the rules above cannot reach them, and the declarations
@@ -490,9 +498,9 @@ def stylesheet(palette: Palette) -> str:
         padding: 5px 8px;
     }}
     QToolBar::separator {{ background: {p.border}; width: 1px; margin: 5px 8px; }}
-    /* Text actions (Undo/Redo) sat as bare words next to the coloured chips,
-       which read as an unfinished row. Give them the same chip shape so the
-       toolbar is one kind of thing throughout. */
+    /* Text actions (Undo/Redo) get the same chip shape as the coloured chips,
+       so the toolbar is one kind of thing throughout; as bare words beside
+       them they would read as an unfinished row. */
     QToolBar QToolButton {{
         background: transparent;
         border: 1px solid transparent;
@@ -607,7 +615,7 @@ def stylesheet(palette: Palette) -> str:
     QToolBar QToolButton[chip="ghost"]:pressed {{ background: {p.border}; }}
 
     /* The Plots window: the figure on an edged sheet, flat buttons below. */
-    QFrame#plotPaper {{ background: #ffffff; border: 1px solid {p.border}; }}
+    QFrame#plotPaper {{ background: {p.scene}; border: 1px solid {p.border}; }}
     QFrame#plotToolSeparator {{ background: {p.border}; border: none; }}
     QToolButton[role="plotTool"] {{
         background: transparent; border: none; border-radius: 5px; padding: 3px;
@@ -655,13 +663,12 @@ def stylesheet(palette: Palette) -> str:
 def monochrome_icon(name: str, color: str, size: int = 18):
     """A bundled single-colour SVG glyph, drawn in ``color``, as a ``QIcon``.
 
-    The undo/redo icons used to come from ``QIcon.fromTheme`` with a
-    ``QStyle.standardIcon`` fallback. That is null on macOS (there is no
-    freedesktop icon theme) and the fallback is drawn by the *style* — so
-    switching the app to Fusion, which a stylesheet needs to be honoured
-    consistently, silently replaced them with nothing and the toolbar fell back
-    to showing the words. Drawing our own removes the platform from the question
-    entirely.
+    Not ``QIcon.fromTheme`` with a ``QStyle.standardIcon`` fallback: the first
+    is null on macOS (there is no freedesktop icon theme) and the fallback is
+    drawn by the *style* — so under Fusion, which a stylesheet needs to be
+    honoured consistently, the icons come out as nothing and the toolbar falls
+    back to showing the words. Drawing our own removes the platform from the
+    question entirely.
 
     The colour is substituted at load, so one file serves both themes: a glyph
     baked dark would vanish into the dark toolbar.

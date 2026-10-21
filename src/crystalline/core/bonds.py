@@ -138,8 +138,8 @@ def replicate_polyhedra(
     Coordination is analysed on the clean unit cell, but the *displayed* cell is
     usually boundary-completed: each atom sitting on a face/edge/corner is drawn
     again at every cell position it touches. Those image atoms are not in the
-    analysed cell, so they used to come out bare — a rutile cell shows 16 Ti but
-    drew only the 2 polyhedra of the analysed cell.
+    analysed cell, so on their own they would come out bare — a rutile cell
+    shows 16 Ti, but only 2 of them are in the analysed cell.
 
     A periodic image of a coordination polyhedron is just that polyhedron
     translated by a lattice vector, so for each analysed centre this finds every

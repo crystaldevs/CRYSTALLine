@@ -201,7 +201,7 @@ class MainWindow(QMainWindow):
         self._file_tabs.setTabsClosable(True)
         self._file_tabs.setMovable(True)
         self._file_tabs.setElideMode(Qt.ElideMiddle)  # keep both ends of a long run name
-        self._file_tabs.setUsesScrollButtons(True)
+        self._file_tabs.setUsesScrollButtons(True)  # scrolls when crowded; arrows hidden by the theme
         self.setCentralWidget(self._file_tabs)
 
         # The panels of every tab live in the docks, in a stack per dock that
@@ -1351,10 +1351,9 @@ class MainWindow(QMainWindow):
                 "Load a CRYSTAL .out from a frequency calculation to plot its spectra.",
             )
             return
-        # Read once, for the list and for the plot alike. The list used to come
-        # from a read of its own and the plot from another after OK: the whole
-        # output parsed twice, with the window frozen for both — 560 ms on a
-        # 3.5 MB anharmonic run, and it grows with the output.
+        # Read once, for the list and for the plot alike, rather than once for
+        # each: a parse of the whole output takes 560 ms on a 3.5 MB anharmonic
+        # run, and it grows with the output.
         self._read_for_dialog("spectra", (path,), lambda: load_spectra(path),
                               "Reading the spectra…",
                               lambda data: self._show_spectra(path, data), "Spectra failed")
@@ -1541,10 +1540,10 @@ class MainWindow(QMainWindow):
     def _open_electronic(self) -> None:
         """A band structure, a DOS or both, with every option in view.
 
-        They used to be two one-click entries drawn at CRYSTALClear's defaults —
-        an x axis of k-distances, energies only relative, no way to put the two
-        side by side. They read files of their own, from a .d3 run, so the
-        dialog looks beside the loaded output for them first.
+        A dialog rather than one-click entries drawn at CRYSTALClear's defaults,
+        which give an x axis of k-distances, energies only relative, and no way
+        to put the two side by side. They read files of their own, from a .d3
+        run, so the dialog looks beside the loaded output for them first.
         """
         from pathlib import Path
 
@@ -1894,8 +1893,8 @@ class MainWindow(QMainWindow):
         # The previously shown orbital goes first, and the view is settled
         # second: every step below re-derives the displayed cell, and each one
         # would otherwise kick off a full rebuild of an orbital that is about to
-        # be replaced anyway — which is no longer cheap now that a tiled orbital
-        # is sampled as finely per cell as a single one.
+        # be replaced anyway — which is not cheap, since a tiled orbital is
+        # sampled as finely per cell as a single one.
         self._clear_orbital()
         self._show_orbital_structure(data)
         tiling = self._tile_to_period(choice["kpoint"], data.cell) if choice["tile"] else None
@@ -1993,9 +1992,9 @@ class MainWindow(QMainWindow):
         At once, if this version of the files has been read for ``kind``
         before (see :mod:`~crystalline.crystalio.remembered`): opening the same
         dialog on the same output again is how a second plot is made, and it
-        used to read the whole output again. Otherwise on a worker, behind the
-        spinner — no longer with the window frozen and a wait cursor, which on
-        a large output looked like a hang.
+        need not read the whole output again. Otherwise on a worker, behind the
+        spinner, not with the window frozen under a wait cursor, which on a
+        large output looks like a hang.
         """
         from crystalline.crystalio import remembered
 
@@ -2323,6 +2322,9 @@ class MainWindow(QMainWindow):
         if self.phonon_panel.select_mode(index):
             self._phonon_dock.show()
             self._phonon_dock.raise_()
+            # Moving, not only selected: the answer to "what is this band?" is
+            # the structure doing it, and a selected mode at rest is a list row.
+            self.phonon_panel.play()
 
     def _reveal_plot_dock(self) -> None:
         """Show the Plots dock — floating, the first time a plot is built.
@@ -2341,9 +2343,9 @@ class MainWindow(QMainWindow):
             tab.plots_open = True  # this file's plots are open: bring them back with it
         if not self._plot_dock_floated:
             self._plot_dock_floated = True
-            # Placed and sized before it is shown: shown first, it came up
+            # Placed and sized before it is shown: shown first, it comes up
             # where a docked panel would be, at the size of one, and then
-            # jumped to where it belongs.
+            # jumps to where it belongs.
             self._plot_dock.setFloating(True)
             screen = self.screen()
             where = _floating_plot_geometry(
@@ -3700,9 +3702,9 @@ class MainWindow(QMainWindow):
             ("png", "PNG frame sequence", True),
             ("jpg", "JPEG frame sequence", True),
         ]
-        # Sizes, as before — the frames are drawn by the view on screen, but they
-        # are fitted to whichever of these is chosen rather than coming out the
-        # shape the window happens to be. A view with docks either side of it is
+        # Sizes, as for a picture — the frames are drawn by the view on screen,
+        # but they are fitted to whichever of these is chosen rather than coming
+        # out the shape the window happens to be. A view with docks either side of it is
         # taller than it is wide, and a portrait animation is letterboxed in
         # black by every viewer there is.
         from crystalline.viz.export import _window_size

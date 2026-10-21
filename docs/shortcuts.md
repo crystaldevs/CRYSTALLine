@@ -73,7 +73,7 @@ only in editing mode.
 | Next tab / Previous tab | {kbd}`Ctrl+Tab` / {kbd}`Ctrl+Shift+Tab` |
 | Along a/b/c axis, Along a\*/b\*/c\* | the same as the **VIEW** chips |
 
-On macOS the tabs are stepped through with {kbd}`⌘⇧]` and {kbd}`⌘⇧[`.
+On macOS the tabs are stepped through with {kbd}`⌃Tab` and {kbd}`⌃⇧Tab`, as in Safari, or with {kbd}`⌘⇧]` and {kbd}`⌘⇧[`.
 
 ## Plot
 

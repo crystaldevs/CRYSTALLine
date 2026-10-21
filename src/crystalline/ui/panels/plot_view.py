@@ -241,6 +241,20 @@ def _alive(widget) -> bool:
 # size came out a different size for every kind of plot.
 _CONTROLS_WIDTH = 400
 
+# Whether the controls beside a plot are shown: one choice for every plot, so
+# that folding them away for one does not leave the next at another size, and
+# remembered from one session to the next. Read on first use.
+_SHOWN = {"value": None}
+
+
+def _controls_shown() -> bool:
+    if _SHOWN["value"] is None:
+        from crystalline.ui import preferences
+
+        _SHOWN["value"] = preferences.section_open("plots/controls", True)
+    return _SHOWN["value"]
+
+
 # The widest column made so far, which every column is given: one whose
 # controls need more than _CONTROLS_WIDTH (larger fonts, another platform)
 # widens the rest to match rather than standing out from them.
@@ -271,6 +285,33 @@ def _finish(figure) -> None:
         figure_style.finish(figure)
     except Exception:  # noqa: BLE001 - likewise
         pass
+
+
+def _on_screen(figure) -> None:
+    """``figure`` in the window's colours: the 3D view's background, the theme's ink.
+
+    Only on screen. A saved figure is put back on paper first (see
+    :meth:`_PlotTab._save_figure`): white, in the house ink, as it goes into a
+    paper whichever theme it was looked at in.
+    """
+    try:
+        from PySide6.QtWidgets import QApplication
+
+        from crystalline.crystalio import figure_style
+        from crystalline.ui import theme
+
+        palette = theme.active_palette(QApplication.instance())
+        figure_style.to_screen(figure, background=palette.scene, ink=palette.text,
+                               rule=palette.border)
+    except Exception:  # noqa: BLE001 - a figure on paper is still a figure
+        pass
+
+
+def _release_minimum(window) -> None:
+    if _alive(window):
+        window.setMinimumWidth(0)
+        if window.layout() is not None:
+            window.layout().activate()
 
 
 def _unfolded_width(controls: QWidget) -> int:
@@ -322,6 +363,7 @@ class _PlotTab(QWidget):
         )
 
         _finish(figure)
+        _on_screen(figure)
         self.figure = figure
         self._title = title
         self._on_pick = on_pick
@@ -368,7 +410,7 @@ class _PlotTab(QWidget):
         sheet = QVBoxLayout(self._paper)
         sheet.setContentsMargins(1, 1, 1, 1)
         sheet.addWidget(self.canvas)
-        across = QHBoxLayout()
+        across = self._across = QHBoxLayout()
         across.setContentsMargins(_PAPER_INSET, _PAPER_INSET, 0, 0)
         across.setSpacing(0)
         across.addWidget(self._paper, 1)
@@ -379,6 +421,8 @@ class _PlotTab(QWidget):
             across.addWidget(self.controls_column, 0)
         layout.addLayout(across, 1)
         layout.addWidget(self._build_toolbar())
+        if self.controls_column is not None:
+            self._show_controls(_controls_shown())
         if self._on_pick is not None:
             self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
             # Connected *after* the toolbar's own cursor handler (built above),
@@ -455,6 +499,14 @@ class _PlotTab(QWidget):
         row.addWidget(self._coords)
 
         row.addWidget(self._separator())
+        # Folds the controls away, for the figure to have the window to
+        # itself — and brings them back.
+        self._btn_controls = None
+        if self.controls_column is not None:
+            self._btn_controls = self._tool_button(
+                "plot-controls.svg", "Controls", "Hide the controls",
+                self._toggle_controls, checkable=True)
+            row.addWidget(self._btn_controls)
         # Only for a plot that knows how it was made and how to ask for new
         # options: everything else in this row acts on the figure as drawn,
         # while this one draws it again.
@@ -532,6 +584,65 @@ class _PlotTab(QWidget):
         controls.setMaximumWidth(_COLUMN["width"] - self._column_extra)
         return scroll
 
+    def _toggle_controls(self, shown: bool) -> None:
+        """Show or fold away the controls — for every plot, and next time too."""
+        from crystalline.ui import preferences
+
+        _SHOWN["value"] = bool(shown)
+        preferences.set_section_open("plots/controls", bool(shown))
+        self._show_controls(bool(shown))
+        # The column, less the margin the figure keeps at the window's edge
+        # without it: what the figure gains from it going is exactly that.
+        room = self.controls_column.width() - _PAPER_INSET
+        self._fit_window(room if shown else -room)
+
+    def _fit_window(self, change: int) -> None:
+        """The floating Plots window narrower or wider by the column, figure unchanged.
+
+        Folding the controls away is asked for to make the window smaller; the
+        same window with the figure stretched into the room they left was a
+        figure of another shape, which is what keeping one column for every
+        plot is there to prevent. Kept on the screen when it grows.
+        """
+        from PySide6.QtWidgets import QDockWidget
+
+        window = self.window()
+        if not isinstance(window, QDockWidget) or not window.isFloating():
+            return
+        frame = window.geometry()
+        width, x = frame.width() + change, frame.x()
+        screen = window.screen()
+        if screen is not None:
+            room = screen.availableGeometry()
+            width = min(width, room.width())
+            x = max(room.x(), min(x, room.right() - width + 1))
+        # The column has just gone, but the window's least width is still the
+        # one it had with it until its layout next runs: it would hold the
+        # window wide, and the figure would take the room after all. Lowered
+        # to fit; that next run puts the true one back.
+        if window.minimumWidth() > width:
+            window.setMinimumWidth(width)
+        window.setGeometry(x, frame.y(), width, frame.height())
+        # ...and handed back to the layout, or the window could not be made
+        # narrower by hand than this.
+        QTimer.singleShot(0, lambda: _release_minimum(window))
+
+    def _show_controls(self, shown: bool) -> None:
+        column = self.controls_column
+        if column is None:
+            return
+        column.setVisible(shown)
+        # Without the column the figure runs to the window's edge, and keeps
+        # the inset it has on the other side.
+        self._across.setContentsMargins(_PAPER_INSET, _PAPER_INSET,
+                                        0 if shown else _PAPER_INSET, 0)
+        button = getattr(self, "_btn_controls", None)
+        if button is not None:
+            blocked = button.blockSignals(True)
+            button.setChecked(shown)
+            button.blockSignals(blocked)
+            button.setToolTip("Hide the controls" if shown else "Show the controls")
+
     def _match_column(self) -> None:
         """Take the width every column now has, if another plot has widened it."""
         column = self.controls_column
@@ -541,6 +652,8 @@ class _PlotTab(QWidget):
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
         self._match_column()
+        if self.controls_column is not None and self.controls_column.isHidden() == _controls_shown():
+            self._show_controls(_controls_shown())    # folded or unfolded in another tab
         super().showEvent(event)
 
     def _controls_settled(self) -> None:
@@ -609,6 +722,9 @@ class _PlotTab(QWidget):
                 glyph = button.property("glyph")
                 if glyph:
                     button.setIcon(self._icon(glyph))
+            # The figure too, which is in the theme's colours on screen.
+            _on_screen(self.figure)
+            self.canvas.draw_idle()
 
     def _set_coords(self, message: str) -> None:
         self._coords.setText(message or "")
@@ -632,10 +748,17 @@ class _PlotTab(QWidget):
         )
         if not path:
             return
+        from crystalline.crystalio.figure_style import to_paper
+
+        # Saved on paper, white and in ink, whatever the window looks like.
+        to_paper(self.figure)
         try:
             self.figure.savefig(path, format=ext, dpi=dpi, transparent=transparent)
         except Exception as exc:  # noqa: BLE001 - surface any write/encode error
             QMessageBox.critical(self, "Save failed", f"Could not save the plot:\n{exc}")
+        finally:
+            _on_screen(self.figure)
+            self.canvas.draw_idle()
 
     def _ask_save_options(self, filetypes: dict, default_ext: str):
         """Prompt for ``(ext, dpi, transparent)``; ``None`` if cancelled.
@@ -721,6 +844,7 @@ class _PlotTab(QWidget):
 
         old_canvas, old_figure, old_nav = self.canvas, self.figure, self._nav
         _finish(figure)
+        _on_screen(figure)
         self.figure = figure
         if title is not None:
             self._title = title
@@ -855,7 +979,8 @@ class PlotPanel(QWidget):
         """
         widths = [tab.controls_column.width()
                   for tab in (self._tabs.widget(i) for i in range(self._tabs.count()))
-                  if tab is not None and tab.controls_column is not None]
+                  if tab is not None and tab.controls_column is not None
+                  and not tab.controls_column.isHidden()]
         return max(widths) if widths else 0
 
     def index_of(self, tab) -> int:

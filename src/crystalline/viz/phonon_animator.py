@@ -12,9 +12,9 @@ import numpy as np
 from crystalline.core.phonons import PhononMode, displaced_positions, frame_displacement
 from crystalline.viz.renderer import StructureRenderer
 
-# Default peak displacement in Angstrom. Chosen to match the motion the old
-# cell-normalised amplitude gave for a small molecule — the case that looked
-# right — now that the scale no longer shrinks with the number of atoms.
+# Default peak displacement in Angstrom, the same for any number of atoms:
+# about what a cell-normalised amplitude gives a small molecule, where it looks
+# right.
 DEFAULT_AMPLITUDE = 0.3
 
 
