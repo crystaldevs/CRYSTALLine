@@ -17,7 +17,6 @@ from typing import List, Optional, Sequence
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QHBoxLayout,
@@ -31,14 +30,7 @@ from PySide6.QtWidgets import (
 
 from crystalline.ui.panels.controls import chooser_size
 from crystalline.ui.panels.spectra_options import SpectraOptions
-from crystalline.crystalio.spectra import (
-    BROADENING_PARAMETERS,
-    DEFAULT_ETA,
-    DEFAULT_HWHM,
-    DEFAULT_STDEV,
-    LINESHAPES,
-    SpectrumKind,
-)
+from crystalline.crystalio.spectra import SpectrumKind
 
 
 # How little of a list is still a list: about eight rows, which is enough to
