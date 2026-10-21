@@ -569,3 +569,57 @@ def test_a_gamma_mode_carries_no_phase():
     _sup, sup_modes = tile_supercell(nacl, (2, 2, 2), modes)
 
     assert sup_modes[0].cell_phase is None
+
+
+def _beta_pvdf() -> Structure:
+    """β-PVDF's primitive cell as CRYSTAL writes it: A-centred Amm2, with a along
+    the chain and the two other vectors (b ± c)/2 of the conventional cell."""
+    cell = [[2.58333526, 0.0, 0.0],
+            [0.0, 4.299011035, 2.41263448],
+            [0.0, -4.299011035, 2.41263448]]
+    cartesian = [[0.0, -0.8894730710, -0.6495721069],
+                 [0.0, 0.8894730710, -0.6495721069],
+                 [0.0, 0.0, -0.0011322216],
+                 [1.29166763, 0.0, 0.8272198934],
+                 [1.29166763, -1.1059767769, 1.6744970233],
+                 [1.29166763, 1.1059767769, 1.6744970233]]
+    return Structure.from_ase(Atoms("HHCCFF", positions=cartesian, cell=cell, pbc=True))
+
+
+def test_a_centred_cell_written_in_crystal_s_own_basis_becomes_the_orthorhombic_box():
+    """CRYSTAL's primitive vectors are not pymatgen's, and pymatgen's matrix
+    between its own standard cells, applied to them, doubles the cell into a
+    box at 117°, 117° and 55°. The crystallographic cell is the one CRYSTAL
+    prints: a = 2.583, b = 8.598, c = 4.825 Å, all right angles."""
+    conventional = to_conventional(_beta_pvdf())
+
+    assert len(conventional) == 12
+    lengths_angles = conventional.to_ase().cell.cellpar()
+    assert np.allclose(lengths_angles, [2.58333526, 8.59802207, 4.82526896, 90, 90, 90],
+                       atol=1e-5)
+
+
+def test_the_conventional_box_points_the_way_the_loaded_cell_does():
+    """Each vector along its own axis, not reversed: a box on the far side of
+    the origin would put the atoms outside it."""
+    cell = np.asarray(to_conventional(_beta_pvdf()).cell)
+
+    assert np.allclose(cell, np.diag(np.diag(cell)), atol=1e-6)
+    assert np.all(np.diag(cell) > 0)
+
+
+def test_turning_the_box_keeps_an_obtuse_monoclinic_angle():
+    """Only half turns that leave the lengths and angles as they are: reversing
+    a alone with c would make β acute."""
+    from crystalline.core.cells import _facing_the_loaded_cell
+
+    beta = np.radians(111.0)
+    monoclinic = np.array([[5.0, 0.0, 0.0], [0.0, 6.0, 0.0],
+                           [7.0 * np.cos(beta), 0.0, 7.0 * np.sin(beta)]])
+    loaded = -monoclinic                                  # every vector reversed
+    matrix = _facing_the_loaded_cell(np.eye(3, dtype=int), loaded)
+    vectors = matrix @ loaded
+
+    from ase.geometry import cell_to_cellpar
+    assert np.allclose(cell_to_cellpar(vectors), cell_to_cellpar(loaded))
+    assert round(np.linalg.det(matrix)) == 1

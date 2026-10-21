@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 import tempfile
 from contextlib import contextmanager
 from typing import Optional, Sequence
@@ -115,8 +116,15 @@ _APPLICATION_TITLE = "CRYSTALLine — CRYSTAL structure & phonon viewer"
 # Geometry of the floating Plots window on the first plot: a fraction of the main
 # window's width (never below the minimum), 4:3, inset from its lower-right corner.
 # The figure's width, not the window's: the controls are added beside it, and at
-# 55% with them the window came out nearly as wide as the main one.
+# 55% with them the window would be nearly as wide as the main one.
 _PLOT_FLOAT_WIDTH_FRACTION = 0.45
+# Whether a 3D view made before the window was first on screen still draws once
+# it is. Not on Windows: there the window's first appearance replaces the native
+# window the view was bound to, and the view stays blank whatever is drawn in it,
+# while a view made with the window on screen draws. See
+# MainWindow._replace_views_made_unseen.
+_VIEWS_OUTLIVE_FIRST_SHOW = sys.platform != "win32"
+
 # How long an output's details wait after a file is shown: long enough for its
 # 3D view to settle at its size — the Phonons panel coming in narrows it — and
 # draw, which a worker busy in Python holds up; short enough that the Info
@@ -328,6 +336,38 @@ class MainWindow(QMainWindow):
         self._refresh_chrome()  # menus, toolbar and status bar, for the tab on screen
 
     # ── file tabs ───────────────────────────────────────────────────────
+
+    @guard()
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        QMainWindow.showEvent(self, event)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            # Once the window is on screen, not while it is still being put there.
+            QTimer.singleShot(0, self._replace_views_made_unseen)
+
+    def _replace_views_made_unseen(self) -> None:
+        """Give an empty tab whose view predates the window a view that draws.
+
+        The window's first tab is built in the constructor, before the window
+        has been shown, and on Windows its view is then bound to a native window
+        that showing the main window replaces (:data:`_VIEWS_OUTLIVE_FIRST_SHOW`).
+        Nothing drawn in it reaches the screen. A tab made now is built with the
+        window on screen, as every later tab is, so the empty one is swapped for
+        it before anything — a file, or atoms built — is put there.
+
+        Only an empty tab: one handed a structure at construction is left as it
+        is, since the window as the app opens it always starts empty.
+        """
+        if _VIEWS_OUTLIVE_FIRST_SHOW:
+            return
+        stale = [tab for tab in self._tabs
+                 if tab.built() and tab.made_unseen and tab.is_blank()]
+        if not stale:
+            return
+        self._add_tab()
+        for tab in stale:
+            self._close_tab(tab)
+        self._sync_welcome()
     def _create_tab(self, structure: Optional[Structure] = None,
                     settings=None) -> FileTab:
         """A new tab holding ``structure`` (or nothing): its state and its page.
@@ -445,6 +485,7 @@ class MainWindow(QMainWindow):
     def _build_tab_widgets(self, tab: FileTab) -> None:
         """One tab's 3D view and panels, wired to each other and to the window."""
         # The 3D view, inside the tab's page, and the phonon panel driving it.
+        tab.made_unseen = not self.isVisible()
         self.viewport = Viewport(tab.page)
         tab.page.layout().addWidget(self.viewport)
         if tab.page.isVisible():
