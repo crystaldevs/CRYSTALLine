@@ -122,7 +122,9 @@ makes equivalent, and equivalent coordinates share a local mode. A measurement
 that is not listed itself, but that an operation of the crystal carries onto a
 coordinate that is, shows that coordinate's local mode, in *italics*; hovering
 gives the coordinate and the operation, written as in the International Tables
-in the primitive cell's coordinates. Only the calculation's own symmetry is
+but with the coordinates named after the primitive cell's axes
+(`-a+1/2, b+1/2, -c+1/2`), so that they are not taken for the Cartesian *x*, *y*
+and *z* of the positions. Only the calculation's own symmetry is
 used: the operations found in the geometry are kept when there are as many as
 CRYSTAL used, and otherwise only those its local modes bear out, and an
 operation under which the local modes differ is never used.

@@ -1473,7 +1473,7 @@ def _describe_local(c: LocalCoordinate) -> str:
         f"mᵃ {c.mass:.3f} {mass_unit} · ωᵃ {c.frequency:.1f} cm⁻¹",
     ] + ([
         f"Not listed itself: by symmetry, the image of coordinate {c.number} — "
-        f"{c.symmetry} (in the primitive cell's coordinates) carries this "
+        f"{c.symmetry} (on the primitive cell's axes a, b, c) carries this "
         f"measurement onto it, and a symmetry of the crystal leaves a local mode "
         f"as it is."
     ] if c.symmetry else []))

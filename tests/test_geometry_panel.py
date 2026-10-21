@@ -1287,13 +1287,13 @@ def test_a_measurement_found_by_symmetry_is_marked_as_such(qapp, tmp_path):
     listed = _measure(panel, 0, 1)
     mirrored = _measure(panel, 2, 3)                      # the inversion's image, not listed
     assert [c.symmetry for c in listed.local] == [None]
-    assert [(c.number, c.symmetry) for c in mirrored.local] == [(1, "-x, -y, -z")]
+    assert [(c.number, c.symmetry) for c in mirrored.local] == [(1, "-a, -b, -c")]
     rows = panel._items()
     assert rows[1].text(_COL_K) == rows[0].text(_COL_K) == "7.000"
     assert rows[1].font(_COL_K).italic() and not rows[0].font(_COL_K).italic()
-    assert "Not listed itself" in rows[1].toolTip(0) and "-x, -y, -z" in rows[1].toolTip(0)
+    assert "Not listed itself" in rows[1].toolTip(0) and "-a, -b, -c" in rows[1].toolTip(0)
 
     target = tmp_path / "pair.csv"
     panel.export_csv(str(target))
     _, first, second = _read_csv(target)
-    assert (first[-1], second[-1]) == ("as listed", "by symmetry (-x, -y, -z)")
+    assert (first[-1], second[-1]) == ("as listed", "by symmetry (-a, -b, -c)")

@@ -266,7 +266,7 @@ def test_a_coordinate_not_listed_is_found_by_symmetry():
     modes = _pair(_oh(1, 0, 1))
     assert modes.find(M.DISTANCE, (2, 3), _PAIR[[2, 3]]) == ()     # not listed
     found = modes.find_by_symmetry(M.DISTANCE, (2, 3), _PAIR[[2, 3]])
-    assert [(c.number, c.symmetry, c.force_constant) for c in found] == [(1, "-x, -y, -z", 7.0)]
+    assert [(c.number, c.symmetry, c.force_constant) for c in found] == [(1, "-a, -b, -c", 7.0)]
     assert modes.find_by_symmetry(M.DISTANCE, (3, 2), _PAIR[[3, 2]])  # from either end
     assert modes.find_by_symmetry(M.DISTANCE, (0, 3), _PAIR[[0, 3]]) == ()  # O1···H4: none
 
@@ -276,7 +276,7 @@ def test_symmetry_is_used_only_when_it_is_the_calculations():
     data can bear it out. It is used when CRYSTAL says it used as many operators
     as the geometry has — the same group — and not when it does not say, or
     used fewer: a run in a subgroup, whose local modes need not keep it."""
-    for count, kept in ((2, ["-x, -y, -z"]), (None, []), (1, [])):
+    for count, kept in ((2, ["-a, -b, -c"]), (None, []), (1, [])):
         assert [o.symbol for o in _pair(_oh(1, 0, 1), count=count).operations()] == kept
 
 
@@ -292,12 +292,14 @@ def test_a_listed_coordinate_is_found_as_listed_not_by_symmetry():
     assert [c.symmetry for c in modes.find(M.DISTANCE, (0, 1), _PAIR[[0, 1]])] == [None]
 
 
-def test_an_operation_is_written_as_the_international_tables_write_it():
+def test_an_operation_is_written_as_the_international_tables_write_it_on_a_b_c():
+    """The Tables' form, with the coordinates named after the cell axes: x, y, z
+    are the Cartesian positions in Å beside it."""
     from crystalline.core.local_modes import _symbol
 
-    assert _symbol(np.diag([-1, 1, -1]), np.array([0.5, 0.5, 0.5])) == "-x+1/2, y+1/2, -z+1/2"
+    assert _symbol(np.diag([-1, 1, -1]), np.array([0.5, 0.5, 0.5])) == "-a+1/2, b+1/2, -c+1/2"
     assert _symbol(np.array([[0, -1, 0], [1, -1, 0], [0, 0, 1]]),
-                   np.array([0.0, 0.0, 1 / 3])) == "-y, x-y, z+1/3"
+                   np.array([0.0, 0.0, 1 / 3])) == "-b, a-b, c+1/3"
 
 
 @pytest.mark.parametrize("line, count", [

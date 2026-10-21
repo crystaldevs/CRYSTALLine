@@ -82,8 +82,9 @@ class LocalCoordinate:
     mass: float                                  # mᵃ, amu (bonds) or amu·Å (angles)
     frequency: float                             # ωᵃ, cm⁻¹
     # Set when a measurement is this coordinate only by symmetry: the operation
-    # of the crystal that carries the measurement onto it, as a crystallographer
-    # writes one ("-x+1/2, y+1/2, -z+1/2"). The numbers are this coordinate's —
+    # of the crystal that carries the measurement onto it, written as the
+    # International Tables write one but with the coordinates named after the
+    # cell axes ("-a+1/2, b+1/2, -c+1/2"). The numbers are this coordinate's —
     # a symmetry of the crystal leaves a local mode as it is.
     symmetry: Optional[str] = None
 
@@ -327,11 +328,17 @@ class _Operation:
 
 
 def _symbol(rotation: np.ndarray, translation: np.ndarray) -> str:
-    """``"-x+1/2, y+1/2, -z+1/2"``: the operation as the International Tables write it."""
+    """``"-a+1/2, b+1/2, -c+1/2"``: the operation as the International Tables
+    write it, with the fractional coordinates named after the cell axes.
+
+    a, b, c rather than the Tables' x, y, z (Filippo, 2026-10-21): beside the
+    measurements, and in their export, x, y, z are Cartesian positions in Å,
+    and these are fractions of the primitive cell's a, b and c.
+    """
     parts = []
     for row, shift in zip(rotation, translation):
         text = ""
-        for coefficient, axis in zip(row, "xyz"):
+        for coefficient, axis in zip(row, "abc"):
             if coefficient == 0:
                 continue
             sign = "-" if coefficient < 0 else ("+" if text else "")
