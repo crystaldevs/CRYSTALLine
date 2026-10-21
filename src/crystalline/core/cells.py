@@ -496,10 +496,10 @@ def _boundary_completion(structure: Structure, tol: float, mult: float = 1.15):
     #     shift — there is no need to re-solve per image;
     #   * the test itself is elementwise, so it broadcasts over (shift, atom).
     #
-    # It used to be a solve plus a numpy reduction inside the double loop below.
-    # An extended framework is imaged atom by atom, so that was 27 of each per
+    # Not a solve plus a numpy reduction inside the double loop below: an
+    # extended framework is imaged atom by atom, so that would be 27 of each per
     # *atom* — 27650 solves and 27650 reductions on a 1024-atom framework,
-    # together about three quarters of this function's cost.
+    # about three quarters of this function's cost.
     #
     # frac_base must come after the loop above, which rewrites base_pos for
     # percolating components.

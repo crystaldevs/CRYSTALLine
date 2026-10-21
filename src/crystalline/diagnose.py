@@ -44,7 +44,7 @@ def _packages() -> List[Result]:
 
     wanted = [
         ("PySide6", "the GUI toolkit"),
-        ("vtkmodules.all", "the 3D renderer"),
+        ("vtkmodules.vtkRenderingOpenGL2", "the 3D renderer"),
         ("pyvista", "the rendering layer"),
         ("pyvistaqt", "the Qt/VTK bridge"),
         ("numpy", ""),

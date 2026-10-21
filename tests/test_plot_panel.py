@@ -101,12 +101,16 @@ def test_first_plot_floats_the_dock_then_leaves_it_alone(qapp):
 
 # ── spectrum ↔ mode linking ───────────────────────────────────────────────
 class _StubPhononPanel:
-    """The two calls ``_select_mode_near`` makes on the real panel."""
+    """The calls ``_select_mode_near`` makes on the real panel."""
 
     def __init__(self, freqs) -> None:
         self._freqs = freqs
         self.selected = None
         self.qpoint = None  # which q-point the panel was sent to, if any
+        self.playing = False
+
+    def play(self) -> None:
+        self.playing = True
 
     def frequencies(self):
         return None if self._freqs is None else np.asarray(self._freqs, dtype=float)
@@ -146,6 +150,16 @@ def test_clicking_a_peak_selects_that_mode_and_reveals_the_dock(qapp):
     assert not window._phonon_dock.isHidden()
 
 
+def test_clicking_a_peak_sets_its_mode_moving(qapp):
+    """Selected and at rest, the answer was a row in a list; the question —
+    what is this band? — is answered by the structure doing it."""
+    window = _StubModeWindow()
+
+    MainWindow._select_mode_near(window, 1655.0)
+
+    assert window.phonon_panel.playing
+
+
 def test_clicking_a_peak_answers_with_a_gamma_mode(qapp):
     """IR and Raman bands are zone-centre quantities. With another q-point of a
     SCELPHONO run on show, matching the click against *its* frequencies would
@@ -167,6 +181,7 @@ def test_clicking_the_baseline_selects_nothing(qapp):
 
     assert window.phonon_panel.selected is None
     assert window._phonon_dock.isHidden()
+    assert not window.phonon_panel.playing
 
 
 def test_clicking_a_spectrum_with_no_modes_loaded_is_harmless(qapp):

@@ -246,6 +246,7 @@ def plot_anscan(
     scanpot: bool = True,
     nstates: Optional[int] = None,
     legend: bool = True,
+    linewidth: Optional[float] = None,
 ):
     """Draw ``out``'s anharmonic scan and return the figure.
 
@@ -262,7 +263,7 @@ def plot_anscan(
             "The installed CRYSTALClear cannot draw anharmonic scans "
             "(it has no plot.plot_cry_anscan)."
         )
-    return _to_figure(function(
+    figure = _to_figure(function(
         out,
         scale_wf=scale_wf,
         scale_prob=scale_prob,
@@ -271,6 +272,11 @@ def plot_anscan(
         nstates=nstates,
         legend=legend,
     ))
+    if linewidth is not None:
+        from crystalline.crystalio.pes import scale_line_widths
+
+        scale_line_widths(figure.axes[0], linewidth)    # drawn as a PES cut is
+    return figure
 
 
 __all__ = [

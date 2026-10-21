@@ -16,6 +16,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QSizePolicy, QSpinBox, QVBoxLayout, QWidget
 
 from crystalline.crystalio.anscan import AnscanRun
+from crystalline.crystalio.pes import DEFAULT_LINEWIDTH
 from crystalline.ui.panels.controls import (Section, left, scale_bounds,
                                             set_value_width, slider_row)
 
@@ -95,6 +96,16 @@ class AnscanOptions(QWidget):
         self.points.toggled.connect(lambda _on: self.changed.emit())
         overlays.add_wide(self.points)
 
+        # How it is drawn, folded as on every other plot.
+        look = Section(layout, "Appearance", collapsed=True)
+        self.linewidth = slider_row(
+            look, "Line width", DEFAULT_LINEWIDTH, 0.3, 4.0, 0.1, decimals=1,
+            on_change=lambda _value: self.changed.emit(),
+        )
+        self.linewidth.setToolTip(
+            "The potential's width, in points; the states are drawn finer, "
+            "in proportion."
+        )
         # As on a spectrum and on a PES cut: named by default, off when the
         # box gets in the way of what it names.
         self.legend = QCheckBox("Legend")
@@ -104,7 +115,7 @@ class AnscanOptions(QWidget):
             "parabola, and the states if they are shown."
         )
         self.legend.toggled.connect(lambda _on: self.changed.emit())
-        overlays.add_wide(self.legend)
+        look.add_wide(self.legend)
 
         self._sync()
 
@@ -118,6 +129,7 @@ class AnscanOptions(QWidget):
             "harmpot": self.harmonic.isChecked(),
             "scanpot": self.points.isChecked(),
             "nstates": self.nstates.value(),
+            "linewidth": self.linewidth.value(),
         }
 
     def set_options(self, options: Optional[dict]) -> None:
@@ -139,6 +151,8 @@ class AnscanOptions(QWidget):
                         box.setValue(float(options[key]))
             if options.get("nstates") is not None:
                 self.nstates.setValue(int(options["nstates"]))
+            if options.get("linewidth") is not None:
+                self.linewidth.setValue(float(options["linewidth"]))
             for name, key in (("harmonic", "harmpot"), ("points", "scanpot"),
                               ("legend", "legend")):
                 if options.get(key) is not None:
