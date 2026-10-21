@@ -8,8 +8,6 @@ is: build a panel, dock it, connect its signals here.
 from __future__ import annotations
 
 import os
-import shutil
-import tempfile
 from contextlib import contextmanager
 from typing import Optional, Sequence
 
