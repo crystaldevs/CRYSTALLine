@@ -23,6 +23,7 @@ redrawn into an error.
 
 from __future__ import annotations
 
+import os
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt, Signal
@@ -32,8 +33,10 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QFormLayout,
     QHeaderView,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QSizePolicy,
@@ -54,8 +57,9 @@ from crystalline.crystalio.cnm import (
     CNMRun,
     drawn_groups,
     named_palette,
+    series_labels,
 )
-from crystalline.ui.panels.controls import Section, range_row, slider_row
+from crystalline.ui.panels.controls import LABEL_COLUMN, Section, range_row, slider_row
 
 _THRESHOLD_TIP = (
     "Contributions smaller than this, in per cent of the mode, are summed into\n"
@@ -463,12 +467,20 @@ class CNMOptions(QWidget):
 
 
 class CNMSeriesOptions(QWidget):
-    """Which mode is followed along a series, and how its bars are drawn."""
+    """Which mode is followed along a series, and how its bars are drawn and labelled.
+
+    The label under each bar is the run's, written in the set-up dialog and
+    here too (Filippo, 2026-10-20: "the labels for each of the column"), each
+    run on a row of its own; a label is taken when it is left, not at every
+    key, and only while every run has one of its own.
+    """
 
     changed = Signal()
 
     def __init__(self, first: CNMRun, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._paths: tuple = ()
+        self._labels: tuple = ()
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
@@ -494,6 +506,29 @@ class CNMSeriesOptions(QWidget):
         )
         self.min_overlap.valueChanged.connect(lambda _v: self.changed.emit())
 
+        runs = Section(layout, "Bar labels")
+        # One field per run, in the order of the bars, rebuilt when the series
+        # is (set_options): an edit through the dialog can change its runs.
+        self._label_rows = QWidget()
+        self._label_form = QFormLayout(self._label_rows)
+        self._label_form.setContentsMargins(0, 0, 0, 0)
+        # On the shared grid's columns, so the fields line up with every other
+        # value in the column (controls.Section: 112 px of label, 10 between).
+        self._label_form.setHorizontalSpacing(10)
+        self._label_form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        self.label_edits: List[QLineEdit] = []
+        runs.add_wide(self._label_rows)
+        self.label_problem = QLabel()
+        self.label_problem.setEnabled(False)
+        self.label_problem.hide()
+        runs.add_wide(self.label_problem)
+        self.frequencies = QCheckBox("Frequencies under the labels")
+        self.frequencies.setChecked(True)
+        self.frequencies.setToolTip(
+            "The followed mode's frequency in each run, printed under its label.")
+        self.frequencies.toggled.connect(lambda _on: self.changed.emit())
+        runs.add_wide(self.frequencies)
+
         groups = Section(layout, "Internal coordinates")
         self.threshold = _threshold(groups)
         self.threshold.valueChanged.connect(lambda _v: self.changed.emit())
@@ -508,13 +543,54 @@ class CNMSeriesOptions(QWidget):
 
     def options(self) -> dict:
         """What this widget decides, as :func:`plot_cnm_series` keyword arguments."""
-        return {
+        options = {
             "mode": self.mode.currentData(),
             "threshold": self.threshold.value(),
             "min_overlap": self.min_overlap.value(),
             "legend": self.legend.isChecked(),
+            "frequencies": self.frequencies.isChecked(),
             "group_colours": self.colours.chosen(),
         }
+        if self._labels:
+            options["labels"] = self._labels
+        return options
+
+    def _show_runs(self, paths: Sequence[str], labels: Sequence[str]) -> None:
+        """A label field for each run, named by what tells its file apart."""
+        paths, labels = tuple(paths), tuple(str(l) for l in labels)
+        if paths == self._paths and labels == self._labels:
+            return
+        self._paths, self._labels = paths, labels
+        while self._label_form.rowCount():
+            self._label_form.removeRow(0)
+        self.label_edits = []
+        for name, path, label in zip(series_labels(paths), paths, labels):
+            edit = QLineEdit(label)
+            edit.setToolTip(f"The label under the bar of {os.path.basename(path)}.")
+            edit.editingFinished.connect(self._on_label)
+            title = QLabel(name)
+            title.setToolTip(path)
+            title.setMinimumWidth(LABEL_COLUMN)
+            self._label_form.addRow(title, edit)
+            self.label_edits.append(edit)
+        self.label_problem.hide()
+
+    def _on_label(self) -> None:
+        """A label was written: taken if every run still has one of its own."""
+        labels = tuple(edit.text().strip() for edit in self.label_edits)
+        if labels == self._labels:
+            return
+        problem = ""
+        if any(not label for label in labels):
+            problem = "Give every run a label."
+        elif len(set(labels)) != len(labels):
+            problem = "Give each run a label of its own."
+        self.label_problem.setText(problem)
+        self.label_problem.setVisible(bool(problem))
+        if problem:
+            return
+        self._labels = labels
+        self.changed.emit()
 
     def figure_drawn(self, figure) -> None:
         """The figure now beside these controls: list its groups, in their colours."""
@@ -535,8 +611,12 @@ class CNMSeriesOptions(QWidget):
                     getattr(self, name).setValue(float(options[name]))
             if options.get("legend") is not None:
                 self.legend.setChecked(bool(options["legend"]))
+            if options.get("frequencies") is not None:
+                self.frequencies.setChecked(bool(options["frequencies"]))
             if options.get("group_colours") is not None:
                 self.colours.set_chosen(options["group_colours"])
+            if options.get("paths") and options.get("labels"):
+                self._show_runs(options["paths"], options["labels"])
         finally:
             self.blockSignals(blocked)
 

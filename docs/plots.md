@@ -133,7 +133,11 @@ not listed with an older one.
   modes, that bar and the ones after it are hatched, with the lowest overlap
   so far printed over them. Groups are matched between the runs by their atoms;
   one that does not appear in the first run carries the label of the run it
-  first appears in, as `412 CNOH (0.2)`.
+  first appears in, as `412 CNOH (0.2)`. Under **Bar labels**, beside the plot,
+  the label of each bar can be written again, taken when its field is left, as
+  long as every run keeps a label of its own; **Frequencies under the labels**
+  prints the frequency of the mode in each run under its label, or leaves the
+  label alone and drops the frequency from the axis title.
 
 Each group keeps its colour while the modes and the threshold are changed.
 Under **Colours**, beside either plot, every group drawn has a dropdown of

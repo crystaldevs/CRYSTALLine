@@ -137,6 +137,42 @@ def test_a_series_needs_two_runs_labelled_apart_with_eigenvectors():
         cnm.plot_cnm_series([_run()], labels=["0"], mode=4)
     with pytest.raises(ValueError, match="label of its own"):
         cnm.plot_cnm_series([_run(), _run()], labels=["0", "0"], mode=4)
+    with pytest.raises(ValueError, match="needs a label"):
+        cnm.plot_cnm_series([_run(), _run()], labels=["0", " "], mode=4)
+
+
+def test_without_frequencies_each_bar_carries_its_label_alone(monkeypatch):
+    """CRYSTALClear prints "label\\nfrequency" under each bar and adds the
+    frequency to the axis title; asked not to, the plot is left with the labels
+    as written and the axis as named."""
+    pytest.importorskip("matplotlib")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from crystalline.crystalio import plotting
+
+    def pressure(cos, mode, labels, threshold, min_overlap, xlabel):
+        figure, ax = plt.subplots()
+        ax.bar(range(len(labels)), [100.0] * len(labels), label="1 NO")
+        ax.set_xticks(range(len(labels)))
+        ax.set_xticklabels([f"{label}\n{469.3 - i:.1f}" for i, label in enumerate(labels)])
+        ax.set_xlabel(f"{xlabel} (frequency [cm$^{{-1}}$])", fontsize=14)
+        return figure, ax, {}
+
+    monkeypatch.setattr(plotting, "_plot_module",
+                        lambda: SimpleNamespace(plot_cry_cnm_pressure=pressure))
+    runs = [_run(path="/runs/a.out"), _run(path="/runs/b.out")]
+    figure = cnm.plot_cnm_series(runs, labels=["ambient", "1 GPa"], mode=4,
+                                 axis="Pressure", legend=False)
+    ax = figure.axes[0]
+    assert [t.get_text() for t in ax.get_xticklabels()] == ["ambient\n469.3", "1 GPa\n468.3"]
+    figure = cnm.plot_cnm_series(runs, labels=["ambient", "1 GPa"], mode=4,
+                                 axis="Pressure", legend=False, frequencies=False)
+    ax = figure.axes[0]
+    assert [t.get_text() for t in ax.get_xticklabels()] == ["ambient", "1 GPa"]
+    assert ax.get_xlabel() == "Pressure" and ax.xaxis.label.get_fontsize() == 14
     with pytest.raises(ValueError, match="no eigenvectors printed in b.out"):
         cnm.plot_cnm_series([_run(), _run(eigenvectors=False, path="/runs/b.out")],
                             labels=["0", "1"], mode=4)
@@ -409,9 +445,53 @@ def test_a_series_is_followed_from_a_mode_of_its_first_run(qapp):
     assert [widget.mode.itemText(i) for i in range(widget.mode.count())][:2] == [
         "Mode 4, 100.0 cm⁻¹", "Mode 5, 205.0 cm⁻¹"]
     widget.set_options({"mode": 6, "threshold": 3.0, "min_overlap": 0.7, "legend": False,
-                        "group_colours": {"1 NO (0.2)": "#00ff00"}})
+                        "frequencies": False, "group_colours": {"1 NO (0.2)": "#00ff00"}})
     assert widget.options() == {"mode": 6, "threshold": 3.0, "min_overlap": 0.7,
-                                "legend": False, "group_colours": {"1 NO (0.2)": "#00ff00"}}
+                                "legend": False, "frequencies": False,
+                                "group_colours": {"1 NO (0.2)": "#00ff00"}}
+
+
+def test_each_bar_of_a_series_is_labelled_beside_the_plot(qapp):
+    """Filippo: "the labels for each of the column". A field per run, named by
+    what tells its file apart, taken when left; a label empty or used twice is
+    said, and nothing is drawn with it."""
+    from PySide6.QtWidgets import QFormLayout
+
+    from crystalline.ui.panels.cnm_options import CNMSeriesOptions
+
+    widget = CNMSeriesOptions(_run())
+    paths = ("/runs/p_tight.out", "/runs/p_02GPa.out", "/runs/p_1GPa.out")
+    widget.set_options({"paths": paths, "labels": ("tight", "02GPa", "1GPa"), "mode": 4})
+    rows = widget._label_form
+    names = [rows.itemAt(i, QFormLayout.LabelRole).widget().text() for i in range(rows.rowCount())]
+    assert names == ["tight", "02GPa", "1GPa"]
+    assert [e.text() for e in widget.label_edits] == ["tight", "02GPa", "1GPa"]
+    assert widget.options()["labels"] == ("tight", "02GPa", "1GPa")
+
+    changed = []
+    widget.changed.connect(lambda: changed.append(True))
+    for edit, label in zip(widget.label_edits, ("0", "0.2", "1")):
+        edit.setText(label)
+        edit.editingFinished.emit()
+    assert widget.options()["labels"] == ("0", "0.2", "1") and changed
+
+    changed.clear()
+    widget.label_edits[2].setText("0.2")                    # twice
+    widget.label_edits[2].editingFinished.emit()
+    assert not changed and widget.label_problem.text() == "Give each run a label of its own."
+    assert not widget.label_problem.isHidden()
+    assert widget.options()["labels"] == ("0", "0.2", "1")  # what was drawn stands
+    widget.label_edits[2].setText("")
+    widget.label_edits[2].editingFinished.emit()
+    assert not changed and widget.label_problem.text() == "Give every run a label."
+    widget.label_edits[2].setText("1.0")
+    widget.label_edits[2].editingFinished.emit()
+    assert widget.options()["labels"] == ("0", "0.2", "1.0") and changed
+    assert widget.label_problem.isHidden()
+
+    changed.clear()
+    widget.frequencies.setChecked(False)
+    assert widget.options()["frequencies"] is False and changed
 
 
 def test_the_dialog_opens_on_the_mode_selected(qapp):

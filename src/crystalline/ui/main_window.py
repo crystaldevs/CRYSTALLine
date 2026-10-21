@@ -1956,11 +1956,11 @@ class MainWindow(QMainWindow):
         drawn: dict = {"figure": None}
 
         def draw(paths, labels, axis, mode, threshold, min_overlap, legend,
-                 group_colours=None):
+                 frequencies=True, group_colours=None):
             drawn["figure"] = cnm.plot_cnm_series(
                 runs(paths), labels=labels, mode=mode, axis=axis, threshold=threshold,
-                min_overlap=min_overlap, legend=legend, group_colours=group_colours,
-                colours=colours)
+                min_overlap=min_overlap, legend=legend, frequencies=frequencies,
+                group_colours=group_colours, colours=colours)
             return drawn["figure"]
 
         def ask(options):

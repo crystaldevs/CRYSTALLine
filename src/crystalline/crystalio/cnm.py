@@ -481,14 +481,18 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
                     threshold: float = DEFAULT_THRESHOLD,
                     min_overlap: float = DEFAULT_MIN_OVERLAP,
                     axis: str = DEFAULT_SERIES_AXIS, legend: bool = True,
+                    frequencies: bool = True,
                     group_colours: Optional[Dict[str, str]] = None,
                     colours: Optional[Dict[str, str]] = None):
     """Mode ``mode`` of the first run followed along ``runs``, one bar per run.
 
     ``labels`` name the runs in the order given, which is the order of the
-    series; ``axis`` names what they are (CRYSTALClear adds the frequency to
-    it). A bar reached through an overlap below ``min_overlap``, and every bar
-    after it, is hatched: from there the mode followed may be another.
+    series, each under its bar; ``axis`` names what they are. With
+    ``frequencies`` CRYSTALClear prints the mode's frequency in each run under
+    its label, and adds "(frequency [cm⁻¹])" to the axis; without, each bar
+    carries its label alone. A bar reached through an overlap below
+    ``min_overlap``, and every bar after it, is hatched: from there the mode
+    followed may be another.
     ``group_colours`` and ``colours`` as for :func:`plot_cnm`.
     """
     from crystalline.crystalio.plotting import _plot_module
@@ -496,6 +500,8 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
     CCplt = _plot_module()
     if len(runs) < 2:
         raise ValueError("a series needs two runs or more")
+    if any(not str(label).strip() for label in labels):
+        raise ValueError("every run of the series needs a label")
     if len(set(labels)) != len(labels):
         raise ValueError("each run of the series needs a label of its own")
     missing = [run.name for run in runs if not run.eigenvectors]
@@ -506,6 +512,10 @@ def plot_cnm_series(runs: Sequence[CNMRun], *, labels: Sequence[str], mode: int,
         figure, _ax, _used = CCplt.plot_cry_cnm_pressure(
             [run.output for run in runs], int(mode), labels=[str(l) for l in labels],
             threshold=float(threshold), min_overlap=float(min_overlap), xlabel=axis)
+    if not frequencies:
+        ax = figure.axes[0]
+        ax.set_xticklabels([str(label) for label in labels])
+        ax.set_xlabel(axis, fontsize=ax.xaxis.label.get_fontsize())
     _restyle(figure, colours if colours is not None else {}, legend, group_colours)
     return figure
 
