@@ -64,18 +64,6 @@ def test_a_crystalclear_without_the_optional_apis_is_a_note_not_a_failure(monkey
     assert "pip install -U CRYSTALClear" in detail
 
 
-def test_a_crystalclear_that_draws_no_cnm_is_said_too(monkeypatch):
-    """The CNM entries are simply not listed with a CRYSTALClear before 0.2.18;
-    the check says why they are missing."""
-    pytest.importorskip("CRYSTALClear")
-    from crystalline.crystalio import cnm
-
-    monkeypatch.setattr(cnm, "plottable", lambda: False)
-    label, ok, detail = diagnose._crystalclear_features()
-    assert ok is None and "CNM plots" in detail and "0.2.18" in detail
-    assert "pip install -U CRYSTALClear" in detail
-
-
 def test_a_headless_linux_session_is_told_what_it_actually_needs(monkeypatch):
     """Qt's own message tells the user to reinstall the application, which does
     not help on a machine with no display."""

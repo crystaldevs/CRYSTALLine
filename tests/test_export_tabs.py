@@ -41,10 +41,6 @@ _COESITE = "coesite/coesite_ela.out"
 
 @pytest.fixture
 def window(monkeypatch, tmp_path):
-    from CRYSTALClear.crystal_io import Crystal_output
-
-    if not hasattr(Crystal_output, "get_locmodes"):
-        pytest.skip("CRYSTALClear older than 0.2.17 has no get_locmodes")
     made = make_window(monkeypatch, tmp_path)
     yield made
     close_window(made)

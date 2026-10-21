@@ -97,15 +97,7 @@ def test_a_coordinate_names_as_many_atoms_as_its_kind_takes():
 
 
 # ── reading a run ─────────────────────────────────────────────────────────
-def _needs_get_locmodes():
-    from CRYSTALClear.crystal_io import Crystal_output
-
-    if not hasattr(Crystal_output, "get_locmodes"):
-        pytest.skip("CRYSTALClear older than 0.2.17 has no get_locmodes")
-
-
 def test_a_run_is_read_with_every_coordinate_and_its_local_mode():
-    _needs_get_locmodes()
     from crystalline.crystalio import read_local_modes
 
     modes = read_local_modes(sample_path(_SYNTHETIC))
@@ -123,7 +115,6 @@ def test_a_run_is_read_with_every_coordinate_and_its_local_mode():
 def test_every_bond_read_has_the_length_crystal_gives_it():
     """What the positions are for: the cell indices are counted from CRYSTAL's
     Cartesian block, and from there each bond is as long as it says."""
-    _needs_get_locmodes()
     from crystalline.crystalio import read_local_modes
 
     modes = read_local_modes(sample_path(_SYNTHETIC))
@@ -141,18 +132,6 @@ def test_an_output_without_local_modes_has_none():
     assert read_local_modes(None) is None                  # a geometry file has no output
 
 
-def test_too_old_a_crystalclear_is_said_rather_than_taken_for_no_local_modes(monkeypatch):
-    """Opened with CRYSTALClear 0.2.16, a LOCMODES run would look like a run
-    without local modes. The reader says why instead."""
-    import CRYSTALClear.crystal_io as crystal_io
-
-    from crystalline.crystalio import LocalModesError, read_local_modes
-
-    monkeypatch.setattr(crystal_io, "Crystal_output", type("Old", (), {}))
-    with pytest.raises(LocalModesError, match="0.2.17"):
-        read_local_modes(sample_path(_SYNTHETIC))
-
-
 @pytest.mark.parametrize("text, cell", [
     ("( 0 0 0)", (0, 0, 0)),
     ("( 0 0-1)", (0, 0, -1)),        # two columns each: a minus runs into its neighbour
@@ -166,9 +145,9 @@ def test_a_cell_index_is_three_signed_integers_however_spaced(text, cell):
 
 
 def test_a_row_that_does_not_hold_together_is_left_out():
-    """CRYSTALClear 0.2.17 drops a cell index printed with no spaces, (-1-1-1),
-    and shifts the rest of the row one column left: the last cell index is then
-    a number, and the angle is the force constant. Such a row is not guessed at."""
+    """A row whose columns have slipped, as CRYSTALClear once read the
+    dihedral whose last cell index is printed (-1-1-1): the cell index is then
+    a number and the angle is the force constant. Such a row is not guessed at."""
     from crystalline.crystalio.locmodes import _coordinate
 
     row = {"ic index": 410, "Atom 1 label": 95, "Atom 1": "C", "Atom 2 label": 75, "Atom 2": "N",
@@ -185,7 +164,7 @@ def test_a_row_that_does_not_hold_together_is_left_out():
 
 def test_a_number_that_overflowed_its_field_leaves_its_row_out():
     """CRYSTAL prints ***** for a number too wide for its column, which
-    CRYSTALClear 0.2.18 reads as NaN: not a number, so not guessed at."""
+    CRYSTALClear reads as NaN: not a number, so not guessed at."""
     from crystalline.crystalio.locmodes import _coordinate
 
     row = {"ic index": 1, "Atom 1 label": 1, "Atom 1": "O", "Atom 2 label": 2, "Atom 2": "O",
@@ -195,27 +174,24 @@ def test_a_number_that_overflowed_its_field_leaves_its_row_out():
 
 
 def test_the_tables_are_read_without_crystalclears_own_symmetry(monkeypatch):
-    """CRYSTALClear 0.2.18 groups the coordinates by symmetry unless told
-    not to, with a check of the geometry that raises on a file it cannot read
-    (the synthetic run has no dimension block). The Measure section finds
-    equivalent coordinates itself, so it asks for the tables alone; 0.2.17
-    takes no such argument and is asked for nothing."""
-    import CRYSTALClear.crystal_io as crystal_io
+    """CRYSTALClear groups the coordinates by symmetry unless told not to,
+    with a check of the geometry that raises on a file it cannot read (the
+    synthetic run has no dimension block). The Measure section finds
+    equivalent coordinates itself, so it asks for the tables alone."""
+    from CRYSTALClear.crystal_io import Crystal_output
 
-    from crystalline.crystalio import locmodes
+    from crystalline.crystalio import read_local_modes
 
-    class Old:
-        def get_locmodes(self):
-            pass
+    asked = []
+    real = Crystal_output.get_locmodes
 
-    class New:
-        def get_locmodes(self, symmetry=True, symprec=1e-5):
-            pass
+    def get_locmodes(self, **options):
+        asked.append(options)
+        return real(self, **options)
 
-    monkeypatch.setattr(crystal_io, "Crystal_output", Old)
-    assert not locmodes.reads_by_symmetry() and locmodes._tables_only() == {}
-    monkeypatch.setattr(crystal_io, "Crystal_output", New)
-    assert locmodes.reads_by_symmetry() and locmodes._tables_only() == {"symmetry": False}
+    monkeypatch.setattr(Crystal_output, "get_locmodes", get_locmodes)
+    assert read_local_modes(sample_path(_SYNTHETIC)).coordinates
+    assert asked == [{"symmetry": False}]
 
 
 def test_a_row_naming_an_atom_the_cell_has_not_got_is_left_out():
@@ -247,11 +223,11 @@ def test_a_file_is_read_with_its_local_modes(monkeypatch):
     assert read.capabilities["locmodes"] is True
 
     def unreadable(_path):
-        raise crystalio.LocalModesError("local modes need CRYSTALClear 0.2.17 or later")
+        raise crystalio.LocalModesError("the LOCMODES section lists no internal coordinates")
 
     monkeypatch.setattr(crystalio, "read_local_modes", unreadable)
     read = mw._read_file(plain)
-    assert read.local_modes is None and "0.2.17" in read.local_modes_note
+    assert read.local_modes is None and "no internal coordinates" in read.local_modes_note
 
 
 def test_the_window_hands_the_measure_section_its_local_modes_and_atoms():
@@ -325,7 +301,7 @@ def test_an_operation_is_written_as_the_international_tables_write_it():
 
 
 @pytest.mark.parametrize("line, count", [
-    (" ****    4 SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS", 4),   # what 0.2.17's reader misses
+    (" ****    4 SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS", 4),   # what CRYSTALClear's get_symmops misses
     (" ****   48 SYMMOPS - TRANSLATORS IN FRACTIONAL UNITS", 48),
 ])
 def test_crystals_operator_count_is_read_however_spaced(line, count):

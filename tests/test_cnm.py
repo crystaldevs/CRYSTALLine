@@ -1,7 +1,6 @@
 """The characterisation of normal modes (CNM) of a LOCMODES run, and its figures.
 
-CRYSTALClear reads and draws it from 0.2.18; with 0.2.17 the
-figures are not offered, and the tests that draw are skipped. They draw from a
+CRYSTALClear reads and draws it. The tests draw from a
 stand-in for its ``Crystal_output`` — the decomposition as a table, the
 frequencies — rather than from a run: the synthetic H₂O₂ output has a CNM but
 no frequencies. A real run is checked, on the machine that has it, by a test
@@ -16,8 +15,6 @@ import pytest
 from crystalline.crystalio import cnm
 from crystalline.crystalio.cnm import CNMRun
 
-_DRAWS = pytest.mark.skipif(not cnm.plottable(),
-                            reason="CRYSTALClear before 0.2.18 draws no CNM")
 
 
 def _run(groups=("1 NO", "2 NO", "9 CH"), frequencies=(100.0, 205.0, 310.0, 1500.0),
@@ -87,7 +84,6 @@ def test_a_series_is_as_wide_as_its_runs_and_the_legend_it_drew():
     assert cnm.series_aspect(12) > cnm.series_aspect(2)      # six runs still fit in 4:3
 
 
-@_DRAWS
 def test_a_figure_says_how_many_columns_its_legend_has():
     assert getattr(cnm.plot_cnm(_run(), modes=(4, 5, 6)), cnm.LEGEND_COLUMNS) == 1
     assert getattr(cnm.plot_cnm(_run(), modes=(4, 5, 6), legend=False), cnm.LEGEND_COLUMNS) == 0
@@ -99,19 +95,6 @@ def test_the_summary_says_whether_the_coordinates_are_grouped():
     ungrouped = CNMRun("/runs/a.out", None, (4,), (100.0,), 12, 12,
                        note="Invalid file. Dimension information not found")
     assert "each on its own: not grouped by symmetry (Invalid file." in ungrouped.summary
-
-
-def test_crystalclear_0217_offers_no_cnm(monkeypatch):
-    """Its get_locmodes reads the local modes and takes no symmetry: the
-    figures are not offered (the Measure section reads it as it always did)."""
-    import CRYSTALClear.crystal_io as crystal_io
-
-    class Old:
-        def get_locmodes(self):
-            pass
-
-    monkeypatch.setattr(crystal_io, "Crystal_output", Old)
-    assert not cnm.plottable()
 
 
 # ── a series ──────────────────────────────────────────────────────────────
@@ -214,7 +197,6 @@ def test_past_the_palette_the_colours_go_round_again():
 
 
 # ── the figures ───────────────────────────────────────────────────────────
-@_DRAWS
 def test_the_bars_are_drawn_in_the_house_colours():
     from matplotlib.colors import to_hex
 
@@ -234,7 +216,6 @@ def test_the_bars_are_drawn_in_the_house_colours():
                                                                   cnm.RESIDUES]
 
 
-@_DRAWS
 def test_a_number_on_a_bar_is_in_the_colour_that_reads_on_it():
     from crystalline.crystalio.figure_style import INK
 
@@ -246,7 +227,6 @@ def test_a_number_on_a_bar_is_in_the_colour_that_reads_on_it():
     assert {t.get_text(): t.get_color() for t in figure.axes[0].texts}["60"] == INK
 
 
-@_DRAWS
 def test_moving_the_threshold_keeps_every_group_in_its_colour():
     from matplotlib.colors import to_hex
 
@@ -259,7 +239,6 @@ def test_moving_the_threshold_keeps_every_group_in_its_colour():
     assert faces and all(before[group] == colour for group, colour in faces.items())
 
 
-@_DRAWS
 def test_a_colour_chosen_for_a_group_is_drawn_and_kept():
     """Chosen by name, the residues too; and once chosen it stays, through a
     draw that does not ask again, as the plot's memory holds it."""
@@ -278,19 +257,16 @@ def test_a_colour_chosen_for_a_group_is_drawn_and_kept():
     assert dict(cnm.drawn_groups(again))["2 NO"] == "#123456"
 
 
-@_DRAWS
 def test_the_groups_drawn_are_listed_in_the_legend_s_order_residues_last():
     figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), colours={})
     assert [g for g, _ in cnm.drawn_groups(figure)] == ["1 NO", "2 NO", "9 CH", cnm.RESIDUES]
 
 
-@_DRAWS
 def test_without_a_legend_there_is_none():
     figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), legend=False)
     assert figure.axes[0].get_legend() is None
 
 
-@_DRAWS
 def test_no_modes_too_many_or_ones_the_run_has_not_are_not_drawn():
     with pytest.raises(ValueError, match="no normal modes"):
         cnm.plot_cnm(_run(), modes=())
@@ -302,7 +278,6 @@ def test_no_modes_too_many_or_ones_the_run_has_not_are_not_drawn():
         cnm.plot_cnm(run, modes=run.modes)
 
 
-@_DRAWS
 def test_the_bars_are_labelled_with_frequencies_or_mode_numbers():
     figure = cnm.plot_cnm(_run(), modes=(4, 5, 6), ticks="freq")
     assert [t.get_text() for t in figure.axes[0].get_xticklabels()] == ["100.0", "205.0", "310.0"]
@@ -591,7 +566,6 @@ def window(qapp, monkeypatch, tmp_path):
     close_window(made)
 
 
-@_DRAWS
 def test_the_entry_is_offered_for_an_output_with_local_modes(window, monkeypatch):
     """Tab by tab: the synthetic H₂O₂ output has no geometry to open, so the
     second sample stands in for a LOCMODES run, found as the probe finds one."""
@@ -613,19 +587,6 @@ def test_the_entry_is_offered_for_an_output_with_local_modes(window, monkeypatch
     assert not window._cnm_action.isEnabled() and window._cnm_series_action.isEnabled()
 
 
-def test_without_a_crystalclear_that_reads_it_there_is_no_entry(qapp, monkeypatch, tmp_path):
-    from _window import close_window, make_window
-
-    monkeypatch.setattr(cnm, "plottable", lambda: False)
-    made = make_window(monkeypatch, tmp_path)
-    try:
-        assert getattr(made, "_cnm_action", None) is None
-        assert getattr(made, "_cnm_series_action", None) is None
-    finally:
-        close_window(made)
-
-
-@_DRAWS
 def test_a_bar_clicked_selects_its_mode(window, monkeypatch):
     from PySide6.QtWidgets import QDialog
 
@@ -644,7 +605,6 @@ def test_a_bar_clicked_selects_its_mode(window, monkeypatch):
 
 
 
-@_DRAWS
 def test_a_colour_chosen_beside_the_plot_redraws_it(window, monkeypatch, qtbot):
     from matplotlib.colors import to_hex
     from PySide6.QtWidgets import QDialog

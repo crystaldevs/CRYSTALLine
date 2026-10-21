@@ -50,9 +50,7 @@ dependencies = [
     # 0.2.18 for LOCMODES: get_locmodes as the Measure section reads it (0.2.17
     # dropped a row whose cell index is printed (-1-1-1)) and with its symmetry
     # grouping, plot_cry_cnm, plot_cry_cnm_pressure and calculate.cry_track_modes
-    # for the CNM plots. An older one still opens every file: the local modes
-    # are read as 0.2.17 can, or said to need a newer one, and the CNM entries
-    # are not offered.
+    # for the CNM plots. Nothing older is supported.
     "CRYSTALClear>=0.2.18",
     # The four below all arrive transitively today (pymatgen pulls scipy,
     # matplotlib and spglib; pyvista pulls vtk and Pillow), but CRYSTALLine

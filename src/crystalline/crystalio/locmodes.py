@@ -1,6 +1,6 @@
 """The LOCMODES section of a CRYSTAL output, read through CRYSTALClear.
 
-``Crystal_output.get_locmodes()`` (CRYSTALClear 0.2.17 on) turns the section
+``Crystal_output.get_locmodes()`` (CRYSTALClear 0.2.18) turns the section
 into three tables, one each for bonds, angles and dihedrals, with every
 internal coordinate's atoms, the cell each atom is in, its value and its local
 force constant, mass and frequency. (The decomposition of the normal modes
@@ -20,14 +20,11 @@ one of them comes out as CRYSTAL prints it.
 The tables are taken as CRYSTALClear gives them, row by row, and a row that
 does not hold together — atoms that are not numbers, a cell index that is not
 three of them, a value that is not a number — is left out rather than guessed
-at. CRYSTALClear 0.2.17 drops a cell index printed with no spaces at all,
-``(-1-1-1)``, and shifts the rest of that row one column left: such a row is
-one of these. 0.2.18 reads those rows, and gives a number that
-overflowed its field (``*****``) as NaN, which is not a number either.
+at: CRYSTALClear gives a number that overflowed its field (``*****``) as NaN.
 
-That release can also group the coordinates by the crystal's symmetry, a check
-of its own on the geometry that fails on a file it cannot check. The Measure
-section finds equivalent coordinates itself (see
+``get_locmodes`` also groups the coordinates by the crystal's symmetry unless
+told not to, with a check of its own on the geometry that fails on a file it
+cannot check. The Measure section finds equivalent coordinates itself (see
 :meth:`~crystalline.core.local_modes.LocalModes.find_by_symmetry`), so the
 tables are read without it.
 
@@ -37,7 +34,6 @@ Kept Qt-free, like the sibling modules.
 from __future__ import annotations
 
 import contextlib
-import inspect
 import io
 import math
 import re
@@ -88,10 +84,9 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
     """The local modes in the output at ``path``; ``None`` if it has none.
 
     Raises :class:`LocalModesError` when there is a LOCMODES section and it
-    cannot be read — the CRYSTALClear installed is too old to know about it,
-    or the section is not what the reader expects — so the window can say so
-    instead of showing a run's measurements without their force constants as
-    if it had none.
+    is not what the reader expects, so the window can say so instead of
+    showing a run's measurements without their force constants as if it had
+    none.
     """
     if not has_local_modes(path):
         return None
@@ -99,13 +94,11 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
         from CRYSTALClear.crystal_io import Crystal_output
     except ImportError as exc:  # pragma: no cover - CRYSTALClear is a dependency
         raise LocalModesError("CRYSTALClear is not installed") from exc
-    if not hasattr(Crystal_output, "get_locmodes"):
-        raise LocalModesError("local modes need CRYSTALClear 0.2.17 or later")
     try:
         # CRYSTALClear prints as it parses; that belongs in no terminal.
         with contextlib.redirect_stdout(io.StringIO()):
             out = Crystal_output(path)
-            out.get_locmodes(**_tables_only())
+            out.get_locmodes(symmetry=False)        # the tables alone: see above
         lines = list(out.data)
         start = _first(lines, _SCREENED)
         positions, types = _cartesian_positions(lines, start)
@@ -119,38 +112,6 @@ def read_local_modes(path: Optional[str]) -> Optional[LocalModes]:
     if not coordinates:
         raise LocalModesError("the LOCMODES section lists no internal coordinates")
     return LocalModes(positions, lattice, tuple(coordinates), types, operation_count)
-
-
-def reads_by_symmetry() -> bool:
-    """Whether ``get_locmodes`` takes ``symmetry``: CRYSTALClear 0.2.18 on.
-
-    That release reads the rows 0.2.17 drops, and can group the coordinates
-    by the crystal's symmetry. It is known by what it takes, not by its
-    version: a copy of CRYSTALClear's ``main`` installed before the release
-    carried the same version number as the one before.
-    """
-    try:
-        from CRYSTALClear.crystal_io import Crystal_output
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return False
-    method = getattr(Crystal_output, "get_locmodes", None)
-    if method is None:
-        return False
-    try:
-        return "symmetry" in inspect.signature(method).parameters
-    except (TypeError, ValueError):
-        return False
-
-
-def _tables_only() -> dict:
-    """``get_locmodes``'s arguments for the tables alone.
-
-    ``symmetry=False`` where it takes one (CRYSTALClear 0.2.18 on), which
-    otherwise groups the coordinates by symmetry by default: nothing here uses
-    the groups, and the check behind them raises on an output whose geometry
-    it cannot read.
-    """
-    return {"symmetry": False} if reads_by_symmetry() else {}
 
 
 # ── the blocks around the tables ──────────────────────────────────────────
@@ -211,9 +172,9 @@ def _operation_count(lines: Sequence[str], end: int) -> Optional[int]:
     positions are the primitive cell's. The count is what tells whether the
     symmetry found from the geometry is the calculation's.
 
-    Read here rather than through ``Crystal_output.get_symmops``, which in
-    CRYSTALClear 0.2.17 looks for exactly three spaces before the number and
-    so misses every table of fewer than ten operators.
+    Read here rather than through ``Crystal_output.get_symmops``, which (in
+    CRYSTALClear 0.2.17 and 0.2.18 alike) looks for exactly three spaces
+    before the number and so misses every table of fewer than ten operators.
     """
     for index in range(end - 1, -1, -1):
         match = _SYMMOPS.match(lines[index])
@@ -297,4 +258,4 @@ def _cell(text) -> Tuple[int, int, int]:
     return values[0], values[1], values[2]
 
 
-__all__ = ["LocalModesError", "has_local_modes", "read_local_modes", "reads_by_symmetry"]
+__all__ = ["LocalModesError", "has_local_modes", "read_local_modes"]

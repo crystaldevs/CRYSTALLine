@@ -34,7 +34,6 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from crystalline.crystalio.locmodes import reads_by_symmetry
 
 # Contributions smaller than this (%) are summed into the grey "Residues" at the
 # top of each bar: plot_cry_cnm's own default.
@@ -158,37 +157,17 @@ def _spacegroup(text: str) -> str:
 
 
 # ── what the installed CRYSTALClear can do ─────────────────────────────────
-def plottable() -> bool:
-    """Whether the installed CRYSTALClear can read a run's CNM and draw it,
-    for one run and along a series.
-
-    All of it arrived together, in 0.2.18: ``get_locmodes`` learnt to read the
-    decomposition (and to group it by symmetry, its ``symmetry`` argument) in
-    the same change that added ``plot_cry_cnm`` and ``plot_cry_cnm_pressure``.
-    0.2.17 reads the local modes the Measure section shows, and offers no CNM.
-    """
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return False
-    drawn = all(hasattr(CCplt, name) for name in ("plot_cry_cnm", "plot_cry_cnm_pressure"))
-    return drawn and reads_by_symmetry()
-
-
 # ── reading ─────────────────────────────────────────────────────────────────
 def cnm_run(path: str) -> CNMRun:
     """Read the CNM of the LOCMODES run at ``path``, grouped by symmetry if it can be.
 
-    Raises when the run has no CNM to draw — a LOCMODES section without the
-    decomposition, or a CRYSTALClear too old to read it — with a message that
-    says which. The eigenvectors are read too when the output prints them, so
+    Raises when the run has no CNM to draw, a LOCMODES section without the
+    decomposition, with a message that says so. The eigenvectors are read too when the output prints them, so
     that the run can be followed along a series without being read again.
     """
     from CRYSTALClear.crystal_io import Crystal_output
     from CRYSTALClear.units import thz_to_cm
 
-    if not plottable():
-        raise RuntimeError("the CNM needs CRYSTALClear 0.2.18 or later")
     with contextlib.redirect_stdout(io.StringIO()):  # it prints as it parses
         output = Crystal_output(path)
         note = None
@@ -523,7 +502,6 @@ __all__ = [
     "palette",
     "plot_cnm",
     "plot_cnm_series",
-    "plottable",
     "series_aspect",
     "series_labels",
 ]
