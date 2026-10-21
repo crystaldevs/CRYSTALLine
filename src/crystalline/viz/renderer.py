@@ -4,12 +4,12 @@ Design notes
 ------------
 * **All atoms are drawn as a single glyphed mesh** (one VTK actor), not one
   actor per atom. VTK's per-frame cost scales with the number of *actors*, so a
-  cell with thousands of atoms (a ZIF-8 supercell, say) went from interactive to
-  tens of seconds — and eventually a crash — under the old one-actor-per-atom
-  scheme. Glyphing collapses that to a single actor whose build/redraw is ~1000×
-  faster at those sizes. Per-atom **picking** maps a pick's world position back
-  to the nearest atom centre; **position updates** (drag / phonon animation)
-  re-glyph the point cloud, which is cheap now that it is one mesh.
+  cell with thousands of atoms (a ZIF-8 supercell, say) would take tens of
+  seconds per frame — and eventually crash — with one actor per atom. Glyphing
+  collapses that to a single actor whose build/redraw is ~1000× faster at those
+  sizes. Per-atom **picking** maps a pick's world position back to the nearest
+  atom centre; **position updates** (drag / phonon animation) re-glyph the
+  point cloud, which is cheap because it is one mesh.
 * Element colours and radii come from ``ase.data`` (Jmol colours, covalent
   radii) so they match community conventions.
 * No Qt here: the plotter is supplied by the caller (a ``pyvistaqt`` interactor
@@ -154,7 +154,7 @@ _GIZMO_VIEWPORT = (0.0, 0.0, 0.24, 0.24)
 # The lettering, taken from vtkAxesActor — the stock marker this one replaces.
 # A caption scales its text to its own normalised box, and that actor gives its
 # letters a wide, short one, which is what makes them larger and better placed
-# than the small square box the gizmo used to use. The font size, the italic,
+# than a small square box would. The font size, the italic,
 # the justification and the padding are its too.
 _LATTICE_LABEL_BOX = (0.25, 0.1)
 _LATTICE_LABEL_FONT_SIZE = 12
@@ -799,9 +799,10 @@ class StructureRenderer:
         self._draw_annotations()  # measurements survive a rebuild (plotter.clear())
         self._draw_symmetry_elements()  # and so do the shown symmetry elements
         self._draw_lattice_planes()  # and the lattice planes asked for
-        # A drawn field used to vanish on any rebuild — a display setting, an
-        # edit — while its actors were still counted as shown. It goes last so
-        # a slice's cutaway reaches every actor the rebuild has just made.
+        # A drawn field is redrawn on every rebuild — a display setting, an
+        # edit — or it would vanish while its actors are still counted as
+        # shown. It goes last so a slice's cutaway reaches every actor the
+        # rebuild has just made.
         self._draw_density()
         self._restore_camera(saved_camera)
         self.plotter.render()
@@ -2040,9 +2041,9 @@ class StructureRenderer:
         boundary-completion), which a near-neighbour algorithm can handle — the
         packed cell's duplicate images would confuse it. The distance fallback
         runs whenever CrystalNN is unavailable, too slow, *or* found no polyhedra
-        — previously an empty CrystalNN result drew nothing (the coordination
-        showed up only on big supercells, where the atom count tipped it into the
-        fallback).
+        — otherwise an empty CrystalNN result would draw nothing, and the
+        coordination would show up only on big supercells, where the atom count
+        tips it into the fallback.
 
         The analysed polyhedra are then replicated onto every *shown* centre, so
         the image atoms that boundary-completion adds are coordinated too rather
@@ -2318,10 +2319,10 @@ class StructureRenderer:
         so the gizmo shows orientation alone and never rescales with the lattice
         parameters (editing a, b or c must not grow or shrink it).
 
-        It used to be an ordinary set of arrows anchored below the structure's
-        lower corner. That put it at a *world* position, so every camera change
-        moved it: the three axis-alignment views each showed it somewhere
-        different, which is exactly what a gizmo must not do.
+        Not an ordinary set of arrows anchored below the structure's lower
+        corner: that puts it at a *world* position, so every camera change moves
+        it, and the three axis-alignment views each show it somewhere different,
+        which is exactly what a gizmo must not do.
 
         A VTK orientation-marker widget instead lives in screen space — always
         the same corner, always the same size — and only turns to follow the

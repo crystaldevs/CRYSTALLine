@@ -367,10 +367,9 @@ class DisplayPanel(QWidget):
     def _check(self, form, label, value) -> QCheckBox:
         """A checkbox carrying its own text, spanning the row.
 
-        The label used to sit in the form's label column with a bare box after
-        it, which put every tick at a different x. A checkbox reads as one thing;
-        splitting it across two columns was what made a column of them look
-        scattered.
+        Not a label in the form's label column with a bare box after it, which
+        puts every tick at a different x. A checkbox reads as one thing;
+        split across two columns, a column of them looks scattered.
         """
         box = QCheckBox(label)
         box.setChecked(value)
@@ -419,12 +418,11 @@ class DisplayPanel(QWidget):
     def _paint_swatch(button: QPushButton, color: str) -> None:
         """Paint a colour chip: the colour itself, and nothing written on it.
 
-        It used to be a filled rectangle with the hex code printed across it in
-        whichever of black or white contrasted better. That put a string nobody
-        reads on top of the one thing the control is for — and at swatch size the
-        text crowded the colour out entirely. The row's own label already says
-        what the colour is *for*, so the chip only has to show the colour; the
-        hex moves to the tooltip, where it is available without being in the way.
+        No hex code printed across it: that puts a string nobody reads on top of
+        the one thing the control is for, and at swatch size the text crowds the
+        colour out entirely. The row's own label already says what the colour is
+        *for*, so the chip only has to show the colour; the hex is in the
+        tooltip, where it is available without being in the way.
 
         The border is a translucent black so it reads as an edge on a pale fill
         and disappears into a dark one, rather than being a fixed grey that

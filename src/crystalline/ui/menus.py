@@ -13,6 +13,8 @@ menu before the toolbar's ``_update_view_actions`` call.
 
 from __future__ import annotations
 
+import sys
+
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import QLabel, QToolBar, QToolButton, QWidget
@@ -32,7 +34,7 @@ _ROTATE_STEP_DEG = 15.0
 #
 # Each is drawn from a bundled glyph, as undo and redo are, rather than from a
 # text arrow: ◀ and ↻ come from whatever font has them, at that font's weight
-# and baseline, and sat beside the drawn icons as visibly something else.
+# and baseline, and would sit beside the drawn icons as visibly something else.
 ROTATE_CHIPS = (
     ("rotate-left.svg", "Rotate left", -1.0, 0.0, 0.0),
     ("rotate-right.svg", "Rotate right", 1.0, 0.0, 0.0),
@@ -41,6 +43,23 @@ ROTATE_CHIPS = (
     ("rotate-anticlockwise.svg", "Rotate anticlockwise in the screen plane", 0.0, 0.0, -1.0),
     ("rotate-clockwise.svg", "Rotate clockwise in the screen plane", 0.0, 0.0, 1.0),
 )
+
+
+def tab_shortcuts(standard) -> list:
+    """The keys for the next or previous tab: the platform's, and ⌃Tab on macOS.
+
+    Qt's macOS bindings for the next document are ⌘} and ⌘Tab, and ⌘Tab is the
+    system's own app switcher, so it never reaches the window. Every Mac app
+    with tabs steps through them with the Control key instead (Qt's ``Meta``
+    there): ⌃Tab forwards, ⌃⇧Tab back. Shift turns Tab into Backtab, so both
+    spellings are bound.
+    """
+    keys = list(QKeySequence.keyBindings(standard))
+    if sys.platform == "darwin":
+        extra = (("Meta+Tab",) if standard == QKeySequence.NextChild
+                 else ("Meta+Shift+Tab", "Meta+Shift+Backtab"))
+        keys += [QKeySequence(key) for key in extra]
+    return keys
 
 
 def camera_angles(azimuth: float, elevation: float, roll: float, step: float):
@@ -495,14 +514,15 @@ def _build_view_menu(window) -> None:
     panels_menu.addAction(restore_all)
 
     # Between open files. The platform's own keys for "next document":
-    # Ctrl+Tab on Windows and Linux, ⌘⇧] / ⌘⇧[ on macOS.
+    # Ctrl+Tab on Windows and Linux, ⌘⇧] / ⌘⇧[ on macOS — and there ⌃Tab too,
+    # as in Safari, Finder and Terminal (see tab_shortcuts).
     view_menu.addSeparator()
     next_tab = QAction("Next tab", window)
-    next_tab.setShortcuts(QKeySequence.NextChild)
+    next_tab.setShortcuts(tab_shortcuts(QKeySequence.NextChild))
     next_tab.triggered.connect(window._next_tab)
     view_menu.addAction(next_tab)
     previous_tab = QAction("Previous tab", window)
-    previous_tab.setShortcuts(QKeySequence.PreviousChild)
+    previous_tab.setShortcuts(tab_shortcuts(QKeySequence.PreviousChild))
     previous_tab.triggered.connect(window._previous_tab)
     view_menu.addAction(previous_tab)
 

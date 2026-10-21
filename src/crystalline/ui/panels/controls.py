@@ -32,11 +32,10 @@ from PySide6.QtWidgets import (
 )
 
 
-# One grid for the whole panel. Rows used to be QFormLayout rows with
-# right-aligned labels, so a control started wherever its own label happened to
-# end — "Show bonds", "Radius (Å)" and "Show hydrogen bonds" each began at a
-# different x, and the ragged edge was the loudest thing on the panel. A fixed
-# label column puts every control on one line down the whole panel.
+# One grid for the whole panel, not QFormLayout rows: with right-aligned labels
+# a control starts wherever its own label happens to end — "Show bonds",
+# "Radius (Å)" and "Show hydrogen bonds" would each begin at a different x. A
+# fixed label column puts every control on one line down the whole panel.
 _LABEL_COLUMN = 112
 _VALUE_WIDTH = 66      # spin boxes, so a column of numbers is a column
 _ROW_SPACING = 7

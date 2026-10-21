@@ -713,9 +713,9 @@ def _is_gui(path: str) -> bool:
     """Whether ``path`` is a CRYSTAL geometry file (``fort.34`` and its kin).
 
     A renamed ``fort.34`` is given ``.f34`` — which is the point of recognising
-    the extension at all: only a file still *called* ``fort.34`` used to be
-    recognised, so a renamed one, which is how anybody keeps more than one, was
-    offered in the dialog, chosen, and then parsed as an output, which it is not.
+    the extension at all: renaming is how anybody keeps more than one, and a
+    renamed file recognised by its name alone would be offered in the dialog,
+    chosen, and then parsed as an output, which it is not.
     """
     ext = os.path.splitext(path)[1].lower()
     return ext in (".gui", ".f34") or os.path.basename(path).startswith("fort.34")

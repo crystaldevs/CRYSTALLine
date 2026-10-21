@@ -672,3 +672,38 @@ def test_every_plot_gives_its_controls_the_same_share_of_the_window(panel, qapp)
 
     assert widths[0] == widths[1]
     assert widths[0] >= 520
+
+
+def test_the_controls_fold_away_for_every_plot_and_stay_folded(panel, qapp):
+    """A button folds the column away, for the figure to have the window. It
+    is one choice for every plot — one folded and the next not would put the
+    figure at another size again — and it is remembered."""
+    from crystalline.ui import preferences
+    from crystalline.ui.panels import plot_view
+
+    before = dict(plot_view._SHOWN)
+    try:
+        for title in ("first", "second"):
+            panel.add_figure(_figure(), title, recipe=PlotRecipe(
+                draw=lambda **o: _figure(), controls=lambda: _Knobs()))
+        panel.resize(900, 400)
+        panel.show()
+        panel._tabs.setCurrentIndex(0)
+        qapp.processEvents()
+        first = panel.widget_at(0)
+        assert not first.controls_column.isHidden()
+
+        first._btn_controls.click()
+        qapp.processEvents()
+        assert first.controls_column.isHidden()
+        assert first._btn_controls.toolTip() == "Show the controls"
+
+        panel._tabs.setCurrentIndex(1)
+        qapp.processEvents()
+        assert panel.widget_at(1).controls_column.isHidden()
+        assert preferences.section_open("plots/controls", True) is False
+        assert panel.controls_width() == 0       # a new window opens for the figure alone
+    finally:
+        panel.hide()
+        plot_view._SHOWN.update(before)
+        preferences.set_section_open("plots/controls", True)

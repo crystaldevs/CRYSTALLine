@@ -65,6 +65,44 @@ def test_the_renderer_does_not_import_the_whole_of_vtk():
     assert "vtkmodules.vtkRenderingCore" in loaded  # the named ones are there
 
 
+def test_nothing_in_the_app_imports_the_whole_of_vtk():
+    """Not only for speed. ``import vtk`` and ``vtkmodules.all`` load every
+    library in the wheel, including ones the app never touches, such as
+    ``vtkRenderingWebXR``. Windows' Smart App Control blocks a DLL it does not
+    trust, and a blocked library fails the whole import — so one module nobody
+    needs takes the 3D view down with it. Each import names its own classes."""
+    import ast
+    from pathlib import Path
+
+    umbrella = {"vtk", "vtkmodules.all"}
+    found = []
+    for path in sorted(Path(_SRC, "crystalline").rglob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                names = [node.module] + [f"{node.module}.{a.name}" for a in node.names]
+            else:
+                continue
+            found += [f"{path}:{node.lineno} {n}" for n in names if n in umbrella]
+    assert not found, found
+
+
+def test_the_brillouin_zone_labels_do_not_import_the_whole_of_vtk():
+    """Measuring a label and drawing it — the zone picker's text — with the
+    classes named, and the text renderer still the real one."""
+    pytest.importorskip("pyvista")
+    loaded = _modules_after(
+        "import pyvista\n"
+        "        from crystalline.ui.panels import zone_picker\n"
+        "        assert zone_picker._text_width('X', 12, 72) > 0\n"
+        "        zone_picker._billboard(pyvista.Plotter(off_screen=True), (0, 0, 0), 'X', 'black', 12)"
+    )
+
+    assert "vtk" not in loaded and "vtkmodules.all" not in loaded
+    assert "vtkmodules.vtkRenderingFreeType" in loaded
+
+
 def test_the_font_cache_check_costs_nothing_and_answers():
     """Asking whether matplotlib has scanned this machine's fonts must not be
     what triggers the scan."""

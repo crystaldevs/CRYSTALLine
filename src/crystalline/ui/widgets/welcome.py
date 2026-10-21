@@ -1,9 +1,9 @@
 """What an empty tab shows: a way to open a file, and the files opened lately.
 
-The window opens on an empty tab, and an empty tab used to be an empty 3D view
-— a dark rectangle with nothing to say what to do with it. This sits over the
-view instead, for as long as the tab has nothing in it, and goes the moment it
-has: a file opened, or atoms built.
+The window opens on an empty tab, and an empty 3D view is a dark rectangle
+with nothing to say what to do with it. This sits over the view instead, for as
+long as the tab has nothing in it, and goes the moment it has: a file opened, or
+atoms built.
 
 An overlay, like the drop hint and the busy scrim (see
 :class:`~crystalline.ui.widgets.overlay.ParentOverlay`), rather than a page put
@@ -184,7 +184,7 @@ class WelcomeOverlay(ParentOverlay):
             widget = item.widget()
             if widget is not None:
                 # Hidden now, deleted later: deleteLater waits for the event
-                # loop, and until then the old rows drew on under the new ones.
+                # loop, and until then the old rows would draw on under the new ones.
                 widget.hide()
                 widget.setParent(None)
                 widget.deleteLater()

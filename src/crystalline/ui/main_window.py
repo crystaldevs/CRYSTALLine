@@ -6,8 +6,32 @@ is: build a panel, dock it, connect its signals here.
 """
 
 from __future__ import annotations
+from crystalline.viz.phonon_animator import PhononAnimator
+from crystalline.ui.panels.plot_view import PlotPanel, PlotRecipe
+from crystalline.ui.panels.symmetry_panel import SymmetryPanel
+from crystalline.ui.panels.geometry_panel import GeometryPanel
+from crystalline.ui.panels.display_settings import DisplayPanel
+from crystalline.ui.panels.info_panel import InfoPanel
+from crystalline.ui.panels.phonon_panel import PhononPanel
+from crystalline.ui.panels.structure_panel import StructurePanel
+from crystalline.ui.widgets import BusyOverlay, DropHint, SlidingTabBar, Worker
+from crystalline.ui.safety import guard
+from crystalline.ui.viewport import Viewport
+from crystalline.ui.file_tabs import (
+    PER_TAB_PANELS,
+    UNTITLED,
+    FileTab,
+    openable,
+    route_to_active_tab,
+    tab_labels,
+    window_title,
+)
+from crystalline.ui import menus
 
 import os
+import shutil
+import sys
+import tempfile
 from contextlib import contextmanager
 from typing import Optional, Sequence
 
@@ -86,35 +110,22 @@ class _Snapshot:
     # and a window left believing in edits that are not there treats the next
     # cell-setting switch as destructive and records a step for it.
     edited: bool = False
-from crystalline.viz.phonon_animator import PhononAnimator
-from crystalline.ui import menus
-from crystalline.ui.file_tabs import (
-    PER_TAB_PANELS,
-    UNTITLED,
-    FileTab,
-    openable,
-    route_to_active_tab,
-    tab_labels,
-    window_title,
-)
-from crystalline.ui.viewport import Viewport
-from crystalline.ui.safety import guard
-from crystalline.ui.widgets import BusyOverlay, DropHint, SlidingTabBar, Worker
-from crystalline.ui.panels.structure_panel import StructurePanel
-from crystalline.ui.panels.phonon_panel import PhononPanel
-from crystalline.ui.panels.info_panel import InfoPanel
-from crystalline.ui.panels.display_settings import DisplayPanel
-from crystalline.ui.panels.geometry_panel import GeometryPanel
-from crystalline.ui.panels.symmetry_panel import SymmetryPanel
-from crystalline.ui.panels.plot_view import PlotPanel, PlotRecipe
+
 
 _APPLICATION_TITLE = "CRYSTALLine — CRYSTAL structure & phonon viewer"
 
 # Geometry of the floating Plots window on the first plot: a fraction of the main
 # window's width (never below the minimum), 4:3, inset from its lower-right corner.
 # The figure's width, not the window's: the controls are added beside it, and at
-# 55% with them the window came out nearly as wide as the main one.
+# 55% with them the window would be nearly as wide as the main one.
 _PLOT_FLOAT_WIDTH_FRACTION = 0.45
+# Whether a 3D view made before the window was first on screen still draws once
+# it is. Not on Windows: there the window's first appearance replaces the native
+# window the view was bound to, and the view stays blank whatever is drawn in it,
+# while a view made with the window on screen draws. See
+# MainWindow._replace_views_made_unseen.
+_VIEWS_OUTLIVE_FIRST_SHOW = sys.platform != "win32"
+
 # How long an output's details wait after a file is shown: long enough for its
 # 3D view to settle at its size — the Phonons panel coming in narrows it — and
 # draw, which a worker busy in Python holds up; short enough that the Info
@@ -187,7 +198,8 @@ class MainWindow(QMainWindow):
         # rather than answered — a broadening width, a frequency window — so
         # reopening one starts from the last accepted settings, not the defaults.
         self._plot_dialog_state: dict = {}
-        self._axis_actions: list = []  # a/b/c view-alignment actions (menu + toolbar)
+        # a/b/c view-alignment actions (menu + toolbar)
+        self._axis_actions: list = []
 
         # centre: one page per open file, each its own 3D view. Movable, so
         # files can be put side by side in the bar; closable, one at a time.
@@ -195,16 +207,20 @@ class MainWindow(QMainWindow):
         # Before any setting below, which the tab widget hands to its bar: a
         # swipe across the tabs moves their close buttons with them.
         self._file_tabs.setTabBar(SlidingTabBar(self._file_tabs))
-        self._file_tabs.setObjectName("fileTabs")  # set at the left by the theme, over the view
+        # set at the left by the theme, over the view
+        self._file_tabs.setObjectName("fileTabs")
         self._file_tabs.setTabsClosable(True)
         self._file_tabs.setMovable(True)
-        self._file_tabs.setElideMode(Qt.ElideMiddle)  # keep both ends of a long run name
+        # keep both ends of a long run name
+        self._file_tabs.setElideMode(Qt.ElideMiddle)
+        # scrolls when crowded; arrows hidden by the theme
         self._file_tabs.setUsesScrollButtons(True)
         self.setCentralWidget(self._file_tabs)
 
         # The panels of every tab live in the docks, in a stack per dock that
         # shows the current tab's.
-        self._panel_stacks = {name: QStackedWidget(self) for name in PER_TAB_PANELS}
+        self._panel_stacks = {name: QStackedWidget(
+            self) for name in PER_TAB_PANELS}
         self._phonon_dock = self._dock(
             "Phonons", self._panel_stacks["phonon_panel"], Qt.RightDockWidgetArea
         )
@@ -254,15 +270,18 @@ class MainWindow(QMainWindow):
             | QDockWidget.DockWidgetMovable
             | QDockWidget.DockWidgetFloatable
         )
-        self._plot_dock.setTitleBarWidget(None)  # it keeps its own bar, and its ×
+        # it keeps its own bar, and its ×
+        self._plot_dock.setTitleBarWidget(None)
         self._plot_dock.hide()
         self._plot_dock_floated = False  # floated once, on the first plot built
-        self._plot_dock.visibilityChanged.connect(self._on_plot_dock_visibility)
+        self._plot_dock.visibilityChanged.connect(
+            self._on_plot_dock_visibility)
 
         # Bottom-right status indicators. Order matters: permanent widgets stack
         # left-to-right in call order, so counts sit left of the editing badge.
         self._count_status = QLabel()
-        self._count_status.setStyleSheet("color: palette(mid); padding: 0 8px;")
+        self._count_status.setStyleSheet(
+            "color: palette(mid); padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._count_status)
 
         self._cell_status = QLabel()
@@ -272,13 +291,15 @@ class MainWindow(QMainWindow):
         # Which file is being read, shown only while one is — where a loading
         # screen would have stood between the user and the tab already open.
         self._reading_status = QLabel()
-        self._reading_status.setStyleSheet("color: palette(mid); padding: 0 8px;")
+        self._reading_status.setStyleSheet(
+            "color: palette(mid); padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._reading_status)
         self._reading_status.hide()
 
         # Shown only while editing is on.
         self._editing_status = QLabel("● Editing mode")
-        self._editing_status.setStyleSheet("color: #d9822b; font-weight: bold; padding: 0 8px;")
+        self._editing_status.setStyleSheet(
+            "color: #d9822b; font-weight: bold; padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._editing_status)
         self._editing_status.hide()
 
@@ -307,9 +328,11 @@ class MainWindow(QMainWindow):
         # stay where they can be reached.
         from crystalline.ui.widgets.welcome import WelcomeOverlay
 
-        self._welcome = WelcomeOverlay(self._file_tabs.findChild(QStackedWidget))
+        self._welcome = WelcomeOverlay(
+            self._file_tabs.findChild(QStackedWidget))
         self._welcome.open_requested.connect(self._open_file)
-        self._welcome.path_chosen.connect(lambda path: self._load_paths([path]))
+        self._welcome.path_chosen.connect(
+            lambda path: self._load_paths([path]))
         self._welcome.clear_requested.connect(self._forget_recent_files)
 
         # The first tab: the structure handed in, or an empty one that the first
@@ -326,6 +349,39 @@ class MainWindow(QMainWindow):
         self._refresh_chrome()  # menus, toolbar and status bar, for the tab on screen
 
     # ── file tabs ───────────────────────────────────────────────────────
+
+    @guard()
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        QMainWindow.showEvent(self, event)
+        if not getattr(self, "_shown_once", False):
+            self._shown_once = True
+            # Once the window is on screen, not while it is still being put there.
+            QTimer.singleShot(0, self._replace_views_made_unseen)
+
+    def _replace_views_made_unseen(self) -> None:
+        """Give an empty tab whose view predates the window a view that draws.
+
+        The window's first tab is built in the constructor, before the window
+        has been shown, and on Windows its view is then bound to a native window
+        that showing the main window replaces (:data:`_VIEWS_OUTLIVE_FIRST_SHOW`).
+        Nothing drawn in it reaches the screen. A tab made now is built with the
+        window on screen, as every later tab is, so the empty one is swapped for
+        it before anything — a file, or atoms built — is put there.
+
+        Only an empty tab: one handed a structure at construction is left as it
+        is, since the window as the app opens it always starts empty.
+        """
+        if _VIEWS_OUTLIVE_FIRST_SHOW:
+            return
+        stale = [tab for tab in self._tabs
+                 if tab.built() and tab.made_unseen and tab.is_blank()]
+        if not stale:
+            return
+        self._add_tab()
+        for tab in stale:
+            self._close_tab(tab)
+        self._sync_welcome()
+
     def _create_tab(self, structure: Optional[Structure] = None,
                     settings=None) -> FileTab:
         """A new tab holding ``structure`` (or nothing): its state and its page.
@@ -394,7 +450,8 @@ class MainWindow(QMainWindow):
              self._adp_index) = self._compose_view(self._cell_view, self._supercell, None)
 
             self.structure.add_listener(self._routed(tab, self._note_edited))
-            self.structure.add_listener(self._routed(tab, self._on_structure_changed))
+            self.structure.add_listener(
+                self._routed(tab, self._on_structure_changed))
         finally:
             self._tab = previous
         return tab
@@ -443,6 +500,7 @@ class MainWindow(QMainWindow):
     def _build_tab_widgets(self, tab: FileTab) -> None:
         """One tab's 3D view and panels, wired to each other and to the window."""
         # The 3D view, inside the tab's page, and the phonon panel driving it.
+        tab.made_unseen = not self.isVisible()
         self.viewport = Viewport(tab.page)
         tab.page.layout().addWidget(self.viewport)
         if tab.page.isVisible():
@@ -476,14 +534,16 @@ class MainWindow(QMainWindow):
 
         self.info_panel = InfoPanel(self)
         self.info_panel.set_cell_choice(preferences.cell_choice())
-        self.info_panel.cell_choice_changed.connect(self._on_cell_choice_changed)
+        self.info_panel.cell_choice_changed.connect(
+            self._on_cell_choice_changed)
         self.info_panel.show_structure(self._analysis_cell())
 
         self.display_panel = DisplayPanel(
             self.viewport.renderer.settings,
             self._routed(tab, self._apply_render_settings), self,
         )
-        self.display_panel.set_elements(self.structure.numbers)  # element swatches
+        self.display_panel.set_elements(
+            self.structure.numbers)  # element swatches
         self.geometry_panel = GeometryPanel(self.structure, self)
         self.symmetry_panel = SymmetryPanel(self._analysis_cell(), self)
         self.plot_panel = PlotPanel(self)
@@ -515,7 +575,8 @@ class MainWindow(QMainWindow):
         if show and self._file_tabs.currentIndex() != index:
             self._file_tabs.setCurrentIndex(index)  # -> _on_file_tab_changed
         if self._tab is None or (show and self._tab is not tab):
-            self._activate_tab(tab)  # the first tab: Qt made it current on adding
+            # the first tab: Qt made it current on adding
+            self._activate_tab(tab)
         return tab
 
     def _tab_for_page(self, widget) -> Optional[FileTab]:
@@ -525,7 +586,8 @@ class MainWindow(QMainWindow):
         return None
 
     def _on_file_tab_changed(self, index: int) -> None:
-        tab = self._tab_for_page(self._file_tabs.widget(index)) if index >= 0 else None
+        tab = self._tab_for_page(
+            self._file_tabs.widget(index)) if index >= 0 else None
         if tab is not None:
             self._activate_tab(tab)
 
@@ -565,7 +627,8 @@ class MainWindow(QMainWindow):
         self._refresh_chrome()
         if new:
             self._settle_tab(tab)  # after everything above has had its say
-        self._show_notice(tab)  # read in behind: what it could not read is said now
+        # read in behind: what it could not read is said now
+        self._show_notice(tab)
 
     def _take_tab_for_file(self) -> FileTab:
         """The tab a file coming to the front goes into: this one if it is empty,
@@ -599,7 +662,8 @@ class MainWindow(QMainWindow):
         self._tabs.remove(tab)
         index = self._file_tabs.indexOf(tab.page)
         if index >= 0:
-            self._file_tabs.removeTab(index)  # -> the neighbour becomes current
+            # -> the neighbour becomes current
+            self._file_tabs.removeTab(index)
         if tab.built():
             for name, stack in self._panel_stacks.items():
                 stack.removeWidget(getattr(tab, name))
@@ -625,7 +689,8 @@ class MainWindow(QMainWindow):
     def _step_tab(self, step: int) -> None:
         count = self._file_tabs.count()
         if count > 1 and not self._workers:
-            self._file_tabs.setCurrentIndex((self._file_tabs.currentIndex() + step) % count)
+            self._file_tabs.setCurrentIndex(
+                (self._file_tabs.currentIndex() + step) % count)
 
     def _update_tab_labels(self) -> None:
         """Name every tab after its file — with the folder, where two share a name."""
@@ -639,7 +704,8 @@ class MainWindow(QMainWindow):
             index = self._file_tabs.indexOf(tab.page)
             if index >= 0:
                 self._file_tabs.setTabText(index, label)
-                self._file_tabs.setTabToolTip(index, tab.path or "No file open")
+                self._file_tabs.setTabToolTip(
+                    index, tab.path or "No file open")
                 for side in (QTabBar.LeftSide, QTabBar.RightSide):  # left on macOS
                     button = bar.tabButton(index, side)
                     if button is not None:
@@ -805,7 +871,8 @@ class MainWindow(QMainWindow):
         self._update_status()  # atom count may have changed (add/remove)
         self._update_import_action()  # importing needs a non-empty structure
         self._refresh_info()  # symmetry/point group may have changed with the edit
-        self.symmetry_panel.invalidate(self._analysis_cell())  # and so may its elements
+        self.symmetry_panel.invalidate(
+            self._analysis_cell())  # and so may its elements
         # The Geometry panel's position boxes show a live atom, so they go stale
         # the moment anything moves it — a drag, an arrow-key nudge, an undo.
         self.geometry_panel.sync_position()
@@ -859,7 +926,8 @@ class MainWindow(QMainWindow):
         into. Everything else — edits and the Cell actions alike — records a
         snapshot instead.
         """
-        self._history.reset(self._snapshot() if self.structure is not None else None)
+        self._history.reset(
+            self._snapshot() if self.structure is not None else None)
         self._update_undo_action()
 
     def _undo(self) -> None:
@@ -944,7 +1012,7 @@ class MainWindow(QMainWindow):
         What a tab's widgets ask of the window goes through :meth:`_routed`, so
         it is done to *that* tab even if it arrives once another is on screen.
         """
-        on = lambda slot: self._routed(tab, slot)  # noqa: E731
+        def on(slot): return self._routed(tab, slot)  # noqa: E731
         viewport, selection = tab.viewport, tab.structure_panel
         phonons, geometry = tab.phonon_panel, tab.geometry_panel
         display = tab.display_panel
@@ -967,7 +1035,8 @@ class MainWindow(QMainWindow):
         # the panel owns the selection -> highlight it + refresh the Edit menu
         selection.selection_changed.connect(on(self._on_selection_changed))
         # a phonon mode was (de)selected -> refresh the animation-export action
-        phonons.mode_selected.connect(on(lambda _row: self._update_export_actions()))
+        phonons.mode_selected.connect(
+            on(lambda _row: self._update_export_actions()))
         # another q-point was picked -> show that q's modes on a rebuilt view
         phonons.qpoint_selected.connect(on(self._set_qpoint))
         # "Tile n×n×n" next to the q-point -> the supercell one period needs
@@ -976,7 +1045,8 @@ class MainWindow(QMainWindow):
         # as the ellipsoid controls follow a file's ADPs
         phonons.modes_changed.connect(on(display.set_phonons_available))
         # ...and the panel is only there at all for a file that has modes
-        phonons.modes_changed.connect(on(lambda _available: self._sync_phonon_dock()))
+        phonons.modes_changed.connect(
+            on(lambda _available: self._sync_phonon_dock()))
         # Edit on a plot -> its own settings, and the plot drawn again in place
         tab.plot_panel.edit_requested.connect(on(self._edit_plot))
         # a knob beside a plot coming to rest -> the plot, as it now says
@@ -988,8 +1058,10 @@ class MainWindow(QMainWindow):
         geometry.delete_requested.connect(on(self._delete_selected))
         geometry.duplicate_requested.connect(on(self._duplicate_selected))
         geometry.translate_requested.connect(on(self._translate_selected))
-        geometry.set_element_requested.connect(on(self._set_element_of_selection))
-        geometry.set_position_requested.connect(on(self._set_position_of_selection))
+        geometry.set_element_requested.connect(
+            on(self._set_element_of_selection))
+        geometry.set_position_requested.connect(
+            on(self._set_position_of_selection))
         geometry.add_atom_requested.connect(on(self._add_atom))
         geometry.annotations_changed.connect(viewport.set_annotations)
         # Lattice planes (hkl), indices in the conventional cell; "Select atoms"
@@ -1001,8 +1073,10 @@ class MainWindow(QMainWindow):
         with self._acting_on(tab):
             geometry.set_miller_cell(self._miller_cell())
         # Symmetry panel: the ticked elements are drawn over the structure.
-        tab.symmetry_panel.elements_changed.connect(viewport.set_symmetry_elements)
-        tab.symmetry_panel.reduction_changed.connect(on(self._apply_symmetry_reduction))
+        tab.symmetry_panel.elements_changed.connect(
+            viewport.set_symmetry_elements)
+        tab.symmetry_panel.reduction_changed.connect(
+            on(self._apply_symmetry_reduction))
 
     def _analysis_cell(self) -> Structure:
         """The shown structure folded back into one clean unit cell, edits included.
@@ -1057,7 +1131,8 @@ class MainWindow(QMainWindow):
                 dock.setTitleBarWidget(_no_title_bar(dock))
 
         for bar in self.findChildren(QTabBar):
-            bar.setMovable(False)      # the tab order is not the user's to shuffle
+            # the tab order is not the user's to shuffle
+            bar.setMovable(False)
             bar.setTabsClosable(False)
 
     def _show_about(self) -> None:
@@ -1197,7 +1272,8 @@ class MainWindow(QMainWindow):
 
         if not any(same(panel.background(), ground) for ground in theme.scene_backgrounds()):
             return  # chosen by the user; leave it alone
-        panel.set_background(theme.active_palette(QApplication.instance()).scene)
+        panel.set_background(theme.active_palette(
+            QApplication.instance()).scene)
 
     def _update_view_actions(self) -> None:
         """Enable a/b/c view alignment only when there's a cell to align to."""
@@ -1215,7 +1291,8 @@ class MainWindow(QMainWindow):
         """
         available = self._capability("plots")
         for kind in self._plot_kinds:
-            enabled = True if kind.source == "data" else (kind.key in available)
+            enabled = True if kind.source == "data" else (
+                kind.key in available)
             self._plot_actions[kind.key].setEnabled(enabled)
 
     def _open_plot(self, kind) -> None:
@@ -1230,7 +1307,8 @@ class MainWindow(QMainWindow):
             # Start in the folder of the loaded output: a properties run leaves
             # its data files beside the output it was run from, so that is where
             # the file being asked for almost always is.
-            start = os.path.dirname(self._output_path) if self._output_path else ""
+            start = os.path.dirname(
+                self._output_path) if self._output_path else ""
             path, _ = QFileDialog.getOpenFileName(
                 self, kind.caption, start, kind.file_filter)
             if not path:
@@ -1246,6 +1324,7 @@ class MainWindow(QMainWindow):
         # Agg backend (forced in crystalio.plotting), which needs no display and
         # no Qt; the canvas that wraps it is created here, on the UI thread,
         # where every Qt object belongs.
+
         def build():
             return kind.build(path)
 
@@ -1278,7 +1357,8 @@ class MainWindow(QMainWindow):
 
         def show(built) -> None:
             recipe, (figure, _options) = built
-            self.plot_panel.add_figure(figure, elastic.title(recipe.options), recipe=recipe)
+            self.plot_panel.add_figure(
+                figure, elastic.title(recipe.options), recipe=recipe)
             self._reveal_plot_dock()
 
         self._run_busy(build, f"Building {kind.label.rstrip('… ').lower()}…", show,
@@ -1310,7 +1390,8 @@ class MainWindow(QMainWindow):
         if tensors is None or self._adp_index is None or len(self._adp_index) == 0:
             return None
         if int(np.max(self._adp_index)) >= len(tensors):
-            return None  # ADPs don't span the source cell (a mismatched pairing)
+            # ADPs don't span the source cell (a mismatched pairing)
+            return None
         return tensors[self._adp_index]
 
     def _refresh_adp_tensors(self, temperature_index=None, redraw: bool = True) -> None:
@@ -1349,10 +1430,9 @@ class MainWindow(QMainWindow):
                 "Load a CRYSTAL .out from a frequency calculation to plot its spectra.",
             )
             return
-        # Read once, for the list and for the plot alike. The list used to come
-        # from a read of its own and the plot from another after OK: the whole
-        # output parsed twice, with the window frozen for both — 560 ms on a
-        # 3.5 MB anharmonic run, and it grows with the output.
+        # Read once, for the list and for the plot alike, rather than once for
+        # each: a parse of the whole output takes 560 ms on a 3.5 MB anharmonic
+        # run, and it grows with the output.
         self._read_for_dialog("spectra", (path,), lambda: load_spectra(path),
                               "Reading the spectra…",
                               lambda data: self._show_spectra(path, data), "Spectra failed")
@@ -1406,7 +1486,8 @@ class MainWindow(QMainWindow):
             again = SpectraDialog(kinds, self)
             self._restore_dialog(again, "spectra", state=mine["state"])
             # From what is drawn, which is the authority on what this tab is.
-            again.set_selection_state([kind.attribute for kind in options["curves"]])
+            again.set_selection_state(
+                [kind.attribute for kind in options["curves"]])
             if again.exec() != QDialog.Accepted:
                 return None
             mine["state"] = capture_dialog(again)
@@ -1424,7 +1505,8 @@ class MainWindow(QMainWindow):
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any read/plot error
-            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
+            QMessageBox.critical(self, "Plot failed",
+                                 f"Could not create the plot:\n{exc}")
             return
 
         title = name(recipe.options)
@@ -1461,7 +1543,8 @@ class MainWindow(QMainWindow):
             if index < 0:
                 import matplotlib.pyplot as plt
 
-                plt.close(figure)  # the tab was closed while it was being drawn
+                # the tab was closed while it was being drawn
+                plt.close(figure)
                 return
             # What the dialog set outranks a redraw from the controls that
             # was still under way, or waiting, when it was opened.
@@ -1539,10 +1622,10 @@ class MainWindow(QMainWindow):
     def _open_electronic(self) -> None:
         """A band structure, a DOS or both, with every option in view.
 
-        They used to be two one-click entries drawn at CRYSTALClear's defaults —
-        an x axis of k-distances, energies only relative, no way to put the two
-        side by side. They read files of their own, from a .d3 run, so the
-        dialog looks beside the loaded output for them first.
+        A dialog rather than one-click entries drawn at CRYSTALClear's defaults,
+        which give an x axis of k-distances, energies only relative, and no way
+        to put the two side by side. They read files of their own, from a .d3
+        run, so the dialog looks beside the loaded output for them first.
         """
         from pathlib import Path
 
@@ -1562,12 +1645,14 @@ class MainWindow(QMainWindow):
         # it from the *output* path left a geometry (.cif, .gui, fort.34) with
         # nowhere to look — the dialog opened on no folder and offered nothing,
         # with the grids sitting next to the very file on screen.
-        opened = self._output_path or (self._tab.path if self._tab is not None else None)
+        opened = self._output_path or (
+            self._tab.path if self._tab is not None else None)
         folder = str(Path(opened).parent) if opened else ""
         # The run's own files are told apart by the Fermi level they record,
         # not by being named after the output.
         try:
-            efermi = float(getattr(self, "_output_props", {}).get("Fermi energy (eV)"))
+            efermi = float(getattr(self, "_output_props",
+                           {}).get("Fermi energy (eV)"))
         except (TypeError, ValueError):
             efermi = None
         dialog = ElectronicDialog(structure=structure, folder=folder,
@@ -1606,13 +1691,15 @@ class MainWindow(QMainWindow):
         # read costs a few milliseconds, and each draw starting from its own
         # read is what lets plot_electronic shift and split what it read.
         recipe = PlotRecipe(
-            draw=lambda **options: plot_electronic(*controls.plot_arguments(options)),
+            draw=lambda **options: plot_electronic(
+                *controls.plot_arguments(options)),
             edit=ask, title=controls.title, controls=controls.ElectronicControls,
             aspect=controls.aspect, options=answer(dialog))
 
         def show(drawn) -> None:
             figure, _options = drawn
-            self.plot_panel.add_figure(figure, controls.title(recipe.options), recipe=recipe)
+            self.plot_panel.add_figure(
+                figure, controls.title(recipe.options), recipe=recipe)
             self._reveal_plot_dock()
 
         self._run_busy(recipe.redrawn, "Building the electronic structure plot…", show,
@@ -1672,13 +1759,15 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels import vci_options
 
         recipe = self._dialog_recipe(
-            "vci", lambda: VCIDialog(run, self), lambda **o: plot_vci(out, **o), dialog,
+            "vci", lambda: VCIDialog(
+                run, self), lambda **o: plot_vci(out, **o), dialog,
             controls=lambda: vci_options.VCIOptions(run),
             name=lambda options: vci_options.title(run, options))
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
-            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
+            QMessageBox.critical(self, "Plot failed",
+                                 f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: neither representation is drawn against a wavenumber
@@ -1752,7 +1841,8 @@ class MainWindow(QMainWindow):
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
-            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
+            QMessageBox.critical(self, "Plot failed",
+                                 f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: the abscissa is the displacement the mode was scanned
@@ -1819,14 +1909,16 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.pes_options import PESOptions
 
         recipe = self._dialog_recipe(
-            "pes", lambda: PESDialog(run, self), lambda **o: plot_pes(out, **o), dialog,
+            "pes", lambda: PESDialog(
+                run, self), lambda **o: plot_pes(out, **o), dialog,
             # The run's own level spacing, so the ψ scale beside the plot opens
             # where the dialog's does rather than at a number from nowhere.
             controls=lambda: PESOptions(run.scale_wf))
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
-            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
+            QMessageBox.critical(self, "Plot failed",
+                                 f"Could not create the plot:\n{exc}")
             return
 
         # No pick handler: both axes are normal coordinates, not wavenumbers.
@@ -1860,7 +1952,8 @@ class MainWindow(QMainWindow):
         from crystalline.crystalio import molden
         from crystalline.ui.panels.orbital_dialog import OrbitalDialog
 
-        found = molden.find_orbital_files(self._output_path) if self._output_path else []
+        found = molden.find_orbital_files(
+            self._output_path) if self._output_path else []
         if not found:
             QMessageBox.information(
                 self, "No orbitals found",
@@ -1871,7 +1964,8 @@ class MainWindow(QMainWindow):
             )
             return
 
-        dialog = OrbitalDialog(found, self, view_cell=self._orbital_view_cell(found))
+        dialog = OrbitalDialog(
+            found, self, view_cell=self._orbital_view_cell(found))
         self._restore_dialog(dialog, "orbitals")
         if dialog.exec() != QDialog.Accepted:
             return
@@ -1881,7 +1975,8 @@ class MainWindow(QMainWindow):
         try:
             data = molden.load(choice["path"])
             imaginary = (
-                molden.load(choice["imaginary_path"]) if choice["imaginary_path"] else None
+                molden.load(choice["imaginary_path"]
+                            ) if choice["imaginary_path"] else None
             )
         except Exception as exc:  # noqa: BLE001 - surface any read error
             QMessageBox.critical(
@@ -1892,11 +1987,12 @@ class MainWindow(QMainWindow):
         # The previously shown orbital goes first, and the view is settled
         # second: every step below re-derives the displayed cell, and each one
         # would otherwise kick off a full rebuild of an orbital that is about to
-        # be replaced anyway — which is no longer cheap now that a tiled orbital
-        # is sampled as finely per cell as a single one.
+        # be replaced anyway — which is not cheap, since a tiled orbital is
+        # sampled as finely per cell as a single one.
         self._clear_orbital()
         self._show_orbital_structure(data)
-        tiling = self._tile_to_period(choice["kpoint"], data.cell) if choice["tile"] else None
+        tiling = self._tile_to_period(
+            choice["kpoint"], data.cell) if choice["tile"] else None
         self._orbital = {
             "data": data,
             "imaginary": imaginary,
@@ -1991,9 +2087,9 @@ class MainWindow(QMainWindow):
         At once, if this version of the files has been read for ``kind``
         before (see :mod:`~crystalline.crystalio.remembered`): opening the same
         dialog on the same output again is how a second plot is made, and it
-        used to read the whole output again. Otherwise on a worker, behind the
-        spinner — no longer with the window frozen and a wait cursor, which on
-        a large output looked like a hang.
+        need not read the whole output again. Otherwise on a worker, behind the
+        spinner, not with the window frozen under a wait cursor, which on a
+        large output looks like a hang.
         """
         from crystalline.crystalio import remembered
 
@@ -2026,7 +2122,8 @@ class MainWindow(QMainWindow):
         self._busy.start(message)
         started_in = self._tab
         worker = Worker(work)
-        self._workers.append(worker)  # held: a dropped worker takes its thread down
+        # held: a dropped worker takes its thread down
+        self._workers.append(worker)
         self._file_tabs.tabBar().setEnabled(False)
 
         def cleanup() -> None:
@@ -2081,7 +2178,8 @@ class MainWindow(QMainWindow):
             self.viewport.renderer.set_orbital(field, chosen["isovalue"])
             self._update_orbital_actions()
 
-        self._run_busy(build, "Building the orbital…", draw, "Orbital unavailable")
+        self._run_busy(build, "Building the orbital…",
+                       draw, "Orbital unavailable")
         return True
 
     def _show_orbital_structure(self, data) -> None:
@@ -2136,7 +2234,8 @@ class MainWindow(QMainWindow):
         # it from the *output* path left a geometry (.cif, .gui, fort.34) with
         # nowhere to look — the dialog opened on no folder and offered nothing,
         # with the grids sitting next to the very file on screen.
-        opened = self._output_path or (self._tab.path if self._tab is not None else None)
+        opened = self._output_path or (
+            self._tab.path if self._tab is not None else None)
         folder = str(Path(opened).parent) if opened else ""
         miller_cell = self._conventional_cell()
         source = getattr(self, "_source", None)
@@ -2153,7 +2252,8 @@ class MainWindow(QMainWindow):
         if field is None:
             return
         try:
-            self.viewport.renderer.set_density(field, options, miller_cell=miller_cell)
+            self.viewport.renderer.set_density(
+                field, options, miller_cell=miller_cell)
             if options.view == density.SLICE:
                 # A plane is read face-on; seen edge-on it is a line.
                 self.viewport.renderer.face_density_plane()
@@ -2321,6 +2421,9 @@ class MainWindow(QMainWindow):
         if self.phonon_panel.select_mode(index):
             self._phonon_dock.show()
             self._phonon_dock.raise_()
+            # Moving, not only selected: the answer to "what is this band?" is
+            # the structure doing it, and a selected mode at rest is a list row.
+            self.phonon_panel.play()
 
     def _reveal_plot_dock(self) -> None:
         """Show the Plots dock — floating, the first time a plot is built.
@@ -2339,9 +2442,9 @@ class MainWindow(QMainWindow):
             tab.plots_open = True  # this file's plots are open: bring them back with it
         if not self._plot_dock_floated:
             self._plot_dock_floated = True
-            # Placed and sized before it is shown: shown first, it came up
+            # Placed and sized before it is shown: shown first, it comes up
             # where a docked panel would be, at the size of one, and then
-            # jumped to where it belongs.
+            # jumps to where it belongs.
             self._plot_dock.setFloating(True)
             screen = self.screen()
             where = _floating_plot_geometry(
@@ -2359,7 +2462,8 @@ class MainWindow(QMainWindow):
     def _figure_aspect(self, tab) -> float:
         """The shape ``tab``'s figure wants, width over height."""
         recipe = getattr(tab, "recipe", None)
-        wanted = recipe.aspect(recipe.options) if recipe and recipe.aspect else None
+        wanted = recipe.aspect(
+            recipe.options) if recipe and recipe.aspect else None
         return float(wanted or _PLOT_ASPECT)
 
     def _widen_plot_window(self, tab) -> None:
@@ -2376,7 +2480,8 @@ class MainWindow(QMainWindow):
             return
         QApplication.sendPostedEvents(None, QEvent.LayoutRequest)
         canvas = tab.canvas
-        short = int(round(canvas.height() * self._figure_aspect(tab))) - canvas.width()
+        short = int(
+            round(canvas.height() * self._figure_aspect(tab))) - canvas.width()
         if short <= 0:
             return
         frame = dock.geometry()
@@ -2476,7 +2581,8 @@ class MainWindow(QMainWindow):
         """
         renderer = self.viewport.renderer
         if settings.adp_temperature_index != renderer.settings.adp_temperature_index:
-            self._refresh_adp_tensors(settings.adp_temperature_index, redraw=False)
+            self._refresh_adp_tensors(
+                settings.adp_temperature_index, redraw=False)
         renderer.set_settings(settings)
 
     def _restore_geometry(self) -> None:
@@ -2504,7 +2610,8 @@ class MainWindow(QMainWindow):
         self.viewport.set_editing_enabled(self._editing)
         self.structure_panel.set_editing_enabled(self._editing)
         self.geometry_panel.set_editing_enabled(self._editing)
-        self._editing_status.setVisible(self._editing)  # bottom-right indicator
+        self._editing_status.setVisible(
+            self._editing)  # bottom-right indicator
         self._update_edit_actions()
 
     def _on_atom_moved(self, index: int) -> None:
@@ -2515,7 +2622,8 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self, indices) -> None:
         self.viewport.set_selection(indices)
-        self.geometry_panel.set_selection(indices)  # drives what can be measured
+        self.geometry_panel.set_selection(
+            indices)  # drives what can be measured
         self._update_edit_actions()
         self._update_status()
 
@@ -2538,12 +2646,14 @@ class MainWindow(QMainWindow):
         count.setText(text)
 
         na, nb, nc = self._supercell
-        cell = "" if self._supercell == (1, 1, 1) else f"supercell {na}×{nb}×{nc}"
+        cell = "" if self._supercell == (
+            1, 1, 1) else f"supercell {na}×{nb}×{nc}"
         self._cell_status.setText(cell)
 
     def _update_edit_actions(self) -> None:
         """Edit tools need editing on and at least one atom selected."""
-        active = self._editing and bool(self.structure_panel.selected_indices())
+        active = self._editing and bool(
+            self.structure_panel.selected_indices())
         for action in self._edit_tool_actions:
             action.setEnabled(active)
 
@@ -2555,13 +2665,15 @@ class MainWindow(QMainWindow):
 
     def _invert_selection(self) -> None:
         current = set(self.structure_panel.selected_indices())
-        self.structure_panel.set_selection(set(range(len(self.structure))) - current)
+        self.structure_panel.set_selection(
+            set(range(len(self.structure))) - current)
 
     def _delete_selected(self) -> None:
         indices = self.structure_panel.selected_indices()
         if not self._editing or not indices:
             return
-        self.structure_panel.clear_selection()  # deletion shifts indices; drop them first
+        # deletion shifts indices; drop them first
+        self.structure_panel.clear_selection()
         self.structure.remove_atoms(indices)
 
     def _duplicate_selected(self) -> None:
@@ -2608,7 +2720,8 @@ class MainWindow(QMainWindow):
         """Edit-menu route: ask for the symbol, then apply it to the selection."""
         if not self._editing or not self.structure_panel.selected_indices():
             return
-        symbol, ok = QInputDialog.getText(self, "Set element", "Element symbol:")
+        symbol, ok = QInputDialog.getText(
+            self, "Set element", "Element symbol:")
         if ok and symbol.strip():
             self._set_element_of_selection(symbol)
 
@@ -2620,7 +2733,8 @@ class MainWindow(QMainWindow):
         try:
             self.structure.set_symbols(indices, symbol.strip())
         except ValueError:
-            QMessageBox.warning(self, "Unknown element", f"'{symbol}' is not a known element.")
+            QMessageBox.warning(self, "Unknown element",
+                                f"'{symbol}' is not a known element.")
 
     def _add_atom(self, symbol: str) -> None:
         """Add one atom of ``symbol`` in the middle of the structure, and select it.
@@ -2633,11 +2747,14 @@ class MainWindow(QMainWindow):
         if not self._editing or not symbol.strip():
             return
         try:
-            index = self.structure.add_atom(symbol.strip(), self._new_atom_position())
+            index = self.structure.add_atom(
+                symbol.strip(), self._new_atom_position())
         except ValueError:
-            QMessageBox.warning(self, "Unknown element", f"'{symbol}' is not a known element.")
+            QMessageBox.warning(self, "Unknown element",
+                                f"'{symbol}' is not a known element.")
             return
-        self.structure_panel.set_selection([index])  # ready to drag / translate
+        self.structure_panel.set_selection(
+            [index])  # ready to drag / translate
 
     def _new_atom_position(self) -> list:
         """The middle of the structure — see :meth:`Structure.centre`.
@@ -2661,7 +2778,8 @@ class MainWindow(QMainWindow):
             box.setSingleStep(0.1)
             form.addRow(f"Δ{axis} (Å)", box)
             boxes.append(box)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -2711,7 +2829,8 @@ class MainWindow(QMainWindow):
             box.setValue(value)
             form.addRow(label, box)
             boxes.append(box)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -2720,7 +2839,8 @@ class MainWindow(QMainWindow):
             return
         self._source.set_lattice_parameters(*(box.value() for box in boxes))
         self._apply_cell_view()
-        self.info_panel.show_structure(self._analysis_cell(), self._output_props)
+        self.info_panel.show_structure(
+            self._analysis_cell(), self._output_props)
 
     def _open_supercell_dialog(self) -> None:
         """Prompt for the na × nb × nc repetitions and rebuild the view.
@@ -2761,7 +2881,8 @@ class MainWindow(QMainWindow):
             box.valueChanged.connect(show_size)
         show_size()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -2804,7 +2925,8 @@ class MainWindow(QMainWindow):
         action = getattr(self, "_supercell_action", None)
         if action is not None:
             na, nb, nc = self._supercell
-            suffix = "" if self._supercell == (1, 1, 1) else f"  ({na}×{nb}×{nc})"
+            suffix = "" if self._supercell == (
+                1, 1, 1) else f"  ({na}×{nb}×{nc})"
             action.setText(f"Supercell…{suffix}")
 
     # ── phonon q-points (a SCELPHONO run samples more than Gamma) ────────
@@ -2931,9 +3053,11 @@ class MainWindow(QMainWindow):
             return
         event.acceptProposedAction()
         if len(to_open) > 1:
-            self._drop_hint.show_hint(f"Open {len(to_open)} files", "each in a new tab")
+            self._drop_hint.show_hint(
+                f"Open {len(to_open)} files", "each in a new tab")
         elif to_open:
-            self._drop_hint.show_hint(f"Open {os.path.basename(to_open[0])}", "in a new tab")
+            self._drop_hint.show_hint(
+                f"Open {os.path.basename(to_open[0])}", "in a new tab")
         else:
             self._drop_hint.show_hint(
                 f"Add the atoms in {os.path.basename(to_import[0])}",
@@ -2972,8 +3096,10 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         event.acceptProposedAction()
-        ignored = len(self._dropped_paths(event)) - len(to_open) - len(to_import)
-        QTimer.singleShot(0, lambda: self._handle_drop(to_open, to_import, ignored))
+        ignored = len(self._dropped_paths(event)) - \
+            len(to_open) - len(to_import)
+        QTimer.singleShot(0, lambda: self._handle_drop(
+            to_open, to_import, ignored))
 
     def _handle_drop(self, to_open: list, to_import: list, ignored: int) -> None:
         """Open or import the dropped files, once the drag itself is over.
@@ -3150,7 +3276,8 @@ class MainWindow(QMainWindow):
         def failed(exc) -> None:
             # A file that will not read opens no tab, and stops nothing queued
             # behind it.
-            QMessageBox.critical(self, "Load failed", f"{os.path.basename(path)}:\n{exc}")
+            QMessageBox.critical(self, "Load failed",
+                                 f"{os.path.basename(path)}:\n{exc}")
             self._read_next()
 
         # Not through _run_busy: no overlay, and the tab bar stays live — the
@@ -3254,7 +3381,8 @@ class MainWindow(QMainWindow):
             tab = self._take_tab_for_file()
             self._fill_tab(tab, path, read)
             self._sync_welcome()  # down before the view is drawn, not after
-            self._settle_tab(tab)  # filled on screen: shown finished, not a frame early
+            # filled on screen: shown finished, not a frame early
+            self._settle_tab(tab)
             self._show_notice(tab)
             return tab
         tab = self._add_tab(show=False)
@@ -3291,7 +3419,8 @@ class MainWindow(QMainWindow):
         tab.path = path
         tab.notice = result.note
         tab.capabilities.update(
-            {(key, read.output_path): found for key, found in read.capabilities.items()}
+            {(key, read.output_path): found for key,
+             found in read.capabilities.items()}
         )
         # The previous file's plots belong to the previous file: their figures
         # stay live otherwise, and a spectrum's peak-pick handler would select
@@ -3312,7 +3441,8 @@ class MainWindow(QMainWindow):
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = read.adps
         self._tile_restore = None  # nothing of the old file's tiling to go back to
-        self._set_supercell((1, 1, 1))  # a fresh file starts at its own unit cell
+        # a fresh file starts at its own unit cell
+        self._set_supercell((1, 1, 1))
         # Remember the output file so property plots (IR/Raman/elastic/EOS) can
         # read it directly; geometry-only files (.gui/.f34/.cif) carry no such data.
         self._output_path = read.output_path
@@ -3362,22 +3492,28 @@ class MainWindow(QMainWindow):
 
             atoms = read_atoms(path)
         except Exception as exc:  # noqa: BLE001 - surface any read/parse error
-            QMessageBox.critical(self, "Import failed", f"Could not read atoms:\n{exc}")
+            QMessageBox.critical(self, "Import failed",
+                                 f"Could not read atoms:\n{exc}")
             return False
         symbols = list(atoms.get_chemical_symbols())
         if not symbols:
-            QMessageBox.information(self, "Nothing imported", "No atoms found in that file.")
+            QMessageBox.information(
+                self, "Nothing imported", "No atoms found in that file.")
             return False
         try:
-            new = self.structure.add_atoms(symbols, atoms.get_positions())  # -> undo + redraw
+            new = self.structure.add_atoms(
+                symbols, atoms.get_positions())  # -> undo + redraw
         except Exception as exc:  # noqa: BLE001 - e.g. an unknown element symbol
-            QMessageBox.critical(self, "Import failed", f"Could not add the atoms:\n{exc}")
+            QMessageBox.critical(self, "Import failed",
+                                 f"Could not add the atoms:\n{exc}")
             return False
-        self.display_panel.set_elements(self.structure.numbers)  # new elements may appear
+        self.display_panel.set_elements(
+            self.structure.numbers)  # new elements may appear
         # Turn editing on and select the imported atoms so they can be dragged
         # into place as a whole straight away.
         if not self._editing:
-            self._edit_mode_action.setChecked(True)  # toggles _set_editing(True)
+            self._edit_mode_action.setChecked(
+                True)  # toggles _set_editing(True)
         self.structure_panel.set_selection(new)
         # Said, because an import can be invisible: a water molecule appended to
         # a cell of thirty atoms arrives at its own coordinates, somewhere among
@@ -3400,7 +3536,8 @@ class MainWindow(QMainWindow):
         the panel says the same thing before an edit as after one.
         """
         self._output_props = output_props or {}
-        self.info_panel.show_structure(self._analysis_cell(), self._output_props)
+        self.info_panel.show_structure(
+            self._analysis_cell(), self._output_props)
 
     def _refresh_info(self) -> None:
         """Re-analyse the shown structure so the Info panel tracks geometry edits.
@@ -3432,7 +3569,8 @@ class MainWindow(QMainWindow):
             self._report_save_error(".gui file", exc)
 
     def _save_cif(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save CIF", "structure.cif", "CIF (*.cif)")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save CIF", "structure.cif", "CIF (*.cif)")
         if not path:
             return
         try:
@@ -3510,7 +3648,8 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.dialog_state import restore
 
         theme.tidy_forms(dialog)
-        restore(dialog, state if state is not None else self._plot_dialog_state.get(key))
+        restore(
+            dialog, state if state is not None else self._plot_dialog_state.get(key))
 
     def _remember_dialog(self, dialog, key: str) -> None:
         """Keep an accepted dialog's settings for the next time it is opened.
@@ -3539,7 +3678,6 @@ class MainWindow(QMainWindow):
         from crystalline.ui.image_export import export_view
 
         export_view(self, self.viewport.export_image, "crystal_view")
-
 
     def _export_animation(self) -> None:
         """Render the selected phonon mode over one cycle and save it.
@@ -3587,7 +3725,8 @@ class MainWindow(QMainWindow):
         # filename decides the format, so this catches a video extension typed
         # by hand as well as one chosen in the dialog.
         if os.path.splitext(path)[1].lower() in MOVIE_EXTS and not video_export_available():
-            QMessageBox.warning(self, "Video export unavailable", VIDEO_MISSING_MESSAGE)
+            QMessageBox.warning(
+                self, "Video export unavailable", VIDEO_MISSING_MESSAGE)
             return
 
         # Rendered straight into the writer, one frame at a time, with the event
@@ -3626,11 +3765,13 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:  # noqa: BLE001 - surface encode/write errors clearly
             self._trace(f"export: failed: {exc}")
-            QMessageBox.critical(self, "Export failed", f"Could not save the animation:\n{exc}")
+            QMessageBox.critical(self, "Export failed",
+                                 f"Could not save the animation:\n{exc}")
             return
         finally:
             self._trace("export: written; putting the view back")
-            self.phonon_panel.show_phase(standing_at)   # where the mode was standing
+            # where the mode was standing
+            self.phonon_panel.show_phase(standing_at)
             self._busy.stop()
         self._trace("export: done, back to the event loop")
         if len(written) > 1:
@@ -3698,9 +3839,9 @@ class MainWindow(QMainWindow):
             ("png", "PNG frame sequence", True),
             ("jpg", "JPEG frame sequence", True),
         ]
-        # Sizes, as before — the frames are drawn by the view on screen, but they
-        # are fitted to whichever of these is chosen rather than coming out the
-        # shape the window happens to be. A view with docks either side of it is
+        # Sizes, as for a picture — the frames are drawn by the view on screen,
+        # but they are fitted to whichever of these is chosen rather than coming
+        # out the shape the window happens to be. A view with docks either side of it is
         # taller than it is wide, and a portrait animation is letterboxed in
         # black by every viewer there is.
         from crystalline.viz.export import _window_size
@@ -3727,7 +3868,8 @@ class MainWindow(QMainWindow):
                 item.setToolTip(VIDEO_MISSING_MESSAGE)
         form.addRow("Format:", fmt_box)
         if not video:
-            hint = QLabel("Video formats need <code>pip install imageio-ffmpeg</code>", dialog)
+            hint = QLabel(
+                "Video formats need <code>pip install imageio-ffmpeg</code>", dialog)
             hint.setStyleSheet("color: palette(mid);")
             form.addRow("", hint)
 
@@ -3740,7 +3882,8 @@ class MainWindow(QMainWindow):
         frames_box = QSpinBox(dialog)
         frames_box.setRange(8, 240)
         frames_box.setValue(DEFAULT_FRAMES)
-        frames_box.setToolTip("Frames per vibration cycle — more is smoother but larger.")
+        frames_box.setToolTip(
+            "Frames per vibration cycle — more is smoother but larger.")
         form.addRow("Frames:", frames_box)
 
         fps_box = QSpinBox(dialog)
@@ -3756,7 +3899,8 @@ class MainWindow(QMainWindow):
         fmt_box.currentIndexChanged.connect(sync_enabled)
         sync_enabled()
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, dialog)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel, dialog)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         form.addRow(buttons)
@@ -3873,7 +4017,8 @@ class MainWindow(QMainWindow):
             self._bond_structure = bond_structure
         # _note_edited before the heavier one.
         self.structure.add_listener(self._routed(self._tab, self._note_edited))
-        self.structure.add_listener(self._routed(self._tab, self._on_structure_changed))
+        self.structure.add_listener(self._routed(
+            self._tab, self._on_structure_changed))
         self.viewport.show_structure(
             self.structure, reference_cell=unit_cell, bond_structure=bond_structure
         )
@@ -3887,7 +4032,8 @@ class MainWindow(QMainWindow):
             self.symmetry_panel.set_structure(self._analysis_cell())
         self._update_view_actions()  # a/b/c alignment depends on the cell just shown
         if hasattr(self, "display_panel"):
-            self.display_panel.set_elements(self.structure.numbers)  # refresh element swatches
+            self.display_panel.set_elements(
+                self.structure.numbers)  # refresh element swatches
 
 
 # ── reading a file, off the main thread ────────────────────────────────────
@@ -3926,10 +4072,12 @@ class _ReadFile:
     """Everything a new tab takes from its file, read in one go."""
 
     loaded: object                  # crystalio.LoadedFile: the structure, and modes if any
-    output_path: Optional[str]      # the CRYSTAL output; None for a geometry-only file
+    # the CRYSTAL output; None for a geometry-only file
+    output_path: Optional[str]
     adps: Optional[ADPSet]          # thermal ellipsoids, when the run has them
-    output_props: Optional[dict]    # the run's own rows for the Info panel: None
-                                    # until _read_details has read them
+    # the run's own rows for the Info panel: None
+    output_props: Optional[dict]
+    # until _read_details has read them
     capabilities: dict              # probe key → what _probe found
 
 
@@ -4005,7 +4153,8 @@ def _floating_plot_geometry(window: QRect, screen: Optional[QRect],
     the 3D view stays visible.
     Clamped to ``screen`` (when known) so it can't open partly off-display.
     """
-    width = max(_PLOT_FLOAT_MIN_WIDTH, int(window.width() * _PLOT_FLOAT_WIDTH_FRACTION))
+    width = max(_PLOT_FLOAT_MIN_WIDTH, int(
+        window.width() * _PLOT_FLOAT_WIDTH_FRACTION))
     height = int(round(width / _PLOT_ASPECT))
     width = int(round(height * aspect)) + max(0, int(beside))
     if screen is not None and not screen.isEmpty():

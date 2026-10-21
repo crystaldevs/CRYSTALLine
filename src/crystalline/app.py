@@ -18,8 +18,8 @@ def run(structure: Optional[Structure] = None) -> int:
     PyVista and Qt's 3D interactor — about four seconds — and on a machine that
     has never run a matplotlib program, another ten while matplotlib scans every
     font installed and caches the result. Done before ``QApplication`` exists,
-    as it used to be, that is quarter of a minute of nothing at all: no window,
-    no dock bounce, nothing to say the program is starting.
+    that is quarter of a minute of nothing at all: no window, no dock bounce,
+    nothing to say the program is starting.
 
     So Qt comes up first and puts the logo on screen, and the heavy import
     happens behind it.
@@ -159,12 +159,12 @@ def _warm_for_the_first_file():
     """Import what the first file opened will need, on a background thread.
 
     Returns the thread. None of it is needed by the window itself, which opens
-    with nothing in it, and all of it used to be paid for either at startup
-    (``scipy.spatial``, a quarter of a second) or by the first file opened
-    (the rest, about half a second). Started once the window is on screen, it
-    is usually done before a file has even been chosen; a file opened sooner
-    waits for what it needs on the modules' import locks, as it would have
-    without this.
+    with nothing in it; imported eagerly it would cost startup a quarter of a
+    second (``scipy.spatial``), and imported lazily the first file opened about
+    half a second (the rest). Started once the window is on screen, it is
+    usually done before a file has even been chosen; a file opened sooner waits
+    for what it needs on the modules' import locks, as it would have without
+    this.
     """
     import importlib
     import threading

@@ -221,3 +221,28 @@ def test_restore_all_does_not_restore_a_panel_with_nothing_in_it(qapp):
     window._restore_all_panels()
 
     assert [t for t, d in window._panel_docks() if d.isHidden()] == ["Phonons"]
+
+
+def test_control_tab_steps_through_the_tabs_on_macos(qapp, monkeypatch):
+    """⌘Tab, Qt's own binding there, is the system's app switcher."""
+    from PySide6.QtGui import QAction, QKeySequence
+
+    monkeypatch.setattr(menus.sys, "platform", "darwin")
+    window = _window(qapp)
+    actions = {a.text(): a for a in window.findChildren(QAction)}
+
+    next_keys = [k.toString() for k in actions["Next tab"].shortcuts()]
+    previous_keys = [k.toString() for k in actions["Previous tab"].shortcuts()]
+    assert "Meta+Tab" in next_keys
+    assert "Meta+Shift+Backtab" in previous_keys        # what Shift makes of Tab
+    for standard, keys in ((QKeySequence.NextChild, next_keys),
+                           (QKeySequence.PreviousChild, previous_keys)):
+        assert all(k.toString() in keys for k in QKeySequence.keyBindings(standard))
+
+
+def test_other_platforms_keep_their_own_keys(qapp, monkeypatch):
+    from PySide6.QtGui import QKeySequence
+
+    monkeypatch.setattr(menus.sys, "platform", "linux")
+    assert menus.tab_shortcuts(QKeySequence.NextChild) == \
+        list(QKeySequence.keyBindings(QKeySequence.NextChild))

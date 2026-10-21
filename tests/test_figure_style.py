@@ -190,3 +190,62 @@ def test_a_figure_carries_no_title_unless_one_was_asked_for():
     ax.set_title("MgO, my way")
     figure_style.finish(figure_style.keep_title(wanted))
     assert ax.get_title() == "MgO, my way"
+
+
+def _dark(figure):
+    from crystalline.crystalio import figure_style
+
+    figure_style.to_screen(figure, background="#14161a", ink="#e7eaef", rule="#373c44")
+
+
+def _drawn():
+    from matplotlib.figure import Figure
+
+    from crystalline.crystalio import figure_style
+
+    figure_style.apply()
+    figure = Figure()
+    ax = figure.add_subplot()
+    ax.plot([0, 1], [0, 1], color=figure_style.INK, label="bands")
+    ax.plot([0, 1], [1, 0], color="#3f9e4d", label="Fermi level")
+    ax.axvline(0.5, color="k")
+    ax.set_xlabel("k")
+    ax.legend()
+    return figure, ax
+
+
+def test_on_screen_a_figure_takes_the_window_s_colours_and_keeps_its_data_s():
+    """A white figure sat in the dark window like a sheet left on the desk."""
+    figure, ax = _drawn()
+    _dark(figure)
+
+    assert to_hex(figure.patch.get_facecolor()) == "#14161a"
+    assert to_hex(ax.lines[0].get_color()) == "#e7eaef"       # the ink
+    assert to_hex(ax.lines[2].get_color()) == "#e7eaef"       # black, too
+    assert to_hex(ax.lines[1].get_color()) == "#3f9e4d"       # a curve's own colour stays
+    assert to_hex(ax.xaxis.label.get_color()) == "#e7eaef"
+    assert to_hex(ax.get_legend().get_frame().get_facecolor()) == "#14161a"
+
+
+def test_back_on_paper_it_is_exactly_as_drawn_however_often_it_was_shown():
+    from crystalline.crystalio import figure_style
+
+    figure, ax = _drawn()
+    before = [to_hex(figure.patch.get_facecolor()), to_hex(ax.lines[0].get_color()),
+              to_hex(ax.xaxis.label.get_color())]
+    _dark(figure)
+    _dark(figure)                     # the theme changed: no colour swapped twice
+    figure_style.to_paper(figure)
+
+    assert [to_hex(figure.patch.get_facecolor()), to_hex(ax.lines[0].get_color()),
+            to_hex(ax.xaxis.label.get_color())] == before
+
+
+def test_a_window_already_white_and_inked_leaves_the_figure_alone():
+    from crystalline.crystalio import figure_style
+
+    figure, ax = _drawn()
+    figure_style.to_screen(figure, background="#ffffff", ink=figure_style.INK,
+                           rule="#dde3e8")
+    assert getattr(figure, "_crystalline_on_paper", None) in (None, [])
+    assert to_hex(ax.lines[0].get_color()) == figure_style.INK

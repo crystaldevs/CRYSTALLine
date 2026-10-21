@@ -1111,8 +1111,8 @@ def _supercel_geometry_lines(geometry: GeometryOptions) -> List[str]:
     origin to minimise symmetry operators with translational components.
 
     Not to be confused with :func:`_scelphono_lines`, which writes the *other*
-    CRYSTAL supercell keyword — the two used to be named one letter apart, so
-    swapping the call sites emitted a different calculation that still parsed.
+    CRYSTAL supercell keyword. Swapping the two call sites would emit a
+    different calculation that still parses.
     """
     if geometry.supercell is None:
         return []

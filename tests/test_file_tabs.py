@@ -179,6 +179,8 @@ class _Window(QMainWindow):
     _step_tab = MainWindow._step_tab
     _routed = MainWindow._routed
     _acting_on = MainWindow._acting_on
+    showEvent = MainWindow.showEvent
+    _replace_views_made_unseen = MainWindow._replace_views_made_unseen
 
     def __init__(self):
         super().__init__()
@@ -219,6 +221,7 @@ class _Window(QMainWindow):
         return tab
 
     def _build_tab_widgets(self, tab):
+        tab.made_unseen = not self.isVisible()   # as the window's own does
         for name in file_tabs.PER_TAB_WIDGETS:
             part = _Part(name)
             part.tab, part.events = tab, self.events
@@ -226,6 +229,9 @@ class _Window(QMainWindow):
         for name, stack in self._panel_stacks.items():
             stack.addWidget(getattr(tab, name))
         self.built.append(tab)
+
+    def _sync_welcome(self):
+        pass
 
     def _fill_tab(self, tab, path, read):
         """What the window does once a file is read and its tab is on screen."""
@@ -704,3 +710,63 @@ def test_the_file_tabs_start_at_the_left_of_the_view():
     for palette in (theme.LIGHT, theme.DARK):
         assert "QTabWidget#fileTabs::tab-bar { alignment: left; }" in theme.stylesheet(palette)
     assert 'self._file_tabs.setObjectName("fileTabs")' in inspect.getsource(MainWindow.__init__)
+
+
+def _shown(window):
+    window.show()
+    QApplication.processEvents()
+    QApplication.processEvents()   # and the turn the replacement waits for
+
+
+def test_on_windows_the_empty_first_tab_gets_a_view_made_on_screen(qapp, monkeypatch):
+    """Its view is made before the window is shown, and on Windows showing the
+    window leaves that view drawing nowhere: the first file opened into it
+    showed nothing, and the same file opened again, into a new tab, did."""
+    from crystalline.ui import main_window
+
+    monkeypatch.setattr(main_window, "_VIEWS_OUTLIVE_FIRST_SHOW", False)
+    window = _Window()
+    first = window._tab
+    assert first.made_unseen
+
+    _shown(window)
+
+    assert window._tabs == [window._tab] and window._tab is not first
+    assert not window._tab.made_unseen and window._tab.is_blank()
+    assert window._file_tabs.count() == 1
+    assert first.viewport.closed == 1                     # its render window let go
+    assert window._take_tab_for_file() is window._tab     # where the first file goes
+    window.close()
+
+
+def test_elsewhere_the_first_tab_is_kept(qapp, monkeypatch):
+    from crystalline.ui import main_window
+
+    monkeypatch.setattr(main_window, "_VIEWS_OUTLIVE_FIRST_SHOW", True)
+    window = _Window()
+    first = window._tab
+    _shown(window)
+
+    assert window._tabs == [first]
+    assert len(window.built) == 1                         # no second view made
+    window.close()
+
+
+def test_a_first_tab_with_something_in_it_is_not_swapped(qapp, monkeypatch):
+    from crystalline.ui import main_window
+
+    monkeypatch.setattr(main_window, "_VIEWS_OUTLIVE_FIRST_SHOW", False)
+    window = _Window()
+    first = window._tab
+    first.path = "/runs/a.out"
+    _shown(window)
+
+    assert window._tabs == [first]
+    window.close()
+
+
+def test_the_window_records_which_views_were_made_unseen():
+    import inspect
+
+    source = inspect.getsource(MainWindow._build_tab_widgets)
+    assert source.index("tab.made_unseen = not self.isVisible()") < source.index("Viewport(")
