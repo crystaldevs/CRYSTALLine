@@ -227,6 +227,7 @@ class _StubTileWindow:
     def __init__(self, supercell=(1, 1, 1)) -> None:
         self._supercell = supercell
         self._tile_restore = None
+        self._shown_edited = False   # no edits to carry: each tiling is derived afresh
         self.applied = 0
         self.told = []  # (supercell, restore) pushed to the phonon panel
         window = self
@@ -243,6 +244,7 @@ class _StubTileWindow:
     _set_supercell = MainWindow._set_supercell
     _update_supercell_action = MainWindow._update_supercell_action
     _tile_to_qpoint = MainWindow._tile_to_qpoint
+    _retile = MainWindow._retile
 
 
 def test_tiling_for_a_qpoint_remembers_the_cell_to_come_back_to():

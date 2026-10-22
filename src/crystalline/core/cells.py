@@ -67,7 +67,7 @@ class CellView(str, Enum):
 
 
 def _conventional_expansion(
-    structure: Structure, symprec: float
+    structure: Structure, symprec: float, matrix=None
 ) -> Tuple["object", np.ndarray, np.ndarray]:
     """Build the conventional cell of ``structure`` by centring expansion.
 
@@ -78,6 +78,11 @@ def _conventional_expansion(
     re-expresses a phonon q in the conventional basis. A non-periodic system, an
     already-conventional cell, or a P lattice all yield the loaded atoms
     unchanged with an identity mapping.
+
+    ``matrix``, when given, is used instead of being found: an edited primitive
+    cell is expanded as the cell it was edited from was (see
+    :func:`conventional_matrix`), since the edit may have taken away the very
+    symmetry the expansion is found by.
     """
     source = structure.to_ase()
     identity = (source, np.arange(len(source)), np.eye(3, dtype=int))
@@ -88,7 +93,10 @@ def _conventional_expansion(
     # Lazy import: keep `core` importable without ase's build tools.
     from ase.build import make_supercell
 
-    matrix = _centring_matrix(source, symprec)
+    if matrix is None:
+        matrix = _centring_matrix(source, symprec)
+    else:
+        matrix = np.asarray(matrix, dtype=int)
     if matrix is None or abs(int(round(np.linalg.det(matrix)))) <= 1:
         # A P lattice, a cell that is already conventional, or one that is not
         # the primitive cell of a standard one: it is drawn as it is, since
@@ -108,15 +116,76 @@ def _conventional_expansion(
     return conventional, mapping, matrix
 
 
+def _bond_graph(atoms, mult: float = 1.15):
+    """Each atom's bonds, as ``(neighbour, lattice shift)`` lists; ``None`` if not found.
+
+    Covalent radii scaled by ``mult``, less the contacts between two cations
+    (:func:`~crystalline.core.bonds.cation_contact`) — the bonds the renderer
+    draws, so that what is completed at the boundary is what is seen bonded.
+    """
+    try:
+        from ase.neighborlist import natural_cutoffs, neighbor_list
+
+        from crystalline.core.bonds import cation_contact
+
+        i, j, shift = neighbor_list("ijS", atoms, natural_cutoffs(atoms, mult=mult))
+        keep = ~cation_contact(atoms.numbers[i], atoms.numbers[j]) if len(i) else np.zeros(0, bool)
+    except Exception:  # noqa: BLE001 - never let a bonding hiccup break rendering
+        return None
+    graph: list[list] = [[] for _ in range(len(atoms))]
+    for a, b, s in zip(i[keep], j[keep], shift[keep]):
+        graph[a].append((int(b), np.asarray(s, dtype=int)))
+    return graph
+
+
+def _components(graph):
+    """The bonded components: ``(indices, images, rank)`` for each.
+
+    ``images`` (``(k, 3)`` integers) are the lattice shifts that put each atom
+    next to the atoms it is bonded to, following the bonds out from the first.
+    ``rank`` is how many independent directions the component repeats along:
+    following the bonds, a bond to an atom already placed either lands on it —
+    a ring — or one lattice vector away, which is the component bonded to its
+    own copy. A molecule has no such bond (rank 0), a chain's all lie along one
+    lattice vector (1), a layer's in a plane (2), a framework's span space (3).
+    How far the atoms happen to spread says none of this: an 8-atom cell of
+    silicon spans less than a cell, and is a framework all the same.
+    """
+    n = len(graph)
+    image = np.zeros((n, 3), dtype=int)
+    visited = [False] * n
+    found = []
+    for start in range(n):
+        if visited[start]:
+            continue
+        visited[start] = True
+        component, stack, loops = [start], [start], []
+        while stack:
+            u = stack.pop()
+            for v, s in graph[u]:
+                if not visited[v]:
+                    visited[v] = True
+                    image[v] = image[u] + s
+                    component.append(v)
+                    stack.append(v)
+                else:
+                    loop = image[u] + s - image[v]
+                    if loop.any():
+                        loops.append(loop)
+        rank = int(np.linalg.matrix_rank(np.asarray(loops, dtype=float))) if loops else 0
+        found.append((np.asarray(component), image[component].copy(), rank))
+    return found
+
+
 def _wrap_molecules(atoms, mult: float = 1.15):
     """Return ``atoms`` with whole molecules translated into the cell box.
 
     Molecules are found by covalent-radius bonding under the minimum-image
-    convention, each connected component is reassembled so it is contiguous
-    (never split across a cell face), then shifted so its anchor atom sits in
-    ``[0, 1)`` fractional coordinates. A component that percolates the lattice
-    (an extended framework, not a discrete molecule) can't be made whole, so its
-    atoms are simply wrapped individually — the standard depiction for those.
+    convention, each one put together whole (never split across a cell face),
+    then shifted so its anchor atom sits in ``[0, 1)`` fractional coordinates.
+    Anything that repeats — a chain, a layer, a framework (see
+    :func:`_components`) — cannot be made whole, so its atoms are wrapped
+    individually.
 
     Only integer lattice translations are applied, so atom order is preserved
     (and with it the phonon-eigenvector correspondence). Non-periodic systems
@@ -124,57 +193,26 @@ def _wrap_molecules(atoms, mult: float = 1.15):
     """
     if not atoms.pbc.any() or np.allclose(np.asarray(atoms.cell), 0.0):
         return atoms
-
-    try:
-        from ase.neighborlist import natural_cutoffs, neighbor_list
-
-        i, j, offset = neighbor_list("ijD", atoms, natural_cutoffs(atoms, mult=mult))
-    except Exception:  # noqa: BLE001 - never let a bonding hiccup break rendering
+    graph = _bond_graph(atoms, mult)
+    if graph is None:
         return atoms
-
-    n = len(atoms)
     cell = np.asarray(atoms.cell, dtype=float)
     # Only wrap along periodic axes. A slab/polymer's aperiodic axis carries
     # CRYSTAL's formal 500 Å vector; wrapping a slab centred on z = 0 into [0, 1)
     # there would fling its negative-z atoms to z ≈ 500, splitting it into two
     # sheets half a micron apart.
     periodic = np.asarray(atoms.pbc, dtype=bool)
-    neighbours: list[list] = [[] for _ in range(n)]
-    for a, b, disp in zip(i, j, offset):
-        neighbours[a].append((b, disp))
-
-    positions = atoms.get_positions()
-    unwrapped = positions.copy()
-    visited = [False] * n
-    for start in range(n):
-        if visited[start]:
+    frac = np.linalg.solve(cell.T, atoms.get_positions().T).T
+    for indices, images, rank in _components(graph):
+        if rank:
+            frac[np.ix_(indices, periodic)] %= 1.0                     # atom by atom
             continue
-        visited[start] = True
-        component = [start]
-        stack = [start]
-        while stack:  # depth-first reassembly via minimum-image displacements
-            u = stack.pop()
-            for v, disp in neighbours[u]:
-                if not visited[v]:
-                    visited[v] = True
-                    unwrapped[v] = unwrapped[u] + disp
-                    component.append(v)
-                    stack.append(v)
-        comp = np.asarray(component)
-        frac = np.linalg.solve(cell.T, unwrapped[comp].T).T
-        if np.any(frac.max(0) - frac.min(0) >= 1.0):
-            # Extended framework: reassembly is meaningless — wrap each atom, but
-            # only along periodic axes (aperiodic coordinates stay put).
-            wrapped = frac.copy()
-            wrapped[:, periodic] = frac[:, periodic] % 1.0
-            unwrapped[comp] = wrapped @ cell
-        else:
-            shift = np.floor(frac[0])
-            shift[~periodic] = 0.0  # never translate along an aperiodic axis
-            unwrapped[comp] -= shift @ cell  # anchor into [0, 1)
-
+        whole = frac[indices] + images
+        anchor = np.floor(whole[0])
+        anchor[~periodic] = 0.0           # never translate along an aperiodic axis
+        frac[indices] = whole - anchor
     out = atoms.copy()
-    out.set_positions(unwrapped)
+    out.set_positions(frac @ cell)
     return out
 
 
@@ -303,6 +341,59 @@ def _facing_the_loaded_cell(matrix: np.ndarray, loaded: np.ndarray) -> np.ndarra
     return best
 
 
+def conventional_matrix(structure: Structure, symprec: float = 1e-2) -> np.ndarray:
+    """The integer ``M`` that expands ``structure`` into its conventional cell (or ``I``).
+
+    For carrying an edit into the conventional cell: the expansion of the cell
+    as read, applied to the cell as edited.
+    """
+    return _conventional_expansion(structure, symprec)[2]
+
+
+def primitive_of(conventional: Structure, reference: Structure, mapping,
+                 primitive_cell, tolerance: float = 1e-3) -> Optional[Structure]:
+    """An edited conventional cell as the primitive cell it was expanded from, if it still is one.
+
+    ``reference`` is the conventional cell as derived, before the edit, atom
+    for atom with ``conventional``; ``mapping[i]`` is the primitive atom that
+    its atom ``i`` is a copy of. The edited cell is still a centred one when
+    every primitive atom's copies kept the centring translations between them
+    — the edit made to every copy alike — and then one copy of each is the
+    edited primitive cell. ``None`` when an edit broke that: one of two
+    centring-related chains turned, say. The edited crystal then has no
+    primitive cell smaller than the conventional one.
+    """
+    mapping = np.asarray(mapping, dtype=int)
+    if len(conventional) != len(reference) or len(conventional) != len(mapping):
+        return None
+    edited = np.asarray(conventional.positions, dtype=float)
+    before = np.asarray(reference.positions, dtype=float)
+    numbers = np.asarray(conventional.numbers)
+    box = np.asarray(conventional.cell, dtype=float)
+    box_before = np.asarray(reference.cell, dtype=float)
+    first = []
+    for atom in range(int(mapping.max()) + 1 if len(mapping) else 0):
+        copies = np.nonzero(mapping == atom)[0]
+        if not len(copies):
+            return None
+        lead = copies[0]
+        # Compared as fractions of each one's own box, since a lattice change
+        # scales the one and not the other; and equal up to a whole box, since
+        # each cell puts its atoms into the box on its own, and the same copy
+        # can land one box over in one of them and not in the other.
+        now = np.linalg.solve(box.T, (edited[copies] - edited[lead]).T).T
+        then = np.linalg.solve(box_before.T, (before[copies] - before[lead]).T).T
+        drift = now - then
+        if not np.allclose(drift, np.rint(drift), atol=tolerance) or np.any(numbers[copies] != numbers[lead]):
+            return None
+        first.append(lead)
+    atoms = conventional.to_ase()[first]
+    atoms.set_cell(np.asarray(primitive_cell, dtype=float))
+    for key in (_PARENT_KEY, _SHIFT_KEY):
+        atoms.arrays.pop(key, None)
+    return Structure.from_ase(atoms)
+
+
 def to_conventional(structure: Structure, symprec: float = 1e-2) -> Structure:
     """Return the crystallographic (conventional) cell of ``structure``.
 
@@ -326,6 +417,7 @@ def expand_modes_to_conventional(
     modes: PhononModes,
     symprec: float = 1e-2,
     per_atom=_NO_PAYLOAD,
+    matrix=None,
 ) -> Tuple[Structure, PhononModes]:
     """Return the conventional cell together with phonon modes defined on it.
 
@@ -345,7 +437,7 @@ def expand_modes_to_conventional(
     ``per_atom`` (ADP tensors, say) is replicated the same way — see
     :func:`tile_supercell` for what passing it does to the return value.
     """
-    atoms, mapping, matrix = _conventional_expansion(structure, symprec)
+    atoms, mapping, matrix = _conventional_expansion(structure, symprec, matrix)
     wrapped = _wrap_molecules(atoms)
     offsets = _lattice_offsets(
         wrapped.get_positions(), structure.positions, mapping, structure.cell
@@ -424,6 +516,58 @@ def tile_supercell(
     return _with_payload(Structure.from_ase(supercell), tiled_modes, per_atom, mapping)
 
 
+def reshaped_cell(cell, cellpar) -> np.ndarray:
+    """``cell`` given the lattice parameters ``cellpar`` (a, b, c in Å; α, β, γ in °), facing as before.
+
+    Built in ase's standard orientation (a along x, b in the xy plane) and then
+    turned the way ``cell`` faces, so that changing a length or an angle does not
+    also turn the crystal on screen: a cell drawn with a along y keeps a along
+    y. Only the shape changes.
+    """
+    from ase.geometry import cell_to_cellpar, cellpar_to_cell
+
+    cell = np.asarray(cell, dtype=float)
+    standard_now = cellpar_to_cell(cell_to_cellpar(cell))
+    turn = np.linalg.solve(standard_now, cell)        # cell = standard_now · turn
+    return cellpar_to_cell(np.asarray(cellpar, dtype=float)) @ turn
+
+
+def repeating_tile(tiled: Structure, reps: Tuple[int, int, int], unit_cell,
+                   tolerance: float = 1e-3) -> Optional[Structure]:
+    """The first tile of ``tiled``, if every tile is that one moved by its lattice shift.
+
+    ``tiled`` is a supercell in the order :func:`tile_supercell` makes one — the
+    tiles one after the other, the last axis turning fastest — possibly edited
+    since. When the edit was made the same in every tile (a molecule turned
+    with all its periodic images, say), the supercell is still ``reps`` copies
+    of one cell, and that cell — edit included — is returned. ``None`` when
+    the tiles differ: an atom moved or removed in one tile and not the others,
+    which only the supercell can hold.
+    """
+    reps = tuple(int(r) for r in reps)
+    count = int(np.prod(reps))
+    if count == 1:
+        return Structure.from_ase(tiled.to_ase())
+    if len(tiled) % count:
+        return None
+    n = len(tiled) // count
+    positions = np.asarray(tiled.positions, dtype=float)
+    numbers = np.asarray(tiled.numbers)
+    unit_cell = np.asarray(unit_cell, dtype=float)
+    first = positions[:n]
+    block = 0
+    for shift in np.ndindex(*reps):
+        rows = slice(block * n, (block + 1) * n)
+        if not np.array_equal(numbers[rows], numbers[:n]):
+            return None
+        if not np.allclose(positions[rows], first + np.asarray(shift) @ unit_cell, atol=tolerance):
+            return None
+        block += 1
+    atoms = tiled.to_ase()[:n]
+    atoms.set_cell(unit_cell)
+    return Structure.from_ase(atoms)
+
+
 def _with_payload(structure, modes, per_atom, mapping):
     """Assemble the return of a cell operation, with ``per_atom`` if asked for.
 
@@ -458,133 +602,110 @@ def _with_payload(structure, modes, per_atom, mapping):
 
 
 def _boundary_completion(structure: Structure, tol: float, mult: float = 1.15):
-    """Add periodic images of every molecule/atom that pokes into the cell.
+    """Draw the cell's contents with their coordination complete.
 
-    Returns ``(ase.Atoms, mapping)`` where the atoms are the cell's own atoms
-    PLUS the atoms of any periodic image whose molecule has at least one atom
-    within ``[-tol, 1+tol]`` fractional (i.e. inside or just touching the box).
-    Whole molecules are kept together, so a corner CO2 shows up complete at every
-    corner it belongs to. ``mapping[i]`` is the index of the original atom that
-    image atom ``i`` is a copy of (for replicating phonon eigenvectors).
+    What is drawn depends on what the bonds make of each component (see
+    :func:`_components`):
+
+    * a **molecule** is drawn whole at every cell position where any of its
+      atoms lies in the box, so a corner CO2 shows up complete at every corner
+      it belongs to;
+    * a **framework** — a component bonded through every periodic direction,
+      silicon or rock salt — is every atom lying in the box, with its copies on
+      the faces, edges and corners, and the ligands of each cation among them:
+      rock salt's corner Na with all six of its Cl, the corners of the
+      octahedra drawn round it. Silicon has no ligands — Si bonds to Si — and is
+      the 18 atoms of its cell;
+    * a **chain or a layer** in a crystal of more dimensions is drawn as a
+      framework is, and then each coordination centre in the box is given all
+      the atoms it is bonded to, inside the box or not, and each terminal atom
+      (one bond: H, F) on those is added too. A polymer chain runs through the
+      cell and one bond past each face, whole groups and all; a brucite layer
+      gives every Mg its Mg(OH)6 octahedron.
+
+    A coordination centre has more than one bond, and is bonded to something at
+    least as electronegative as itself: the Mg of brucite and the carbons of a
+    chain are, the O of brucite is not — completing it would bring in Mg from
+    the next cells round. A framework's cations are completed more narrowly,
+    with their ligands only (:func:`~crystalline.core.bonds.is_ligand`), and
+    only up to :data:`~crystalline.core.bonds.POLYHEDRON_MAX_VERTICES` of them:
+    the atoms a coordination polyhedron is drawn between, so every corner of
+    one is an atom, and not the twelve oxygens round a perovskite's A site. "In the box" is within ``tol`` of it, so an atom on a
+    face counts; along an aperiodic direction everything is in it, and nothing
+    is ever shifted along one.
+
+    Returns ``(ase.Atoms, mapping)``: the cell's own atoms first, in order, then
+    the copies; ``mapping[i]`` is the atom that drawn atom ``i`` is a copy of
+    (for replicating phonon eigenvectors).
     """
     import itertools
+
+    from crystalline.core.bonds import POLYHEDRON_MAX_VERTICES, electronegativity, is_ligand
 
     atoms = structure.to_ase()
     n = len(atoms)
     identity = (atoms, np.arange(n))
     if not structure.is_periodic or np.allclose(structure.cell, 0.0) or n == 0:
         return identity
-
-    try:
-        from ase import Atoms
-        from ase.neighborlist import natural_cutoffs, neighbor_list
-
-        i, j, disp = neighbor_list("ijD", atoms, natural_cutoffs(atoms, mult=mult))
-    except Exception:  # noqa: BLE001 - never let a bonding hiccup break rendering
+    graph = _bond_graph(atoms, mult)
+    if graph is None:
         return identity
+
+    from ase import Atoms
 
     cell = np.asarray(atoms.cell, dtype=float)
-    positions = atoms.get_positions()
+    periodic = np.asarray(atoms.get_pbc(), dtype=bool)
     numbers = atoms.get_atomic_numbers()
-    neighbours: list[list] = [[] for _ in range(n)]
-    for a, b, d in zip(i, j, disp):
-        neighbours[a].append((b, d))
-
-    # Reassemble contiguous molecules (whole across the periodic boundary).
-    unwrapped = positions.copy()
-    visited = [False] * n
-    components: list = []
-    for start in range(n):
-        if visited[start]:
-            continue
-        visited[start] = True
-        component = [start]
-        stack = [start]
-        while stack:
-            u = stack.pop()
-            for v, d in neighbours[u]:
-                if not visited[v]:
-                    visited[v] = True
-                    unwrapped[v] = unwrapped[u] + d
-                    component.append(v)
-                    stack.append(v)
-        components.append(np.asarray(component))
-
-    # A component that percolates the lattice (extended framework) is imaged atom
-    # by atom instead of as one blob. Crucially, such atoms are imaged from their
-    # ORIGINAL (in-cell) positions, not the DFS-``unwrapped`` ones: unwrapping an
-    # extended network drifts by lattice vectors around its loops, which would
-    # place the drawn atoms off their true sites — visibly detaching the bonds
-    # and coordination polyhedra (analysed on the clean cell) from the atoms.
-    base_pos = unwrapped.copy()
-    clusters: list = []
-    for comp in components:
-        frac = np.linalg.solve(cell.T, unwrapped[comp].T).T
-        if np.any(frac.max(0) - frac.min(0) >= 1.0):
-            base_pos[comp] = positions[comp]  # canonical sites, no unwrap drift
-            clusters.extend(np.array([idx]) for idx in comp)
-        else:
-            clusters.append(comp)
-
-    out_pos: list = []
-    out_num: list = []
-    out_parent: list = []
-    seen: set = set()
-    # Only image along periodic axes: a slab/polymer's aperiodic direction carries
+    frac = np.linalg.solve(cell.T, atoms.get_positions().T).T
+    # Only along periodic axes: a slab/polymer's aperiodic direction carries
     # CRYSTAL's formal 500 Å vector, and shifting by it would spawn phantom copies
     # of the whole system 500 Å away in the vacuum.
-    per_axis = [(-1, 0, 1) if p else (0,) for p in atoms.get_pbc()]
-    shifts = np.asarray(list(itertools.product(*per_axis)), dtype=float)  # (S, 3)
-    cart_shifts = shifts @ cell
+    shifts = np.asarray(list(itertools.product(*[(-1, 0, 1) if p else (0,) for p in periodic])),
+                        dtype=int)
 
-    # Which (shift, atom) images land in the box, worked out for all of them at
-    # once. Two things make this a single vectorised pass instead of a test per
-    # cluster per shift:
-    #
-    #   * a shift by an integer lattice vector is that same integer shift in
-    #     fractional coordinates, so one solve for the whole cell serves every
-    #     shift — there is no need to re-solve per image;
-    #   * the test itself is elementwise, so it broadcasts over (shift, atom).
-    #
-    # Not a solve plus a numpy reduction inside the double loop below: an
-    # extended framework is imaged atom by atom, so that would be 27 of each per
-    # *atom* — 27650 solves and 27650 reductions on a 1024-atom framework,
-    # about three quarters of this function's cost.
-    #
-    # frac_base must come after the loop above, which rewrites base_pos for
-    # percolating components.
-    #
-    # One solve plus an exact integer add is also *more* accurate than solving
-    # the shifted cartesian position was, so an atom lying exactly on a cell
-    # face now comes out at a fractional 1.0 instead of 1.0 + 2e-16. At the
-    # tolerance this is called with that changes nothing; at tol=0 it means such
-    # an atom is kept rather than dropped, which is what "inside or just
-    # touching the box" says it should be.
-    frac_base = np.linalg.solve(cell.T, base_pos.T).T
-    frac_images = frac_base[None, :, :] + shifts[:, None, :]           # (S, N, 3)
-    in_box = np.all((frac_images >= -tol) & (frac_images <= 1.0 + tol), axis=2)  # (S, N)
+    def in_box(points):                     # (..., 3) fractional -> (...) bool
+        inside = (points >= -tol) & (points <= 1.0 + tol)
+        return np.all(inside | ~periodic, axis=-1)
 
-    for comp in clusters:
-        # One reduction per cluster rather than one per cluster and shift, and
-        # the inner loop then only runs for the shifts that actually hit.
-        for s in np.nonzero(in_box[:, comp].any(axis=1))[0]:
-            image = base_pos[comp] + cart_shifts[s]
-            keys = np.round(image, 3)
-            for k, idx in enumerate(comp):
-                key = tuple(keys[k])
-                if key in seen:
-                    continue
-                seen.add(key)
-                out_pos.append(image[k])
-                out_num.append(int(numbers[idx]))
-                out_parent.append(int(idx))
+    x = np.array([electronegativity(int(z)) for z in numbers])
+    centre = [len(graph[a]) > 1 and any(x[b] >= x[a] - 1e-9 for b, _s in graph[a])
+              for a in range(n)]
+    ligands = [[(b, s) for b, s in graph[a] if is_ligand(x[a], x[b])] for a in range(n)]
+    ligands = [found if len(found) <= POLYHEDRON_MAX_VERTICES else [] for found in ligands]
+    drawn = set()
+    for indices, images, rank in _components(graph):
+        if rank == 0:
+            # One copy per shift that brings any of the molecule into the box.
+            whole = frac[indices] + images
+            touching = in_box(whole[None, :, :] + shifts[:, None, :]).any(axis=1)
+            for s in shifts[touching]:
+                drawn.update((int(a), tuple(int(v) for v in img + s))
+                             for a, img in zip(indices, images))
+            continue
+        hits = in_box(frac[indices][None, :, :] + shifts[:, None, :])          # (S, k)
+        core = {(int(indices[k]), tuple(int(v) for v in shifts[s]))
+                for s, k in zip(*np.nonzero(hits))}
+        drawn |= core
+        if rank >= int(periodic.sum()):                    # a framework: its cations' ligands
+            shell = {(b, tuple(int(v) for v in np.asarray(o) + t))
+                     for a, o in core for b, t in ligands[a]}
+        else:                                              # a chain or a layer: its centres' bonds
+            shell = {(b, tuple(int(v) for v in np.asarray(o) + t))
+                     for a, o in core if centre[a] for b, t in graph[a]}
+        drawn |= shell
+        drawn |= {(c, tuple(int(v) for v in np.asarray(o) + t))
+                  for b, o in shell - core for c, t in graph[b] if len(graph[c]) == 1}
 
-    if not out_pos:
+    if not drawn:
         return identity
-    result = Atoms(
-        numbers=out_num, positions=np.asarray(out_pos), cell=cell, pbc=atoms.get_pbc()
-    )
-    return result, np.asarray(out_parent, dtype=int)
+    # The cell's own atoms first, in their order, then the copies.
+    order = sorted(drawn, key=lambda pair: (any(pair[1]), pair[1], pair[0]))
+    parents = np.array([a for a, _o in order], dtype=int)
+    offsets = np.array([o for _a, o in order], dtype=float)
+    result = Atoms(numbers=numbers[parents],
+                   positions=atoms.get_positions()[parents] + offsets @ cell,
+                   cell=cell, pbc=atoms.get_pbc())
+    return result, parents
 
 
 def complete_boundary(
@@ -610,7 +731,79 @@ def complete_boundary(
             atoms.get_positions(), structure.positions, mapping, structure.cell
         )
         new_modes = _replicate_modes(modes, mapping, offsets)
+    _label_copies(atoms, structure, mapping)
     return _with_payload(Structure.from_ase(atoms), new_modes, per_atom, mapping)
+
+
+# Per-atom arrays a completed structure carries, so that the completion can be
+# taken back off it after the drawn atoms have been edited: which atom of the
+# cell each drawn atom is a copy of (plus one, so that 0 — what ase gives an
+# atom added later — means "none: an atom of its own"), and the whole lattice
+# shift it was drawn at.
+_PARENT_KEY = "crystalline_copy_of"
+_SHIFT_KEY = "crystalline_copy_shift"
+
+
+def _label_copies(atoms, structure: Structure, mapping) -> None:
+    """Record on ``atoms`` which atom of ``structure`` each is a copy of, and where."""
+    if mapping is None:
+        mapping = np.arange(len(atoms))
+    mapping = np.asarray(mapping, dtype=int)
+    shifts = np.zeros((len(atoms), 3), dtype=int)
+    cell = np.asarray(structure.cell, dtype=float)
+    if len(atoms) and abs(np.linalg.det(cell)) > 1e-8:
+        delta = atoms.get_positions() - np.asarray(structure.positions)[mapping]
+        shifts = np.rint(np.linalg.solve(cell.T, delta.T).T).astype(int)
+    atoms.set_array(_PARENT_KEY, mapping + 1)
+    atoms.set_array(_SHIFT_KEY, shifts)
+
+
+def own_atoms(structure: Structure) -> Structure:
+    """``structure`` labelled as nothing but its own atoms: no copies drawn.
+
+    What a view without boundary completion holds, labelled the way
+    :func:`complete_boundary` labels its copies, so that edits to either can be
+    carried through a change of the other (:func:`without_boundary_copies`).
+    """
+    atoms = structure.to_ase()
+    _label_copies(atoms, structure, None)
+    return Structure.from_ase(atoms)
+
+
+def without_boundary_copies(structure: Structure):
+    """The atoms a completed (and maybe edited) structure stands for, copies taken off.
+
+    Returns ``(structure, parents)``: one atom per atom of the cell that still
+    has a copy drawn — in the order of the cell, at the place its own copy is,
+    or where any surviving copy says it is once its lattice shift is taken off
+    — then any atom added since, which belongs to no cell atom. ``parents[i]``
+    is the cell atom that atom ``i`` is, or ``-1`` for an added one. A structure
+    that was never labelled (see :func:`own_atoms`) has no copies to take off,
+    and comes back as it is with ``parents`` of ``None``.
+    """
+    atoms = structure.to_ase()
+    if _PARENT_KEY not in atoms.arrays or _SHIFT_KEY not in atoms.arrays:
+        return Structure.from_ase(atoms), None
+    parent = np.asarray(atoms.get_array(_PARENT_KEY), dtype=int) - 1
+    shift = np.asarray(atoms.get_array(_SHIFT_KEY), dtype=int)
+    cell = np.asarray(atoms.cell, dtype=float)
+    positions = atoms.get_positions()
+    chosen = {}
+    for i, p in enumerate(parent):
+        if p < 0:
+            continue
+        own = not np.any(shift[i])
+        if p not in chosen or (own and np.any(shift[chosen[p]])):
+            chosen[p] = i
+    order = sorted(chosen)
+    added = [i for i, p in enumerate(parent) if p < 0]
+    keep = [chosen[p] for p in order] + added
+    result = atoms[keep]
+    result.set_positions(np.array([positions[i] - shift[i] @ cell for i in keep]).reshape(-1, 3))
+    for key in (_PARENT_KEY, _SHIFT_KEY):
+        del result.arrays[key]
+    parents = np.array(order + [-1] * len(added), dtype=int)
+    return Structure.from_ase(result), parents
 
 
 def to_analysis_cell(structure: Structure, unit_cell) -> Structure:
@@ -661,15 +854,24 @@ def to_analysis_cell(structure: Structure, unit_cell) -> Structure:
         if key not in seen:
             seen.add(key)
             keep.append(i)
-    return Structure.from_ase(atoms[keep])
+    folded = atoms[keep]
+    for name in (_PARENT_KEY, _SHIFT_KEY):   # the drawing's labels; not the crystal's
+        folded.arrays.pop(name, None)
+    return Structure.from_ase(folded)
 
 
 __all__ = [
     "CellView",
     "to_conventional",
+    "conventional_matrix",
     "expand_modes_to_conventional",
+    "primitive_of",
     "as_view",
     "tile_supercell",
     "complete_boundary",
+    "own_atoms",
+    "repeating_tile",
+    "reshaped_cell",
     "to_analysis_cell",
+    "without_boundary_copies",
 ]

@@ -326,6 +326,11 @@ class StructureRenderer:
         # Connectivity derived from that reference, computed once and reused for
         # every frame of an animation instead of being rebuilt per frame.
         self._frozen_bond_pairs: Optional[tuple] = None
+        # An edit being previewed — a drag, a rotation dialled in — links the
+        # atoms by where they are, even with a mode's equilibrium fixing the
+        # bonds: the edit changes the chemistry an animation keeps. Off again
+        # once the edit is committed (a rebuild) or taken back.
+        self._editing_preview = False
         self._frozen_hbond_pairs: Optional[np.ndarray] = None
         # The geometry the bonds on screen were last worked out from — the
         # reference, or the atoms themselves — so a move to where the atoms
@@ -476,6 +481,15 @@ class StructureRenderer:
         self._bond_structure = bond_structure
         self._rebuild()
 
+    def set_bond_structure(self, bond_structure: Optional[Structure]) -> None:
+        """Replace the clean cell coordination is worked out on, without drawing.
+
+        For an edit: the atoms on screen have moved, and the polyhedra must be
+        found among them where they are now, not where the cell was derived —
+        a corner left behind at an atom's old place. The caller redraws.
+        """
+        self._bond_structure = bond_structure
+
     def refresh(self) -> None:
         """Redraw after the current structure was edited (add/remove atoms)."""
         self._rebuild()
@@ -501,9 +515,27 @@ class StructureRenderer:
             self._redraw_mode_arrows()  # arrows ride along with the atoms
         self.plotter.render()
 
+    def preview_positions(self, positions: np.ndarray) -> None:
+        """Show the atoms at ``positions`` without touching the structure.
+
+        For a motion being dialled in — a rotation in its dialog — before it is
+        committed: the atoms, bonds and polyhedra move as in an animation
+        (:meth:`update_positions`), and the selection halos ride along with
+        their atoms, as they do in a drag. Called with the structure's own
+        positions, it puts everything back.
+        """
+        positions = np.asarray(positions, dtype=float)
+        base = np.asarray(self._structure.positions, dtype=float)
+        self._editing_preview = not np.allclose(positions, base)
+        for index, actor in self._highlight_actors.items():
+            actor.SetPosition(*(positions[index] - base[index]))
+        self.update_positions(positions)
+        self.plotter.render()  # the halos, if the atoms were already there
+
     def _bonding_geometry(self, positions: Optional[np.ndarray] = None) -> np.ndarray:
-        """The geometry bonds are worked out from: the reference, if one is set."""
-        if self._bond_reference is not None:
+        """The geometry bonds are worked out from: the reference, if one is set
+        and no edit is being previewed."""
+        if self._bond_reference is not None and not self._editing_preview:
             return self._bond_reference
         return self._positions if positions is None else positions
 
@@ -619,6 +651,7 @@ class StructureRenderer:
         world_pos = np.asarray(world_pos, dtype=float)
         base = np.asarray(self._structure.positions, dtype=float)
         delta = world_pos - base[index]
+        self._editing_preview = True   # the atom re-bonds as it goes (see __init__)
         # The move group is fixed for the duration of a drag; cache it per atom.
         if index != self._drag_primary:
             self._drag_primary = index
@@ -737,6 +770,7 @@ class StructureRenderer:
         self._numbers = np.empty(0, dtype=int)
         self._radii = np.empty(0, dtype=float)
         self._drag_primary = None
+        self._editing_preview = False
         self._drag_group = []
         self._bond_actor = None
         self._hbond_actor = None
@@ -941,7 +975,8 @@ class StructureRenderer:
         While a bond reference is set the pairs are computed from it once and
         cached, so an animation pays the neighbour search a single time.
         """
-        if self._bond_reference is None or len(self._bond_reference) != len(self._positions):
+        if (self._bond_reference is None or len(self._bond_reference) != len(self._positions)
+                or self._editing_preview):
             return None
         if self._frozen_bond_pairs is None:
             self._frozen_bond_pairs = _bonded_pairs(self._bond_reference, numbers, tolerance)
@@ -962,7 +997,8 @@ class StructureRenderer:
             hydrogen_bonds_from_positions,
         )
 
-        if self._bond_reference is not None and len(self._bond_reference) == len(self._positions):
+        if (self._bond_reference is not None and len(self._bond_reference) == len(self._positions)
+                and not self._editing_preview):
             if self._frozen_hbond_pairs is None:
                 self._frozen_hbond_pairs = hydrogen_bond_pairs(self._bond_reference, self._numbers)
             segments = hydrogen_bond_segments(self._positions, self._frozen_hbond_pairs)
@@ -2956,28 +2992,28 @@ def _hex_to_rgb(color: str) -> np.ndarray:
     return np.array([int(text[k : k + 2], 16) for k in (0, 2, 4)], dtype=np.uint8)
 
 
-# Two atoms both below this Pauling electronegativity are treated as cations and
-# not bonded to each other — stops covalent radii from spuriously bonding big
-# cations (Ca–Ca, Ca–Si) in ionic crystals, while leaving C–C, C–O, Si–O, etc.
-_CATION_ELECTRONEGATIVITY = 2.0
+# Which atoms are cations, and so not bonded to each other: the rule lives with
+# the other bonding rules, in core.bonds, so the cell code completing molecules at
+# the boundary and the bonds drawn here cannot disagree about what is bonded.
+from crystalline.core.bonds import (  # noqa: E402
+    CATION_ELECTRONEGATIVITY as _CATION_ELECTRONEGATIVITY,
+    POLYHEDRON_MAX_VERTICES,
+    cation_contact as _cation_contact,
+)
 
 
 @lru_cache(maxsize=None)
 def _electronegativity(z: int) -> float:
-    try:
-        from pymatgen.core import Element
+    from crystalline.core.bonds import electronegativity
 
-        value = Element.from_Z(int(z)).X
-        return float(value) if value and not np.isnan(value) else 0.0
-    except Exception:  # noqa: BLE001 - pymatgen missing / element without EN
-        return 0.0
+    return electronegativity(z)
 
 
 def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     """Return the (i, j) index arrays of bonded atom pairs (KD-tree neighbour search).
 
     Two atoms bond if their distance < ``tolerance * (r_i + r_j)`` AND they are
-    not both cations. The KD-tree finds only pairs within the maximum possible
+    not both cations (two metalloids, Si–Si, still bond: see ``core.bonds``). The KD-tree finds only pairs within the maximum possible
     bond length, avoiding the O(N^2) all-pairs loop that dominated load/redraw
     time for large structures.
     """
@@ -3000,8 +3036,8 @@ def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     i, j = i[keep], j[keep]
     if len(i) == 0:
         return i, j
-    en = np.array([_electronegativity(int(z)) for z in numbers])
-    both_cations = (en[i] < _CATION_ELECTRONEGATIVITY) & (en[j] < _CATION_ELECTRONEGATIVITY)
+    numbers = np.asarray(numbers, dtype=int)
+    both_cations = _cation_contact(numbers[i], numbers[j])
     return i[~both_cations], j[~both_cations]
 
 
@@ -3381,7 +3417,7 @@ def _fallback_polyhedra(atoms, tolerance: float, min_vertices: int) -> list:
 
     polyhedra = []
     for center, pts in ligands.items():
-        if len(pts) < min_vertices:
+        if not min_vertices <= len(pts) <= POLYHEDRON_MAX_VERTICES:
             continue
         polyhedra.append(
             (int(numbers[center]), np.asarray(positions[center], dtype=float),

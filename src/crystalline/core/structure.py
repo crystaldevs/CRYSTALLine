@@ -256,6 +256,23 @@ class Structure:
         self._atoms.set_positions(pos)
         self._notify()
 
+    def move_atoms(self, positions: dict) -> None:
+        """Put several atoms at new cartesian positions, ``{index: (x, y, z)}``.
+
+        One change notification for all of them, so a rotation of a selection
+        is one undo step and one redraw.
+        """
+        moves = {int(i): np.asarray(list(p), dtype=float) for i, p in positions.items()}
+        for i in moves:
+            self._check_index(i)
+        if not moves:
+            return
+        pos = self._atoms.get_positions()
+        for i, p in moves.items():
+            pos[i] = p
+        self._atoms.set_positions(pos)
+        self._notify()
+
     def set_symbols(self, indices: Iterable[int], symbol: str) -> None:
         """Change the element of several atoms at once."""
         _validate_symbol(symbol)

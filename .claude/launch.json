@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "docs",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m", "http.server", "8767", "--bind", "127.0.0.1",
+        "--directory", "/private/tmp/claude-501/-Users-davidemitoli-CRYSTALLine/fe652893-4762-49b4-9f83-df4059bb7a60/scratchpad/docsite"
+      ],
+      "port": 8767
+    }
+  ]
+}
