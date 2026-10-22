@@ -51,7 +51,7 @@ def test_measuring_two_atoms_lists_a_distance(qapp):
     assert result.value == pytest.approx(0.9572, abs=1e-4)
     # listed, but not drawn until ticked: that is the user's to decide
     assert emitted and emitted[-1] == []
-    assert panel._items()[0].checkState() == Qt.Unchecked
+    assert panel._items()[0].checkState(0) == Qt.Unchecked
 
 
 def test_measuring_three_atoms_gives_an_angle(qapp):
@@ -110,7 +110,7 @@ def test_a_new_measurement_is_listed_and_drawn_only_once_ticked(qapp):
     panel.set_selection([0, 1])
     panel._measure_selection()
     assert panel.shown_annotations() == [] and len(panel.measurements()) == 1
-    panel._items()[0].setCheckState(Qt.Checked)
+    panel._items()[0].setCheckState(0, Qt.Checked)     # the tick is the first column's
     assert len(panel.shown_annotations()) == 1 and len(shown[-1]) == 1
 
 
@@ -120,10 +120,10 @@ def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
     panel.annotations_changed.connect(lambda anns: shown.append(list(anns)))
     panel.set_selection([0, 1])
     panel._measure_selection()
-    panel._items()[0].setCheckState(Qt.Checked)
+    panel._items()[0].setCheckState(0, Qt.Checked)
     assert len(panel.shown_annotations()) == 1
 
-    panel._items()[0].setCheckState(Qt.Unchecked)
+    panel._items()[0].setCheckState(0, Qt.Unchecked)
     assert panel.shown_annotations() == []       # nothing drawn
     assert len(panel.measurements()) == 1        # but still listed
     assert shown[-1] == []                       # and the viewport was told
@@ -137,7 +137,7 @@ def test_clearing_and_removing_measurements(qapp):
     panel._measure_selection()
     assert len(panel.measurements()) == 2
 
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     panel._remove_selected_measurements()
     assert len(panel.measurements()) == 1
     assert panel.measurements()[0].kind == M.ANGLE  # the right one went
@@ -226,7 +226,7 @@ def test_setting_a_per_item_colour(qapp, monkeypatch):
     panel.set_selection([1, 0, 2])
     panel._measure_selection()  # an angle
     for item in panel._items():
-        item.setCheckState(Qt.Checked)               # both drawn, so the redraw has them
+        item.setCheckState(0, Qt.Checked)               # both drawn, so the redraw has them
     assert [m.color for m in panel.measurements()] == [None, None]  # default (group) colour
 
     emitted = []
@@ -234,8 +234,8 @@ def test_setting_a_per_item_colour(qapp, monkeypatch):
 
     # Recolour just the distance (row 0); the colour dialog is stubbed.
     monkeypatch.setattr(QColorDialog, "getColor", staticmethod(lambda *a, **k: QColor("#123456")))
-    panel._list.item(0).setSelected(True)
-    panel._list.item(1).setSelected(False)
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(False)
     panel._set_measurement_colour()
 
     assert panel.measurements()[0].color == "#123456"  # the distance is recoloured
@@ -250,7 +250,7 @@ def test_colour_button_needs_a_selected_measurement(qapp):
     panel._list.clearSelection()
     panel._sync_buttons()
     assert not panel._color_btn.isEnabled()  # nothing selected → nothing to recolour
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._color_btn.isEnabled()
 
 
@@ -264,7 +264,7 @@ def test_the_thickness_slider_sets_every_line_or_the_selected_ones(qapp):
     panel.set_selection([1, 0, 2])
     panel._measure_selection()
     for item in panel._items():
-        item.setCheckState(Qt.Checked)               # both drawn, so the redraw has them
+        item.setCheckState(0, Qt.Checked)               # both drawn, so the redraw has them
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.07, 0.07])
 
     # nothing selected in the list: every line follows, live
@@ -274,12 +274,12 @@ def test_the_thickness_slider_sets_every_line_or_the_selected_ones(qapp):
     assert panel._thickness.box.value() == pytest.approx(0.2)      # the box follows
 
     # one selected: only that one, and picking another shows its value
-    panel._list.item(1).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(True)
     panel._thickness.box.setValue(0.35)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
     assert panel._thickness.slider.value() == round((0.35 - 0.02) / 0.48 * 1000)
     panel._list.clearSelection()
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._thickness.box.value() == pytest.approx(0.2)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
 
@@ -950,3 +950,93 @@ def test_moving_a_plane_does_not_move_its_track(qapp):
 
     assert _track(panel) == (0.0, 3.0)
     assert panel._planes[0].offset == pytest.approx(2.5)
+
+
+# ── the measurement table: sorting, a point's value ─────────────────────
+def _peroxide():
+    """H2O2 as on screen: its four atoms, and O2 again in the cell along −a."""
+    s = Structure.empty()
+    for element, position in (("O", [0.0, 0.0, 0.0]), ("O", [1.45, 0.0, 0.0]),
+                              ("H", [-0.3, 0.9, 0.2]), ("H", [1.75, -0.2, 0.9]),
+                              ("O", [1.45 - 5.0, 0.0, 0.0])):
+        s.add_atom(element, position)
+    return s
+
+
+def _measure(panel, *atoms):
+    """Pick ``atoms`` one at a time, as in the 3D view, then measure them."""
+    from _panels import pick_and_measure
+
+    return pick_and_measure(panel, atoms)
+
+
+def _row(panel, row):
+    from crystalline.ui.panels.geometry_panel import _HEADERS
+
+    item = panel._items()[row]
+    return [item.text(column) for column in range(len(_HEADERS))]
+
+
+def test_the_numbers_are_centred_in_their_columns(qapp):
+    """The values and their heading over them: right-aligned, the Value column
+    read as pushed away to the dock's edge. The measured atoms stay on the
+    left, by their tick box."""
+    from crystalline.ui.panels.geometry_panel import _COL_NAME, _COL_VALUE
+
+    def side(alignment):
+        return alignment & (Qt.AlignLeft | Qt.AlignRight | Qt.AlignHCenter)
+
+    panel = GeometryPanel(_water())
+    _measure(panel, 0, 1)
+    heading = panel._list.headerItem().textAlignment(_COL_VALUE)
+    assert side(panel._items()[0].textAlignment(_COL_VALUE)) == Qt.AlignHCenter
+    assert side(heading) == Qt.AlignHCenter
+    assert not side(panel._items()[0].textAlignment(_COL_NAME)) & Qt.AlignHCenter
+
+
+def test_sorting_moves_each_measurement_with_its_row(qapp):
+    """The table sorts by whichever heading is clicked, and the measurement behind
+    each row goes with it: Remove takes away the row picked, and nothing else.
+    Rows with nothing in the column stay at the bottom, whichever way it runs."""
+    from crystalline.ui.panels.geometry_panel import _COL_VALUE
+
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 0, 1)            # O1–O2, 1.450 Å
+    _measure(panel, 3)               # H4, a point: no single value
+    _measure(panel, 0, 2)            # O1–H3, 0.970 Å
+    _measure(panel, 0, 3)            # O1···H4, 1.978 Å
+    for row in (1, 2):                                    # H4 and O1–H3 drawn, the rest not
+        panel._items()[row].setCheckState(0, Qt.Checked)
+
+    panel._list.header().setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
+    assert [_row(panel, r)[_COL_VALUE] for r in range(4)] == [
+        "1.978 Å", "1.450 Å", "0.970 Å", "(1.750, -0.200, 0.900)"]
+    assert [m.label for m in panel.shown_annotations()] == [
+        "O(0)–H(2)", "H(3)  (1.750, -0.200, 0.900)"]
+    _measure(panel, 2, 4)            # H3···O2(−a), 3.378 Å: sorted into place
+    assert [_row(panel, r)[_COL_VALUE] for r in range(4)] == [
+        "3.378 Å", "1.978 Å", "1.450 Å", "0.970 Å"]
+
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._remove_selected_measurements()
+    assert [round(m.value, 3) for m in panel.measurements()[:3]] == [1.978, 1.45, 0.970]
+
+
+def test_a_third_click_on_a_heading_stops_sorting(qapp):
+    from crystalline.ui.panels.geometry_panel import _COL_VALUE
+
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 0, 1)
+    _measure(panel, 0, 2)
+    header = panel._list.header()
+    header.setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
+    header.setSortIndicator(-1, Qt.AscendingOrder)         # cleared: left as it stands
+    _measure(panel, 2, 4)
+    assert [_row(panel, r)[_COL_VALUE] for r in range(3)] == ["1.450 Å", "0.970 Å", "3.378 Å"]
+
+
+def test_a_point_lists_its_coordinates_as_its_value(qapp):
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 3)
+    assert _row(panel, 0) == ["H(3)", "(1.750, -0.200, 0.900)"]
+

@@ -27,23 +27,27 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QCheckBox,
     QColorDialog,
     QComboBox,
     QDoubleSpinBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -91,6 +95,22 @@ _THICKNESS_MAX = 0.50
 # The panel's sections: the key each is remembered under, and its header.
 _SECTIONS = (("measure", "Measure"), ("planes", "Lattice planes"), ("atoms", "Atoms"))
 
+# The measurement table's columns: the atoms measured, and the value.
+_COL_NAME, _COL_VALUE = range(2)
+_HEADERS = ("Measurement", "Value")
+_HEADER_TIPS = (
+    "The atoms measured — tick a row to draw it in the 3D view. Click any "
+    "heading to sort by it.",
+    "The value measured on the atoms on screen",
+)
+# The least width (px) the measured atoms keep: enough for a bond's two, and
+# both ends of a longer label.
+_NAME_MIN_WIDTH = 110
+# Where the values sit in their column, and the heading over them: centred
+# (Filippo, 2026-10-14). Right-aligned, the Value column read as pushed away
+# to the dock's edge.
+_NUMBER_ALIGNMENT = Qt.AlignHCenter | Qt.AlignVCenter
+
 
 # Which sections are unfolded. Shared by every tab's panel, so a section folded
 # in one tab is folded in the next, and deliberately not kept between runs: the
@@ -123,6 +143,9 @@ class GeometryPanel(QWidget):
         self._structure = structure
         self._selection: List[int] = []
         self._measurements: List[measure_mod.Measurement] = []
+        # The column and order the measurements are sorted by; None until a
+        # heading is clicked, when they stand in the order they were measured.
+        self._measure_sort: Optional[Tuple[int, Qt.SortOrder]] = None
         self._editing = False
         self._planes: List[lp.LatticePlane] = []
         self._miller_cell: Optional[np.ndarray] = None
@@ -232,11 +255,13 @@ class GeometryPanel(QWidget):
         self._measure_btn.clicked.connect(self._measure_selection)
         box.addWidget(self._measure_btn)
 
-        # Ticked measurements are drawn in the 3D view.
-        self._list = _CompactList()
+        # Ticked measurements are drawn in the 3D view. A table rather than a
+        # list: the atoms and the value each in a column of their own, sorted
+        # by whichever heading is clicked — "the longest bonds first" is a sort.
+        self._list = _MeasureTable()
         self._list.setToolTip("Tick a measurement to show it in the 3D view")
-        self._list.setSelectionMode(QListWidget.ExtendedSelection)
-        self._list.itemChanged.connect(lambda _item: self._emit_annotations())
+        self._list.itemChanged.connect(lambda _item, _column: self._emit_annotations())
+        self._list.header().sortIndicatorChanged.connect(self._sort_measurements)
         box.addWidget(self._list, 1)
 
         row = QHBoxLayout()
@@ -668,8 +693,57 @@ class GeometryPanel(QWidget):
         return [
             m
             for m, item in zip(self._measurements, self._items())
-            if item.checkState() == Qt.Checked
+            if item.checkState(_COL_NAME) == Qt.Checked
         ]
+
+    def _fill_measure_row(self, item: QTreeWidgetItem, m: measure_mod.Measurement) -> None:
+        """Write ``m`` into its row: the atoms and the value."""
+        if m.kind == measure_mod.POINT:
+            # The label carries the coordinates; they are the value column's.
+            name, _, _ = m.label.partition("  ")
+            x, y, z = (float(v) for v in m.points[0])
+            item.setText(_COL_NAME, name)
+            item.setText(_COL_VALUE, f"({x:.3f}, {y:.3f}, {z:.3f})")
+        else:
+            item.setText(_COL_NAME, m.label)
+            # 1.428 Å, but 108.561°: a degree sign sits on its number.
+            space = "" if m.unit == "°" else " "
+            item.setText(_COL_VALUE, f"{m.value:.3f}{space}{m.unit}")
+        item.setTextAlignment(_COL_VALUE, _NUMBER_ALIGNMENT)
+
+    # ── sorting ─────────────────────────────────────────────────────────
+    def _sort_measurements(self, column: int, order: Qt.SortOrder) -> None:
+        """A heading was clicked: sort by it, and keep sorting new rows into place."""
+        self._measure_sort = None if column < 0 else (column, order)
+        self._apply_measure_sort()
+
+    def _apply_measure_sort(self) -> None:
+        """Put the rows, and the measurements behind them, in the chosen order.
+
+        Both move together: the colour, thickness and remove buttons find a
+        measurement by its row, as they do the planes'. Rows with nothing in
+        the column — a point has no single value — stay at the bottom whichever
+        way the column runs, and rows that tie keep the order they had.
+        """
+        if self._measure_sort is None or len(self._measurements) < 2:
+            return
+        column, order = self._measure_sort
+        rows = list(zip(self._measurements, self._items()))
+        keyed = [(r, _sort_key(r[0], column)) for r in rows]
+        present = [(r, key) for r, key in keyed if key is not None]
+        present.sort(key=lambda pair: pair[1], reverse=order == Qt.DescendingOrder)
+        ordered = [r for r, _ in present] + [r for r, key in keyed if key is None]
+        selected = {id(item) for item in self._list.selectedItems()}
+        blocked = self._list.blockSignals(True)
+        try:
+            while self._list.topLevelItemCount():
+                self._list.takeTopLevelItem(0)
+            for _, item in ordered:
+                self._list.addTopLevelItem(item)
+                item.setSelected(id(item) in selected)
+        finally:
+            self._list.blockSignals(blocked)
+        self._measurements = [m for m, _ in ordered]
 
     def clear_measurements(self) -> None:
         self._measurements = []
@@ -689,13 +763,19 @@ class GeometryPanel(QWidget):
             return
         result = dataclasses.replace(result, thickness=self.measurement_thickness())
         self._measurements.append(result)
-        item = QListWidgetItem(result.summary())
+        item = QTreeWidgetItem()
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        # Listed, not drawn: whether a measurement goes into the view is the
-        # user's to decide, with its tick. Drawn straight away, every bond
-        # measured to read its length put a line and a label over it.
-        item.setCheckState(Qt.Unchecked)
-        self._list.addItem(item)
+        blocked = self._list.blockSignals(True)  # itemChanged would draw it half-made
+        try:
+            # Listed, not drawn: whether a measurement goes into the view is the
+            # user's to decide, with its tick. Drawn straight away, every bond
+            # measured to read its length put a line and a label over it.
+            item.setCheckState(_COL_NAME, Qt.Unchecked)
+            self._fill_measure_row(item, result)
+            self._list.addTopLevelItem(item)
+        finally:
+            self._list.blockSignals(blocked)
+        self._apply_measure_sort()  # into its place, if a heading has been clicked
         self._emit_annotations()
 
     def _set_measurement_colour(self) -> None:
@@ -716,12 +796,12 @@ class GeometryPanel(QWidget):
 
     def _remove_selected_measurements(self) -> None:
         for row in reversed(self._selected_rows(self._list)):
-            self._list.takeItem(row)
+            self._list.takeTopLevelItem(row)
             del self._measurements[row]
         self._emit_annotations()
 
-    def _items(self) -> List[QListWidgetItem]:
-        return [self._list.item(row) for row in range(self._list.count())]
+    def _items(self) -> List[QTreeWidgetItem]:
+        return [self._list.topLevelItem(row) for row in range(self._list.topLevelItemCount())]
 
     def _emit_annotations(self) -> None:
         self.annotations_changed.emit(self.shown_annotations())
@@ -961,8 +1041,14 @@ class GeometryPanel(QWidget):
     # line's thickness, a sheet's opacity), restyled the same way: on the rows
     # picked in the list, or on every row when none is.
     @staticmethod
-    def _selected_rows(listing: QListWidget) -> List[int]:
-        """The rows picked in ``listing``, top to bottom."""
+    def _selected_rows(listing) -> List[int]:
+        """The rows picked in ``listing``, top to bottom.
+
+        The planes are a list and the measurements a table (a flat tree); a row
+        is found the one way or the other.
+        """
+        if isinstance(listing, QTreeWidget):
+            return sorted(listing.indexOfTopLevelItem(item) for item in listing.selectedItems())
         return sorted(listing.row(item) for item in listing.selectedItems())
 
     def _restyle(self, listing: QListWidget, entries: list, **change) -> None:
@@ -988,8 +1074,12 @@ class GeometryPanel(QWidget):
         if not chosen.isValid():
             return None
         self._restyle(listing, entries, color=chosen.name())
+        swatch = _colour_swatch(chosen.name())
         for row in rows:
-            listing.item(row).setIcon(_colour_swatch(chosen.name()))
+            if isinstance(listing, QTreeWidget):
+                listing.topLevelItem(row).setIcon(_COL_NAME, swatch)
+            else:
+                listing.item(row).setIcon(swatch)
         return chosen.name()
 
     def _plane_items(self) -> List[QListWidgetItem]:
@@ -1115,6 +1205,86 @@ class _CompactList(QListWidget):
 
     def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
         return QSize(super().sizeHint().width(), _LIST_HINT_HEIGHT)
+
+
+class _MeasureTable(QTreeWidget):
+    """The measurements as a table: one row each, sorted by a clicked heading.
+
+    A flat tree rather than a table widget, because a tree's rows are items the
+    way a list's are, so the buttons shared with the planes' list work on both.
+    It does not sort itself: the panel sorts the measurements and the rows
+    together (:meth:`GeometryPanel._apply_measure_sort`), so a row and the
+    measurement it shows can never come apart. A third click on a heading
+    leaves the order as it is and stops sorting new rows into it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setColumnCount(len(_HEADERS))
+        self.setHeaderLabels(list(_HEADERS))
+        heading = self.headerItem()
+        for column, tip in enumerate(_HEADER_TIPS):
+            heading.setToolTip(column, tip)
+        self.setRootIsDecorated(False)
+        self.setUniformRowHeights(True)
+        self.setAllColumnsShowFocus(True)
+        self.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.setSortingEnabled(False)
+        header = self.header()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicatorClearable(True)
+        header.setSortIndicator(-1, Qt.AscendingOrder)  # in the order measured
+        # The value in full, and the atoms in what is left over: a dihedral's
+        # four atoms could take the width of the dock and push the value out of
+        # sight behind a scroll bar. Shortened in the middle, a label keeps both
+        # its ends. But not to nothing — in a narrow dock the value alone fills
+        # it — so the atoms keep a floor, and the table scrolls sideways past it
+        # (_fit_name_column).
+        header.setSectionResizeMode(QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(_COL_NAME, QHeaderView.Interactive)
+        header.setStretchLastSection(False)
+        header.sectionResized.connect(lambda *_: self._fit_name_column())
+        self.setTextElideMode(Qt.ElideMiddle)
+        heading.setTextAlignment(_COL_VALUE, _NUMBER_ALIGNMENT)
+
+    @guard()
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt's name
+        super().resizeEvent(event)
+        self._fit_name_column()
+
+    def _fit_name_column(self) -> None:
+        """Give the atoms whatever width the value leaves, and never less than a floor."""
+        header = self.header()
+        numbers = sum(header.sectionSize(column) for column in range(1, self.columnCount())
+                      if not self.isColumnHidden(column))
+        width = max(_NAME_MIN_WIDTH, self.viewport().width() - numbers)
+        if header.sectionSize(_COL_NAME) != width:
+            header.resizeSection(_COL_NAME, width)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt's name
+        # As many rows as the list asked for, and room for the headings above them.
+        return QSize(super().sizeHint().width(),
+                     _LIST_HINT_HEIGHT + self.header().sizeHint().height())
+
+
+# Where a measured quantity sorts: bonds, then angles, then dihedrals, so a
+# column of mixed units runs within each kind.
+_KIND_ORDER = {measure_mod.DISTANCE: 0, measure_mod.ANGLE: 1, measure_mod.DIHEDRAL: 2}
+
+
+def _sort_key(m: measure_mod.Measurement, column: int):
+    """What ``m`` sorts by in ``column``; ``None`` when it has nothing there.
+
+    The value comes in different units for a bond and an angle, so it sorts
+    within each kind.
+    """
+    kind = _KIND_ORDER.get(m.kind)
+    if column == _COL_NAME:
+        return m.label.casefold()
+    if column == _COL_VALUE:
+        return None if kind is None or not math.isfinite(m.value) else (kind, m.value)
+    return None
 
 
 def _table_icon() -> QIcon:
