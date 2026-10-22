@@ -415,7 +415,6 @@ def test_a_view_told_of_its_screen_before_it_has_a_plotter_waits_for_one():
     """Making the interactor's native window on a Retina screen tells the view
     its pixel ratio changed — from inside its own constructor, before
     ``plotter`` exists. Opening the Brillouin zone failed on exactly that."""
-    import pyvistaqt
     from PySide6.QtCore import QEvent
     from PySide6.QtWidgets import QApplication, QWidget
 
@@ -439,12 +438,14 @@ def test_a_view_told_of_its_screen_before_it_has_a_plotter_waits_for_one():
         def enable_parallel_projection(self):
             pass
 
-    real = pyvistaqt.QtInteractor
-    pyvistaqt.QtInteractor = Interactor
+    from crystalline.ui import viewport
+
+    real = viewport.QtInteractor                # the name make_interactor builds with
+    viewport.QtInteractor = Interactor
     try:
         view = zone_picker._ZoneView()          # strict in tests: would raise
     finally:
-        pyvistaqt.QtInteractor = real
+        viewport.QtInteractor = real
     assert isinstance(view.plotter, Interactor)
     view.deleteLater()
 

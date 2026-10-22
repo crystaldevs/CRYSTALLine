@@ -39,7 +39,7 @@ here means {kbd}`⌘O`.
 | Crystallographic cell / Primitive cell | which cell is shown |
 | Lattice parameters… | |
 | Supercell… | |
-| Complete molecules at cell boundary | toggle |
+| Complete coordination at cell boundary | toggle |
 | Point symmetry analysis | elements, and **Reduce symmetry…** |
 | Brillouin zone… | the zone, read-only |
 
@@ -55,6 +55,7 @@ here means {kbd}`⌘O`.
 | Delete selected | {kbd}`Del` |
 | Duplicate selected | {kbd}`Ctrl+D` |
 | Translate selected… | |
+| Rotate selected… | about a lattice vector, a cartesian axis, two atoms or a typed direction |
 | Set element of selected… | |
 | Restore geometry | {kbd}`Ctrl+R` |
 | Nudge the selection | {kbd}`Arrow keys` |
