@@ -108,6 +108,7 @@ class GeometryPanel(QWidget):
     delete_requested = Signal()
     duplicate_requested = Signal()
     translate_requested = Signal()
+    rotate_requested = Signal()
     set_element_requested = Signal(str)   # element symbol
     set_position_requested = Signal(object)  # cartesian (x, y, z) in Å for the one selected atom
     # the measurements that should be drawn in 3D (possibly empty)
@@ -451,9 +452,17 @@ class GeometryPanel(QWidget):
         self._duplicate_btn = QPushButton("Duplicate")
         self._duplicate_btn.clicked.connect(self.duplicate_requested)
         row.addWidget(self._duplicate_btn)
+        box.addLayout(row)
+
+        # Two by two: a fourth button on one row would widen the dock.
+        row = QHBoxLayout()
         self._translate_btn = QPushButton("Translate…")
         self._translate_btn.clicked.connect(self.translate_requested)
         row.addWidget(self._translate_btn)
+        self._rotate_btn = QPushButton("Rotate…")
+        self._rotate_btn.setToolTip("Turn the selected atoms about an axis")
+        self._rotate_btn.clicked.connect(self.rotate_requested)
+        row.addWidget(self._rotate_btn)
         box.addLayout(row)
 
         # ── exact position of a single atom ─────────────────────────────
@@ -1051,8 +1060,8 @@ class GeometryPanel(QWidget):
 
         self._add_btn.setEnabled(self._editing)
         on_selection = self._editing and count >= 1
-        for button in (self._delete_btn, self._duplicate_btn,
-                       self._translate_btn, self._set_element_btn):
+        for button in (self._delete_btn, self._duplicate_btn, self._translate_btn,
+                       self._rotate_btn, self._set_element_btn):
             button.setEnabled(on_selection)
 
         # A typed position names one atom, so it needs exactly one selected —

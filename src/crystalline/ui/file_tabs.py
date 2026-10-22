@@ -109,10 +109,6 @@ class FileTab:
         # said: a tab read in behind the one being worked in says it when it is
         # first brought to the front.
         self.notice: Optional[str] = None
-        # Whether its 3D view was made before the window was first on screen,
-        # which on Windows leaves the view unable to draw (see
-        # MainWindow._replace_views_made_unseen).
-        self.made_unseen = False
 
     def built(self) -> bool:
         """Whether this tab's widgets exist yet (it has been shown at least once)."""

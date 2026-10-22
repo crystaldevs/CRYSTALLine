@@ -155,6 +155,7 @@ def test_edit_buttons_emit_intent_rather_than_editing_directly(qapp):
     panel.delete_requested.connect(lambda: seen.append("delete"))
     panel.duplicate_requested.connect(lambda: seen.append("duplicate"))
     panel.translate_requested.connect(lambda: seen.append("translate"))
+    panel.rotate_requested.connect(lambda: seen.append("rotate"))
     panel.set_element_requested.connect(lambda s: seen.append(("element", s)))
     panel.add_atom_requested.connect(lambda s: seen.append(("add", s)))
 
@@ -162,10 +163,11 @@ def test_edit_buttons_emit_intent_rather_than_editing_directly(qapp):
     panel._delete_btn.click()
     panel._duplicate_btn.click()
     panel._translate_btn.click()
+    panel._rotate_btn.click()
     panel._set_element_btn.click()
     panel._add_btn.click()
 
-    assert seen == ["delete", "duplicate", "translate", ("element", "Fe"), ("add", "Fe")]
+    assert seen == ["delete", "duplicate", "translate", "rotate", ("element", "Fe"), ("add", "Fe")]
     assert len(_water()) == 3  # the panel itself changed nothing
 
 

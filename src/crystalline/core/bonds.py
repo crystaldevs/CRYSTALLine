@@ -15,6 +15,7 @@ this returns ``None`` (pymatgen missing, non-periodic, or too large to analyse).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -48,6 +49,13 @@ class Connectivity:
 # cation's polyhedron, while O, N, F, Cl, S, C and H (2.20) can be.
 LIGAND_ELECTRONEGATIVITY = 2.0
 
+# The most corners a coordination polyhedron is drawn with. Past it — the twelve
+# oxygens round the A site of a perovskite, the SrO12 cuboctahedron — the solid
+# fills the space between the polyhedra people look at (the TiO6 octahedra) and
+# hides them; the usual drawing shows that cation as a sphere. Eight keeps the
+# cubes of fluorite and CsCl, and every tetrahedron and octahedron.
+POLYHEDRON_MAX_VERTICES = 8
+
 
 def is_ligand(centre_x, neighbour_x) -> bool:
     """Whether a neighbour is a vertex of the centre's coordination polyhedron.
@@ -67,6 +75,47 @@ def is_ligand(centre_x, neighbour_x) -> bool:
     if np.isnan(centre_x) or np.isnan(neighbour_x):
         return False
     return neighbour_x > centre_x and neighbour_x >= LIGAND_ELECTRONEGATIVITY
+
+
+# Two atoms both below this Pauling electronegativity are cations, and are not
+# bonded to each other: covalent radii would otherwise bond big cations to one
+# another in ionic crystals (Ca–Ca, Ca–Si, Mg–Mg across a brucite layer), while
+# C–C, C–O, Si–O and the like are left alone.
+CATION_ELECTRONEGATIVITY = 2.0
+
+# Except two metalloids, which bond covalently to each other: silicon (1.90) is
+# below the line, and its crystal would otherwise be drawn with no bonds at all.
+# Germanium (2.01), boron (2.04) and antimony (2.05) are just above it; they are
+# named here so that a different table of electronegativities cannot cut them.
+METALLOIDS = frozenset({5, 14, 32, 33, 51, 52})   # B, Si, Ge, As, Sb, Te
+
+
+@lru_cache(maxsize=None)
+def electronegativity(z: int) -> float:
+    """Pauling electronegativity of element ``z``, ``0.0`` when it has none."""
+    try:
+        from pymatgen.core import Element
+
+        value = Element.from_Z(int(z)).X
+        return float(value) if value and not np.isnan(value) else 0.0
+    except Exception:  # noqa: BLE001 - pymatgen missing / element without one
+        return 0.0
+
+
+def cation_contact(numbers_i, numbers_j) -> np.ndarray:
+    """For each pair of atoms (by atomic number), whether it is two cations: no bond.
+
+    Elementwise over two arrays of atomic numbers. Two metalloids are not a
+    cation contact (see :data:`METALLOIDS`).
+    """
+    numbers_i = np.asarray(numbers_i, dtype=int)
+    numbers_j = np.asarray(numbers_j, dtype=int)
+    cation = np.vectorize(lambda z: electronegativity(int(z)) < CATION_ELECTRONEGATIVITY,
+                          otypes=[bool])
+    metalloid = np.vectorize(lambda z: int(z) in METALLOIDS, otypes=[bool])
+    if numbers_i.size == 0:
+        return np.zeros(0, dtype=bool)
+    return cation(numbers_i) & cation(numbers_j) & ~(metalloid(numbers_i) & metalloid(numbers_j))
 
 
 def connectivity(structure: Structure, min_vertices: int = 4) -> Optional[Connectivity]:
@@ -116,7 +165,7 @@ def connectivity(structure: Structure, min_vertices: int = 4) -> Optional[Connec
             # vertices, so long as enough anions outvoted them.
             keep = [k for k, info in enumerate(infos)
                     if is_ligand(electroneg[i], electroneg[info["site_index"]])]
-            if len(keep) >= min_vertices:
+            if min_vertices <= len(keep) <= POLYHEDRON_MAX_VERTICES:
                 centre = np.asarray(site.coords, dtype=float)
                 polyhedra.append((int(site.specie.Z), centre, ligands[keep]))
     except Exception:  # noqa: BLE001 - CrystalNN can choke on odd cells

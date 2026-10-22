@@ -1244,14 +1244,14 @@ class _ZoneView(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         _enable_mathtext()
-        from pyvistaqt import QtInteractor
+        from crystalline.ui.viewport import make_interactor
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         # Not redrawn five times a second for as long as the dialog is open,
         # as pyvistaqt's default does: every change here asks for its draw
         # (see Viewport, which turns the same timer off).
-        self.plotter = QtInteractor(self, auto_update=False)
+        self.plotter = make_interactor(self, auto_update=False)
         self.plotter.setAcceptDrops(False)  # see Viewport: drops belong to the window
         layout.addWidget(self.plotter)
         from crystalline.ui import theme

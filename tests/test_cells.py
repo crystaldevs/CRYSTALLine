@@ -11,10 +11,16 @@ from crystalline.core.cells import (
     CellView,
     as_view,
     complete_boundary,
+    conventional_matrix,
     expand_modes_to_conventional,
+    own_atoms,
+    primitive_of,
+    repeating_tile,
+    reshaped_cell,
     tile_supercell,
     to_analysis_cell,
     to_conventional,
+    without_boundary_copies,
 )
 from crystalline.core.phonons import PhononMode, PhononModes
 from crystalline.core.structure import Structure
@@ -623,3 +629,250 @@ def test_turning_the_box_keeps_an_obtuse_monoclinic_angle():
     from ase.geometry import cell_to_cellpar
     assert np.allclose(cell_to_cellpar(vectors), cell_to_cellpar(loaded))
     assert round(np.linalg.det(matrix)) == 1
+
+
+
+# ── taking the boundary copies back off an edited drawing ─────────────────
+
+
+def _cut_molecule():
+    """A CO2 cut by the a face: its oxygens straddle it, so it is drawn twice."""
+    return Structure.from_ase(Atoms("CO2", positions=[[0.1, 2.0, 2.0], [-1.06, 2.0, 2.0],
+                                                      [1.26, 2.0, 2.0]],
+                                    cell=np.diag([6.0, 6.0, 6.0]), pbc=True))
+
+
+def test_the_copies_come_off_leaving_the_cell_as_it_was():
+    cell = _cut_molecule()
+    drawn, _modes = complete_boundary(cell)
+    assert len(drawn) > len(cell)
+
+    own, parents = without_boundary_copies(drawn)
+
+    assert list(parents) == [0, 1, 2]
+    assert np.allclose(own.positions, cell.positions)
+    assert list(own.numbers) == list(cell.numbers)
+
+
+def test_an_edit_made_to_the_drawing_is_what_comes_off():
+    """Every copy of the molecule moved together, as a drag or a rotation does."""
+    drawn, _modes = complete_boundary(_cut_molecule())
+    drawn.translate_atoms(range(len(drawn)), (0.0, 0.0, 0.7))
+
+    own, _parents = without_boundary_copies(drawn)
+
+    assert np.allclose(own.positions, _cut_molecule().positions + [0.0, 0.0, 0.7])
+
+
+def test_an_atom_whose_own_copy_is_gone_comes_back_from_another():
+    """Its copy across the face still says where it is, less the lattice shift."""
+    drawn, _modes = complete_boundary(_cut_molecule())
+    labels = drawn.to_ase()
+    own_oxygen = [i for i in range(len(drawn))
+                  if labels.get_array("crystalline_copy_of")[i] == 2
+                  and not labels.get_array("crystalline_copy_shift")[i].any()]
+    drawn.remove_atoms(own_oxygen)
+
+    own, parents = without_boundary_copies(drawn)
+
+    assert list(parents) == [0, 1, 2]
+    assert np.allclose(own.positions[2], _cut_molecule().positions[2])
+
+
+def test_an_atom_added_to_the_drawing_belongs_to_no_cell_atom():
+    drawn, _modes = complete_boundary(_cut_molecule())
+    drawn.add_atom("H", (3.0, 3.0, 3.0))
+
+    own, parents = without_boundary_copies(drawn)
+
+    assert list(parents) == [0, 1, 2, -1]
+    assert own.symbols[-1] == "H"
+
+
+def test_a_view_without_completion_is_labelled_as_its_own_atoms():
+    own, parents = without_boundary_copies(own_atoms(_cut_molecule()))
+    assert list(parents) == [0, 1, 2]
+    assert without_boundary_copies(_cut_molecule())[1] is None     # never labelled
+
+
+def test_the_labels_stay_with_the_drawing_not_the_crystal():
+    folded = to_analysis_cell(complete_boundary(_cut_molecule())[0], np.diag([6.0, 6.0, 6.0]))
+    assert "crystalline_copy_of" not in folded.to_ase().arrays
+
+
+
+# ── a supercell of an edited cell ─────────────────────────────────────────
+
+
+def test_a_supercell_is_its_cell_repeated_until_one_tile_is_edited_alone():
+    unit = Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64, cubic=True))
+    tiled = tile_supercell(unit, (2, 1, 3))[0]
+    n = len(unit)
+
+    assert np.allclose(repeating_tile(tiled, (2, 1, 3), unit.cell).positions, unit.positions)
+
+    tiled.translate_atoms([k * n for k in range(6)], (0.0, 0.0, 0.2))   # every tile alike
+    edited = repeating_tile(tiled, (2, 1, 3), unit.cell)
+    assert np.allclose(edited.positions[0], unit.positions[0] + [0.0, 0.0, 0.2])
+    assert np.allclose(edited.cell, unit.cell)
+
+    tiled.translate_atoms([n + 1], (0.3, 0.0, 0.0))                      # one tile alone
+    assert repeating_tile(tiled, (2, 1, 3), unit.cell) is None
+    tiled.remove_atoms([0])
+    assert repeating_tile(tiled, (2, 1, 3), unit.cell) is None           # an atom short
+
+
+
+# ── an edited cell in the other setting ───────────────────────────────────
+
+
+def _mgo_primitive():
+    return Structure.from_ase(bulk("MgO", "rocksalt", a=4.21))
+
+
+def test_an_edited_primitive_cell_expands_by_the_matrix_of_the_cell_as_read():
+    """The edit can take away the symmetry the expansion is found by: moved off
+    its site, an atom leaves no cubic cell to find."""
+    source = _mgo_primitive()
+    edited = Structure.from_ase(source.to_ase())
+    edited.translate_atoms([0], (0.1, 0.2, 0.3))
+    matrix = conventional_matrix(source)
+
+    found = expand_modes_to_conventional(edited, PhononModes([]))[0]
+    given = expand_modes_to_conventional(edited, PhononModes([]), matrix=matrix)[0]
+
+    assert len(given) == 4 * len(source)
+    assert np.allclose(given.cell, to_conventional(source).cell)
+    assert len(found) != len(given)          # what finding it again would have drawn
+
+
+def test_an_edit_made_alike_to_every_centring_copy_reduces_to_the_primitive_cell():
+    source = _mgo_primitive()
+    before, _modes, mapping = expand_modes_to_conventional(source, PhononModes([]),
+                                                           per_atom=np.arange(len(source)))
+    after = Structure.from_ase(before.to_ase())
+    copies = np.nonzero(mapping == 0)[0]
+    after.translate_atoms(copies, (0.0, 0.0, 0.3))
+    after.translate_atoms([copies[1]], tuple(np.asarray(after.cell)[0]))   # one box over: still a copy
+
+    reduced = primitive_of(after, before, mapping, source.cell)
+
+    assert reduced is not None and len(reduced) == len(source)
+    assert np.allclose(np.asarray(reduced.cell), np.asarray(source.cell))
+
+
+def test_an_edit_to_one_centring_copy_has_no_primitive_cell():
+    source = _mgo_primitive()
+    before, _modes, mapping = expand_modes_to_conventional(source, PhononModes([]),
+                                                           per_atom=np.arange(len(source)))
+    after = Structure.from_ase(before.to_ase())
+    after.translate_atoms([int(np.nonzero(mapping == 0)[0][0])], (0.0, 0.0, 0.3))
+
+    assert primitive_of(after, before, mapping, source.cell) is None
+
+
+
+def test_new_lattice_parameters_leave_the_cell_facing_as_it_did():
+    """Built in ase's standard orientation they would turn a cell drawn with a
+    along y round to x, and the crystal with it."""
+    from ase.geometry import cell_to_cellpar
+
+    turned = np.array([[0.0, 3.0, 0.0], [-4.0, 0.0, 0.0], [0.0, 0.0, 5.0]])
+    new = reshaped_cell(turned, [3.2, 4.0, 5.0, 90.0, 90.0, 100.0])
+
+    assert np.allclose(cell_to_cellpar(new), [3.2, 4.0, 5.0, 90.0, 90.0, 100.0])
+    assert np.allclose(new[0] / np.linalg.norm(new[0]), [0.0, 1.0, 0.0])
+
+
+
+# ── completing the cell: molecules, frameworks, chains and layers ─────────
+
+
+def _drawn(structure):
+    return complete_boundary(to_conventional(structure))[0]
+
+
+def test_a_framework_is_its_cell_however_little_of_a_cell_it_spans():
+    """Silicon's 8-atom cell spans less than a cell along every axis, and was
+    taken for a molecule: copied whole round the box, 64 atoms. Its bonds close
+    on its own copies, so it is a framework: 8 corners, 6 faces, 4 inside — and
+    no ligands to complete, since Si bonds to Si."""
+    silicon = _drawn(Structure.from_ase(bulk("Si", "diamond", a=5.431)))
+
+    assert len(silicon) == 18
+    frac = silicon.to_ase().get_scaled_positions(wrap=False)
+    assert frac.min() > -0.03 and frac.max() < 1.03                # nothing outside the box
+
+
+def test_a_frameworks_cations_get_all_their_ligands():
+    """Rock salt: the 27 atoms of the cube, and the 30 Cl that complete the
+    octahedra of the Na on its faces and corners."""
+    salt = _drawn(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64))).to_ase()
+    salt.pbc = False
+    from ase.neighborlist import neighbor_list
+
+    i, j = neighbor_list("ij", salt, 3.0)
+    for na in np.nonzero(salt.numbers == 11)[0]:
+        assert ((i == na) & (salt.numbers[j] == 17)).sum() == 6
+    assert len(salt) == 57
+
+
+def test_no_more_than_eight_ligands_are_completed():
+    """A perovskite's A site has twelve: completing them would wrap the cell in
+    oxygens, and no polyhedron is drawn round it to need them."""
+    from ase.spacegroup import crystal
+
+    perovskite = Structure.from_ase(crystal(
+        ["Sr", "Ti", "O"], basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221, cellpar=[3.905] * 3 + [90] * 3))
+    assert len(_drawn(perovskite)) == 15
+
+
+def _chain():
+    """A zigzag chain along a, CH2 groups on each carbon, two carbons a repeat."""
+    a = 2.6
+    positions = [[0.0, 3.0, 3.0], [1.3, 3.0, 3.8],                 # C, C
+                 [0.0, 2.1, 2.4], [0.0, 3.9, 2.4],                 # H, H on the first
+                 [1.3, 2.1, 4.4], [1.3, 3.9, 4.4]]                 # H, H on the second
+    return Structure.from_ase(Atoms("C2H4", positions=positions,
+                                    cell=np.diag([a, 6.0, 7.0]), pbc=True))
+
+
+def test_a_chain_runs_through_the_cell_and_one_bond_past_each_face():
+    """Its repeat holds two carbons, half a cell apart: it spans half a cell and
+    was taken for a molecule, sticking out of one face by half a repeat and
+    stopping short of the other."""
+    drawn = complete_boundary(_chain())[0]
+    atoms = drawn.to_ase()
+    carbon = atoms.get_scaled_positions(wrap=False)[atoms.numbers == 6][:, 0]
+
+    assert carbon.min() < 0.0 and carbon.max() > 1.0               # one bond past each face
+    assert carbon.min() == pytest.approx(-(carbon.max() - 1.0), abs=0.06)
+    hydrogens = (atoms.numbers == 1).sum()
+    assert hydrogens == 2 * (atoms.numbers == 6).sum()             # every CH2 whole
+
+
+def test_a_layer_gives_each_of_its_cations_all_its_ligands():
+    """Brucite: every Mg drawn has its six O, and each O its H — the octahedra
+    whole, the OH groups pointing out of the layer."""
+    from ase.spacegroup import crystal
+
+    brucite = Structure.from_ase(crystal(
+        ["Mg", "O", "H"], basis=[(0, 0, 0), (1 / 3, 2 / 3, 0.22), (1 / 3, 2 / 3, 0.43)],
+        spacegroup=164, cellpar=[3.14, 3.14, 4.77, 90, 90, 120]))
+    drawn = complete_boundary(brucite)[0].to_ase()
+    drawn.pbc = False                     # the atoms as drawn, not their periodic copies
+    from ase.neighborlist import neighbor_list
+
+    i, j = neighbor_list("ij", drawn, 2.3)
+    for mg in np.nonzero(drawn.numbers == 12)[0]:
+        oxygens = j[(i == mg) & (drawn.numbers[j] == 8)]
+        assert len(oxygens) == 6
+        for o in oxygens:
+            assert ((i == o) & (drawn.numbers[j] == 1)).any()      # its H
+
+
+def test_the_cells_own_atoms_come_first():
+    cell = to_conventional(_dry_ice())
+    drawn = complete_boundary(cell)[0]
+    assert np.allclose(drawn.positions[:len(cell)], cell.positions)

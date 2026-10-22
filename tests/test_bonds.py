@@ -203,14 +203,16 @@ def test_a_cation_is_never_a_vertex_of_another_cations_polyhedron():
     assert not is_ligand(float("nan"), 3.44)
 
 
-def test_srtio3_has_its_cuboctahedra_and_octahedra():
+def test_srtio3_has_its_octahedra_and_no_cuboctahedra():
+    """The TiO6 octahedra, and nothing round Sr: twelve corners are past the most
+    a polyhedron is drawn with, and the SrO12 solids would bury the octahedra."""
     pytest.importorskip("pymatgen")
     conn = connectivity(_srtio3())
     assert conn is not None
 
     counts = {int(z): len(ligands) for z, _centre, ligands in conn.polyhedra}
 
-    assert counts == {38: 12, 22: 6}
+    assert counts == {22: 6}
 
 
 def test_the_distance_fallback_draws_the_same_polyhedra_as_crystalnn():
@@ -220,4 +222,4 @@ def test_the_distance_fallback_draws_the_same_polyhedra_as_crystalnn():
 
     found = _fallback_polyhedra(_srtio3().to_ase(), 1.1, 4)
 
-    assert {int(z): len(ligands) for z, _centre, ligands in found} == {38: 12, 22: 6}
+    assert {int(z): len(ligands) for z, _centre, ligands in found} == {22: 6}

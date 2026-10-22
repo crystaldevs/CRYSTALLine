@@ -180,6 +180,14 @@ class _ViewHarness:
     _update_boundary_control = MainWindow._update_boundary_control
     _update_supercell_action = MainWindow._update_supercell_action
     _apply_cell_view = MainWindow._apply_cell_view
+    _show_derived = MainWindow._show_derived
+    _on_boundary_toggled = MainWindow._on_boundary_toggled
+    _rebuild_keeping_edits = MainWindow._rebuild_keeping_edits
+    _retile = MainWindow._retile
+    _clean_view = MainWindow._clean_view
+    _start_again_from_file = MainWindow._start_again_from_file
+    _switch_keeping_edits = MainWindow._switch_keeping_edits
+    _reshape_lattice = MainWindow._reshape_lattice
     _compose_view = MainWindow._compose_view
     _replace_structure = MainWindow._replace_structure
     _set_supercell = MainWindow._set_supercell
@@ -207,7 +215,8 @@ class _ViewHarness:
         self._suppress_undo = True          # no history while the first view builds
         settings = RenderSettings()
         self.viewport = type("V", (), {
-            "renderer": type("R", (), {"settings": settings})(),
+            "renderer": type("R", (), {"settings": settings,
+                                       "set_reference_cell": lambda *a: None})(),
             "show_structure": lambda *a, **k: None,
         })()
         self.structure_panel = type("P", (), {
@@ -423,3 +432,140 @@ def test_an_undo_does_not_leave_the_view_looking_edited():
 
     window._undo()
     assert window._cell_view is CellView.PRIMITIVE  # and nothing moved under us
+
+
+
+def test_completing_the_boundary_keeps_the_edits_and_undoes_one_step_at_a_time():
+    """Completing molecules is a way of drawing the crystal: it re-derived the
+    view from the file and threw away what had been done to the atoms."""
+    from crystalline.core.cells import to_analysis_cell
+
+    def crystal(window):
+        """The folded cell as a set of wrapped fractional positions."""
+        atoms = to_analysis_cell(window.structure, window._unit_cell).to_ase()
+        return sorted(tuple(np.round(f % 1.0, 4)) for f in atoms.get_scaled_positions(wrap=False))
+
+    window = _harness()
+    pristine = crystal(window)
+    window.structure.translate_atoms([0], (0.0, 0.0, 0.3))
+    edited = crystal(window)
+    assert edited != pristine
+
+    window._on_boundary_toggled(True)
+    assert crystal(window) == edited
+    assert window._shown_edited                      # still work a re-derive would lose
+    window._on_boundary_toggled(False)
+    assert crystal(window) == edited
+
+    window._undo()                                   # completion back on
+    assert window._show_boundary and crystal(window) == edited
+    window._undo()                                   # and off, the edit still there
+    assert not window._show_boundary and crystal(window) == edited
+    window._undo()                                   # the edit itself
+    assert crystal(window) == pristine
+
+
+
+def _folded(window):
+    from crystalline.core.cells import to_analysis_cell
+
+    atoms = to_analysis_cell(window.structure, window._unit_cell).to_ase()
+    return sorted(tuple(np.round(f % 1.0, 4)) for f in atoms.get_scaled_positions(wrap=False))
+
+
+def test_a_supercell_of_an_edited_cell_keeps_the_edit_and_undoes_back_to_it():
+    """Taking a supercell re-derived the view from the file, over the edit."""
+    window = _harness()
+    window.structure.translate_atoms([0], (0.0, 0.0, 0.3))
+    edited = _folded(window)
+
+    assert window._retile((2, 1, 1))
+    assert window._supercell == (2, 1, 1)
+    assert len(window.structure) == 2 * len(window._source)
+    assert _folded(window) == edited
+
+    window._undo()
+    assert window._supercell == (1, 1, 1) and _folded(window) == edited
+
+
+def test_an_edit_in_one_tile_is_carried_into_a_whole_multiple_and_asked_about_otherwise(
+        monkeypatch):
+    from crystalline.ui import main_window
+
+    window = _harness()
+    window._retile((2, 1, 1))
+    window.structure.remove_atoms([0])               # one atom gone, from one tile
+    count = len(window.structure)
+
+    assert window._retile((4, 1, 1))                 # twice the 2×1×1, edit and all
+    assert len(window.structure) == 2 * count
+
+    asked = []
+    monkeypatch.setattr(main_window.QMessageBox, "question",
+                        lambda *a, **k: (asked.append(a), main_window.QMessageBox.Cancel)[1])
+    assert not window._retile((3, 1, 1))             # not a multiple: asked, declined
+    assert asked and window._supercell == (4, 1, 1)
+    assert len(window.structure) == 2 * count
+
+
+
+def test_an_edit_in_the_primitive_cell_is_carried_into_the_conventional_and_back():
+    """The switch re-derived from the file, over the edit. MgO's primitive cell
+    holds 2 atoms and its face-centred cube 8: one atom moved in the first is
+    four atoms moved alike in the second, and those reduce to it again."""
+    from crystalline.core.cells import CellView
+
+    window = _harness()
+    window.structure.translate_atoms([0], (0.0, 0.0, 0.3))
+    primitive = _folded(window)
+
+    window._set_cell_view(CellView.CRYSTALLOGRAPHIC)
+    assert window._cell_view is CellView.CRYSTALLOGRAPHIC
+    assert len(window.structure) == 4 * len(window._source)       # boundary off: the cube
+    assert window._shown_edited
+
+    window._set_cell_view(CellView.PRIMITIVE)
+    assert window._cell_view is CellView.PRIMITIVE
+    assert _folded(window) == primitive
+
+
+def test_an_edit_that_breaks_the_centring_is_asked_about_before_it_is_dropped(monkeypatch):
+    from crystalline.core.cells import CellView
+    from crystalline.ui import main_window
+
+    window = _harness()
+    window._set_cell_view(CellView.CRYSTALLOGRAPHIC)
+    window.structure.translate_atoms([0], (0.0, 0.0, 0.3))         # one of four copies alone
+    edited = _folded(window)
+    asked = []
+    monkeypatch.setattr(main_window.QMessageBox, "question",
+                        lambda *a, **k: (asked.append(a), main_window.QMessageBox.Cancel)[1])
+
+    window._set_cell_view(CellView.PRIMITIVE)
+
+    assert asked and window._cell_view is CellView.CRYSTALLOGRAPHIC
+    assert _folded(window) == edited
+
+
+
+def test_a_lattice_change_reshapes_the_cell_on_screen_edits_and_all():
+    """It reshaped the file's cell and derived the view again, over the edits;
+    and it reshaped the *primitive* cell while the conventional one was shown."""
+    from crystalline.core.cells import CellView, reshaped_cell
+
+    window = _harness()
+    window._set_cell_view(CellView.CRYSTALLOGRAPHIC)
+    a = float(np.linalg.norm(window._unit_cell[0]))
+    window.structure.translate_atoms([0], (0.0, 0.0, 0.3))
+    edited = _folded(window)
+    file_cell = np.array(window._source.cell)
+
+    window._reshape_lattice(reshaped_cell(window._unit_cell, [a + 0.2, a + 0.2, a + 0.2, 90, 90, 90]))
+
+    assert np.linalg.norm(window._unit_cell[0]) == pytest.approx(a + 0.2)
+    assert _folded(window) == edited                        # same fractions, edit included
+    assert np.allclose(window._source.cell, file_cell)      # the file's cell left alone
+
+    window._undo()
+    assert np.linalg.norm(window._unit_cell[0]) == pytest.approx(a)
+    assert _folded(window) == edited

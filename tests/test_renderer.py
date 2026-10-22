@@ -1645,7 +1645,9 @@ def test_a_supercell_is_analysed_as_one_cell_so_its_size_changes_nothing(monkeyp
 
     assert len(folded) == len(unit)
     assert analysed == [len(unit)]
-    assert {int(z): len(lig) for z, _c, lig in found} == {38: 12, 22: 6}
+    # The TiO6 octahedron only: twelve corners round Sr are past the most a
+    # polyhedron is drawn with (core.bonds.POLYHEDRON_MAX_VERTICES).
+    assert {int(z): len(lig) for z, _c, lig in found} == {22: 6}
 
 
 def test_an_edited_supercell_is_not_folded():
@@ -2116,3 +2118,133 @@ def test_vtk_s_own_paint_is_held_at_a_size_macos_has_not_confirmed(monkeypatch):
     view._native_size = (644, 720)                    # Cocoa's Resize arrives
     view._draw_held()
     assert drawn == ["drawn"]
+
+
+def test_a_previewed_motion_moves_the_atoms_and_their_halos_and_can_be_taken_back():
+    """What the Rotate dialog shows while the angle is dialled in: the model is
+    not touched, the selection halos go with their atoms, and showing the
+    structure's own positions puts it all back."""
+    structure = Structure.from_ase(Atoms("CCO", positions=[[0, 0, 0], [1.4, 0, 0], [2.0, 1.1, 0]]))
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(structure)
+    renderer.highlight([0, 2])
+    moved = structure.positions.copy()
+    moved[2] += [0.0, 0.0, 1.5]
+
+    renderer.preview_positions(moved)
+
+    assert np.allclose(renderer._positions, moved)
+    assert np.allclose(structure.positions[2], [2.0, 1.1, 0.0])          # model untouched
+    assert np.allclose(renderer._highlight_actors[2].GetPosition(), [0, 0, 1.5])
+    assert np.allclose(renderer._highlight_actors[0].GetPosition(), [0, 0, 0])
+
+    renderer.preview_positions(structure.positions)
+
+    assert np.allclose(renderer._positions, structure.positions)
+    assert np.allclose(renderer._highlight_actors[2].GetPosition(), [0, 0, 0])
+
+
+def _rutile_drawn():
+    from ase.spacegroup import crystal
+
+    from crystalline.core.cells import complete_boundary
+
+    cell = Structure.from_ase(crystal(["Ti", "O"], basis=[(0, 0, 0), (0.3, 0.3, 0)],
+                                      spacegroup=136, cellpar=[4.6, 4.6, 2.95, 90, 90, 90]))
+    return cell, complete_boundary(cell)[0]
+
+
+def test_the_polyhedra_follow_an_edit_when_given_the_edited_cell():
+    """They are worked out on a clean cell, handed over when the view is
+    derived; an edit that leaves that cell behind leaves the corners behind."""
+    from crystalline.core.cells import without_boundary_copies
+
+    cell, shown = _rutile_drawn()
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_settings(replace(renderer.settings, show_polyhedra=True))
+    renderer.set_reference_cell(np.asarray(cell.cell))
+    renderer.set_structure(shown, bond_structure=cell)
+    labels = shown.to_ase().arrays["crystalline_copy_of"]
+    oxygen = shown.symbols.index("O")
+    old = shown.positions[oxygen].copy()
+    shown.translate_atoms(np.nonzero(labels == labels[oxygen])[0], (0.0, 0.0, 0.6))
+
+    renderer.set_bond_structure(without_boundary_copies(shown)[0])
+    renderer.refresh()
+
+    corners = np.asarray(renderer._polyhedra_mesh_obj.points)
+    assert np.min(np.linalg.norm(corners - shown.positions[oxygen], axis=1)) < 1e-3
+    assert np.min(np.linalg.norm(corners - old, axis=1)) > 1e-3
+
+
+def test_a_previewed_edit_links_the_atoms_where_they_are():
+    """With a mode selected the bonds are fixed to its equilibrium, which is
+    right for a vibration and wrong for an edit: a rotation dialled in would
+    show the bonds the atoms had before it."""
+    structure = Structure.from_ase(Atoms("CCO", positions=[[0, 0, 0], [1.4, 0, 0], [2.0, 1.1, 0]]))
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(structure)
+    renderer.set_bond_reference(structure.positions.copy())
+    tolerance = renderer.settings.bond_tolerance
+    assert renderer._bond_pairs(renderer._numbers, tolerance) is not None   # frozen
+
+    moved = structure.positions.copy()
+    moved[2] += [0.0, 0.0, 3.0]                       # pulled well out of reach
+    renderer.preview_positions(moved)
+    assert renderer._bond_pairs(renderer._numbers, tolerance) is None      # live
+
+    renderer.preview_positions(structure.positions)
+    assert renderer._bond_pairs(renderer._numbers, tolerance) is not None
+
+
+def test_two_metalloids_are_bonded_though_both_are_below_the_cation_line():
+    """Silicon (1.90) is under the electronegativity line that keeps two cations
+    from bonding, and crystalline silicon was drawn with no bonds at all. Two
+    metals still never bond."""
+    silicon = bulk("Si", "diamond", a=5.431, cubic=True)
+    copper = bulk("Cu", "fcc", a=3.61, cubic=True)
+
+    i, _j = _bonded_pairs(silicon.positions, silicon.numbers, 1.15)
+    assert len(i) > 0
+    i, _j = _bonded_pairs(copper.positions, copper.numbers, 1.15)
+    assert len(i) == 0
+
+
+def _drawn_with_polyhedra(structure, conventional=True):
+    from crystalline.core.cells import complete_boundary, to_conventional
+
+    cell = to_conventional(structure) if conventional else structure
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_settings(replace(renderer.settings, show_polyhedra=True))
+    renderer.set_reference_cell(np.asarray(cell.cell))
+    renderer.set_structure(complete_boundary(cell)[0], bond_structure=cell)
+    return renderer
+
+
+def test_every_polyhedron_corner_is_a_drawn_atom():
+    """A centre on a face of the cell has ligands outside it: rock salt's corner
+    octahedra reached out to nothing. Completing the cell draws them, as atoms
+    of the structure — counted, selectable, moving with the modes."""
+    renderer = _drawn_with_polyhedra(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+
+    corners = np.unique(np.round(np.asarray(renderer._polyhedra_mesh_obj.points), 3), axis=0)
+    atoms = np.asarray(renderer._positions)
+    assert all(np.min(np.linalg.norm(atoms - c, axis=1)) < 2e-3 for c in corners)
+
+
+def test_no_polyhedron_has_more_than_eight_corners():
+    """The SrO12 cuboctahedra of a perovskite fill the space round the TiO6
+    octahedra; the A site is drawn as a sphere."""
+    from ase.spacegroup import crystal
+
+    from crystalline.core.bonds import POLYHEDRON_MAX_VERTICES
+
+    perovskite = Structure.from_ase(crystal(
+        ["Sr", "Ti", "O"], basis=[(0, 0, 0), (0.5, 0.5, 0.5), (0.5, 0.5, 0)],
+        spacegroup=221, cellpar=[3.905] * 3 + [90] * 3))
+    renderer = _drawn_with_polyhedra(perovskite)
+    mesh = renderer._polyhedra_mesh_obj
+
+    assert mesh is not None
+    assert len(np.unique(np.round(np.asarray(mesh.points), 3), axis=0)) == 6   # one TiO6
+    assert POLYHEDRON_MAX_VERTICES == 8

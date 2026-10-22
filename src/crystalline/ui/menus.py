@@ -298,7 +298,7 @@ def _build_cell_menu(window) -> None:
     # Show whole molecules/atoms that only partially belong to the cell
     # (their periodic images poke in) — the "packed" view, on by default.
     # Unchecking restricts the view to the cell's own atoms.
-    window._boundary_action = QAction("Complete molecules at cell boundary", window, checkable=True)
+    window._boundary_action = QAction("Complete coordination at cell boundary", window, checkable=True)
     window._boundary_action.setChecked(window._show_boundary)
     window._boundary_action.toggled.connect(window._on_boundary_toggled)
     cell_menu.addAction(window._boundary_action)
@@ -368,6 +368,7 @@ def _build_edit_menu(window) -> None:
         ("Delete selected", window._delete_selected, "Del"),
         ("Duplicate selected", window._duplicate_selected, "Ctrl+D"),
         ("Translate selected…", window._translate_selected, None),
+        ("Rotate selected…", window._rotate_selected, None),
         ("Set element of selected…", window._set_element_selected, None),
     ):
         action = QAction(text, window)
