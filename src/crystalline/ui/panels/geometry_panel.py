@@ -224,7 +224,9 @@ class GeometryPanel(QWidget):
 
         self._measure_btn = QPushButton("Measure selection")
         self._measure_btn.setToolTip(
-            "1 atom → position, 2 → distance, 3 → angle, 4 → dihedral. "
+            "1 atom → position, 2 → distance, 3 → angle, 4 → dihedral, taking the "
+            "atoms in the order they were picked: an angle at the second, a "
+            "dihedral about the second and third. "
             "A plane through the atoms is fitted under Lattice planes."
         )
         self._measure_btn.clicked.connect(self._measure_selection)
@@ -630,8 +632,22 @@ class GeometryPanel(QWidget):
         self.sync_position()  # also calls _sync_buttons
 
     def set_selection(self, indices: Sequence[int]) -> None:
-        """Track the shared selection (driven by 3D picking)."""
-        self._selection = [int(i) for i in indices]
+        """Track the shared selection (driven by 3D picking), in the order it was made.
+
+        The selection model hands it over sorted by index, but an angle's vertex
+        and a dihedral's central bond are which atoms were picked where: H3,
+        then O1, then O2 is the angle at O1. Taken in index order, picking them
+        measured the angle at whichever atom happened to sit in the middle of
+        the list — another angle. So the atoms still selected keep their places
+        and new ones join at the end: picked one at a time, that is the order of
+        the clicks, and a selection made at once (a plane's Select atoms) comes
+        in index order, as it always has.
+        """
+        given = [int(i) for i in indices]
+        still = set(given)
+        kept = [i for i in self._selection if i in still]
+        before = set(kept)
+        self._selection = kept + [i for i in given if i not in before]
         self._hint.setText(measure_mod.selection_hint(len(self._selection)))
         self.sync_position()  # also calls _sync_buttons
 
