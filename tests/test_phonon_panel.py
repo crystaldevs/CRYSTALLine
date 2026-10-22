@@ -33,10 +33,36 @@ def _structure() -> Structure:
     return s
 
 
+# Every panel a test makes, with its plotter, to be stood down after it.
+_MADE: list = []
+
+
 def _panel(structure: Structure) -> PhononPanel:
-    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    plotter = pv.Plotter(off_screen=True)
+    renderer = StructureRenderer(plotter)
     renderer.set_structure(structure)
-    return PhononPanel(PhononAnimator(renderer))
+    panel = PhononPanel(PhononAnimator(renderer))
+    _MADE.append((panel, plotter))
+    return panel
+
+
+@pytest.fixture(autouse=True)
+def _stand_down():
+    """Stop every panel a test made, and close its plotter, once it is done.
+
+    A panel left playing is not gone when its test returns: it lives until the
+    garbage collector reaches it, and its timer goes on drawing frames through
+    the tests after. Five of these left one running, and in a full run without
+    the git-ignored DAFADNP tests that made test_plot_recipe's drag take 400 ms
+    (12 frames of a dead file's animation), failing it, and a timer firing on a
+    panel being collected took the run down (SIGSEGV/SIGBUS in
+    QTimerInfoList::activateTimers, 2026-10-20).
+    """
+    yield
+    while _MADE:
+        panel, plotter = _MADE.pop()
+        panel.stop()
+        plotter.close()
 
 
 def _stretch(freq: float, ir=None, raman=None) -> PhononMode:
