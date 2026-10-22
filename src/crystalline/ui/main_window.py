@@ -3631,6 +3631,7 @@ class MainWindow(QMainWindow):
         self._clear_density()
         # Lattice planes outlive a change of view, not a change of crystal.
         self.geometry_panel.clear_lattice_planes()
+        self.geometry_panel.set_source_file(path)  # an export is offered beside it
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = read.adps

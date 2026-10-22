@@ -115,6 +115,13 @@ lines of distances, angles and dihedrals are drawn, in Å: those selected in the
 table, all of them when none is selected, and the ones measured next. A plane
 through the selected atoms is fitted under **Lattice planes**.
 
+**Export to CSV…**, under the table's buttons, writes the table to a CSV file,
+offered beside the file the tab has open and named after it: every row in the
+order shown, ticked or not, with the measured values in full rather than to the
+three places the table shows. A point's position takes three columns of its
+own. The file starts with a UTF-8 byte-order mark, so that a spreadsheet shows
+Å and ° as they are.
+
 ## Lattice planes
 
 A crystallographic plane is drawn from its Miller indices, with no atoms

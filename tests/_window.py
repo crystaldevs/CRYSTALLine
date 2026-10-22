@@ -22,7 +22,7 @@ import pytest
 pytest.importorskip("PySide6")
 
 from PySide6.QtCore import QSettings, Signal  # noqa: E402
-from PySide6.QtWidgets import QApplication, QMessageBox, QWidget  # noqa: E402
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox, QWidget  # noqa: E402
 
 
 class _Interactor:
@@ -175,3 +175,49 @@ def show_tab(window, tab):
     """Click on ``tab`` in the tab bar."""
     window._file_tabs.setCurrentWidget(tab.page)
     QApplication.processEvents()
+
+
+def visible_geometry_panel(window):
+    """The Geometry panel the dock shows: the one the user's clicks reach."""
+    return window._panel_stacks["geometry_panel"].currentWidget()
+
+
+def measure(window, atoms):
+    """Click ``atoms`` in the tab on screen, in that order, then press Measure selection.
+
+    Clicked as the 3D view reports a pick: the first on its own, each next one
+    added with Ctrl/Shift. The order matters — an angle is measured at the
+    second atom picked.
+    """
+    for picked, atom in enumerate(atoms):
+        window.viewport.atom_picked.emit(int(atom), picked > 0)
+    QApplication.processEvents()
+    assert window.geometry_panel._selection == [int(a) for a in atoms]
+    visible_geometry_panel(window)._measure_btn.click()
+    return window.geometry_panel.measurements()[-1]
+
+
+def export(window, monkeypatch, path):
+    """Press Export to CSV… in the dock, and choose ``path`` in the dialog.
+
+    Returns the name the dialog offered, and the CSV as rows.
+    """
+    import csv
+
+    offered = []
+
+    def ask(_parent, _title, suggested, _filter):
+        offered.append(suggested)
+        return str(path), "CSV files (*.csv)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", ask)
+    visible_geometry_panel(window)._export_btn.click()
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return offered[0], list(csv.reader(handle))
+
+
+def measure_a_bond(window):
+    """Click the two closest atoms on screen and measure them: a bond, on any file."""
+    from _panels import closest_pair
+
+    return measure(window, closest_pair(window.structure.positions))
