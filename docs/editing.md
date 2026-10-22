@@ -106,11 +106,12 @@ in every tab.
 The atoms are taken in the order they were picked: the second is the vertex
 of an angle, and the second and third are the central bond of a dihedral.
 
-Measurements remain drawn in the view and can be coloured individually or by
-type. The **Thickness** slider sets how thick the lines of distances, angles and
-dihedrals are drawn, in Å: those selected in the list, all of them when none is
-selected, and the ones measured next. A plane through the selected atoms is
-fitted under **Lattice planes**.
+A new measurement is listed unticked, and is drawn in the view only once its
+tick is set; unticked again, it stays in the list. Measurements can be coloured
+individually or by type. The **Thickness** slider sets how thick the lines of
+distances, angles and dihedrals are drawn, in Å: those selected in the list,
+all of them when none is selected, and the ones measured next. A plane through
+the selected atoms is fitted under **Lattice planes**.
 
 ## Lattice planes
 

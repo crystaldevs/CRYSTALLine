@@ -691,7 +691,10 @@ class GeometryPanel(QWidget):
         self._measurements.append(result)
         item = QListWidgetItem(result.summary())
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)  # new measurements are shown straight away
+        # Listed, not drawn: whether a measurement goes into the view is the
+        # user's to decide, with its tick. Drawn straight away, every bond
+        # measured to read its length put a line and a label over it.
+        item.setCheckState(Qt.Unchecked)
         self._list.addItem(item)
         self._emit_annotations()
 
@@ -783,7 +786,7 @@ class GeometryPanel(QWidget):
         item = QListWidgetItem(self._plane_summary(plane))
         item.setToolTip(self._plane_tooltip(plane))
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)  # shown straight away, like a measurement
+        item.setCheckState(Qt.Checked)  # shown straight away: a plane is added to be seen
         item.setIcon(_colour_swatch(plane.color))
         blocked = self._plane_list.blockSignals(True)
         self._plane_list.addItem(item)
