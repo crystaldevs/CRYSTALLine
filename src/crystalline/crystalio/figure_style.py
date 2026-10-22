@@ -305,26 +305,15 @@ def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
             undo.append((set_, old.copy()))
             set_(new)
 
-    for artist in figure.findobj():
-        if getattr(artist, _AS_DRAWN, False):
-            continue
-        if isinstance(artist, Text):
-            change(artist.get_color, artist.set_color)
-        elif isinstance(artist, Line2D):
-            change(artist.get_color, artist.set_color)
-            change(artist.get_markerfacecolor, artist.set_markerfacecolor)
-            change(artist.get_markeredgecolor, artist.set_markeredgecolor)
-        elif isinstance(artist, Patch):
-            change(artist.get_facecolor, artist.set_facecolor)
-            change(artist.get_edgecolor, artist.set_edgecolor)
-        elif isinstance(artist, Collection) and artist.get_array() is None:
-            # One mapped through a colour map is data, and stays as it is.
-            change_each(artist.get_facecolor, artist.set_facecolor)
-            change_each(artist.get_edgecolor, artist.set_edgecolor)
-
     for ax in figure.axes:
         # Ticks are made afresh as an axis is zoomed, from the axes' own
         # settings: those are what must change, not only the ticks there now.
+        # First, before the artists below: they include the tick lines, and
+        # once those were changed one by one the first tick read as changed
+        # already, so the settings never were — and a tick the axis made on
+        # screen (two more minor ticks at the window's size, DAFADNP's
+        # spectra) took the screen's colour from the first and was saved in
+        # it, pale on white.
         for name, axis in getattr(ax, "_axis_map", {}).items():
             ticks = axis.get_major_ticks()
             old = ticks[0].tick1line.get_color() if ticks else None
@@ -342,6 +331,23 @@ def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
                     if new is not None:
                         undo.append((lambda c, e=entry: e.__setitem__("color", c), old))
                         entry["color"] = new
+
+    for artist in figure.findobj():
+        if getattr(artist, _AS_DRAWN, False):
+            continue
+        if isinstance(artist, Text):
+            change(artist.get_color, artist.set_color)
+        elif isinstance(artist, Line2D):
+            change(artist.get_color, artist.set_color)
+            change(artist.get_markerfacecolor, artist.set_markerfacecolor)
+            change(artist.get_markeredgecolor, artist.set_markeredgecolor)
+        elif isinstance(artist, Patch):
+            change(artist.get_facecolor, artist.set_facecolor)
+            change(artist.get_edgecolor, artist.set_edgecolor)
+        elif isinstance(artist, Collection) and artist.get_array() is None:
+            # One mapped through a colour map is data, and stays as it is.
+            change_each(artist.get_facecolor, artist.set_facecolor)
+            change_each(artist.get_edgecolor, artist.set_edgecolor)
     setattr(figure, _ON_PAPER, undo)
 
 
