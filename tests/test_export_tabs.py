@@ -2,19 +2,21 @@
 
 On the real window (``_window.py``: only the 3D views are stood in for), so
 what is checked is the window's own plumbing — the tab a file is read into,
-which panel gets its local modes and its name, which panel the dock shows when
-Export to CSV… is pressed — rather than its source.
+which panel gets its name, which panel the dock shows when Export to CSV… is
+pressed — rather than its source. The tabs hold shipped outputs, read as the
+window reads any file.
 
-The LOCMODES file is ``data/locmodes/h2o2_synthetic.out``, made-up force
-constants for hydrogen peroxide in a 5 Å box. It holds no geometry block a
-structure could be read from, so what the reader makes of it is put together
-here: the structure at the positions its Cartesian block gives, and the local
-modes read from it by the real reader. The other tabs hold shipped outputs, read
-as the window reads any file.
+A LOCMODES run's local modes go into its export too: the run is
+``data/locmodes/h2o2_synthetic.out``, made-up force constants for hydrogen
+peroxide in a 5 Å box. It holds no geometry block a structure could be read
+from, so what the reader makes of it is put together here: the structure at the
+positions its Cartesian block gives, and the local modes read from it by the
+real reader.
 """
 
 import os
 
+import numpy as np
 import pytest
 
 pytest.importorskip("PySide6")
@@ -34,7 +36,6 @@ from sample_data import path as sample_path  # noqa: E402
 
 from crystalline.core import measure as M  # noqa: E402
 
-_PEROXIDE = "locmodes/h2o2_synthetic.out"
 _THIOUREA = "thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out"
 _COESITE = "coesite/coesite_ela.out"
 
@@ -44,6 +45,115 @@ def window(monkeypatch, tmp_path):
     made = make_window(monkeypatch, tmp_path)
     yield made
     close_window(made)
+
+
+def _beside(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return os.path.join(os.path.dirname(path), f"{stem}_measurements.csv")
+
+
+def _row(bond):
+    return [M.DISTANCE, bond.label, f"{bond.value:.6f}", "Å"]
+
+
+# ── each tab its own ──────────────────────────────────────────────────────
+def test_each_tab_exports_what_was_measured_in_it(window, monkeypatch, tmp_path):
+    """Measured in turn in two tabs, then exported from each: every file holds
+    its own tab's measurements, and is offered beside its own file."""
+    open_file(window, sample_path(_COESITE))
+    coesite = window._tab
+    in_coesite = measure_a_bond(window)
+    open_file(window, sample_path(_THIOUREA))
+    thiourea = window._tab
+    assert thiourea is not coesite
+    in_thiourea = measure_a_bond(window)
+
+    offered, (header, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
+    assert offered == _beside(sample_path(_THIOUREA))
+    assert header == list(M.EXPORT_COLUMNS)
+    assert rows == [_row(in_thiourea)]
+
+    show_tab(window, coesite)
+    assert visible_geometry_panel(window) is coesite.geometry_panel
+    offered, (header, *rows) = export(window, monkeypatch, tmp_path / "coesite.csv")
+    assert offered == _beside(sample_path(_COESITE))
+    assert rows == [_row(in_coesite)]
+
+
+def test_a_file_read_behind_the_tab_on_screen_exports_its_own_once_shown(
+        window, monkeypatch, tmp_path):
+    """Opened with another in front, the file waits unbuilt; its panel is made
+    and filled the first time its tab is clicked — and it is that panel, not the
+    one on screen when it was read, that gets the file's name."""
+    open_file(window, sample_path(_THIOUREA))
+    thiourea = window._tab
+    open_file(window, sample_path(_COESITE), front=False)
+    coesite = window._tabs[-1]
+    assert window._tab is thiourea and not coesite.built()
+
+    show_tab(window, coesite)
+    assert coesite.built() and window._tab is coesite
+    bond = measure_a_bond(window)
+    offered, (_, *rows) = export(window, monkeypatch, tmp_path / "coesite.csv")
+    assert offered == _beside(sample_path(_COESITE)) and rows == [_row(bond)]
+
+    show_tab(window, thiourea)
+    measure_a_bond(window)
+    offered, (_, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
+    assert offered == _beside(sample_path(_THIOUREA)) and len(rows) == 1
+
+
+def test_closing_a_tab_leaves_the_next_ones_export_as_it_was(window, monkeypatch, tmp_path):
+    """Closing the tab in front shows the one behind it, whose panel and table
+    are its own, untouched by the tab that went."""
+    open_file(window, sample_path(_THIOUREA))
+    thiourea = window._tab
+    bond = measure_a_bond(window)
+    open_file(window, sample_path(_COESITE))
+    measure_a_bond(window)
+    measure_a_bond(window)
+
+    window._close_current_tab()
+    assert window._tab is thiourea and visible_geometry_panel(window) is thiourea.geometry_panel
+    offered, (_, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
+    assert offered == _beside(sample_path(_THIOUREA)) and rows == [_row(bond)]
+
+
+def test_an_angle_clicked_in_the_view_is_exported_at_the_atom_clicked_second(
+        window, monkeypatch, tmp_path):
+    """A neighbour, then the atom, then another neighbour: the angle at the
+    atom. The selection used to reach the panel in index order, and the angle
+    exported was the one at whichever atom sat in the middle of the list."""
+    open_file(window, sample_path(_THIOUREA))
+    positions = np.asarray(window.structure.positions, dtype=float)
+    nearest = np.argsort(np.linalg.norm(positions - positions[0], axis=1))
+    atoms = [int(nearest[1]), 0, int(nearest[2])]
+    assert atoms != sorted(atoms)                    # else index order would do as well
+    measure(window, atoms)
+    _, (_, row) = export(window, monkeypatch, tmp_path / "angle.csv")
+
+    first, second = positions[atoms[0]] - positions[0], positions[atoms[2]] - positions[0]
+    cosine = first @ second / np.linalg.norm(first) / np.linalg.norm(second)
+    at_vertex = np.degrees(np.arccos(cosine))
+    symbols = [window.structure.symbols[i] for i in atoms]
+    assert row[:2] == [M.ANGLE, "–".join(f"{s}({i})" for s, i in zip(symbols, atoms))]
+    assert float(row[2]) == pytest.approx(at_vertex, abs=1e-4)
+
+
+def test_the_export_button_follows_the_tab_on_screen(window):
+    """Greyed while the tab on screen has nothing measured, whatever the others
+    hold: it is that tab's panel the dock shows."""
+    open_file(window, sample_path(_THIOUREA))
+    thiourea = window._tab
+    measure_a_bond(window)
+    open_file(window, sample_path(_COESITE))
+    assert not visible_geometry_panel(window)._export_btn.isEnabled()
+    show_tab(window, thiourea)
+    assert visible_geometry_panel(window)._export_btn.isEnabled()
+
+
+# ── a LOCMODES run's local modes, exported with it ─────────────────────────
+_PEROXIDE = "locmodes/h2o2_synthetic.out"
 
 
 def _peroxide_read():
@@ -78,17 +188,10 @@ def _measure_coordinate(window, number):
     return measure(window, atoms)
 
 
-def _beside(path):
-    stem = os.path.splitext(os.path.basename(path))[0]
-    return os.path.join(os.path.dirname(path), f"{stem}_measurements.csv")
-
-
 _LOCAL_HEADER = list(M.EXPORT_COLUMNS) + list(M.EXPORT_LOCAL_COLUMNS)
-_PLAIN_HEADER = list(M.EXPORT_COLUMNS)
 
 
-# ── each tab its own ──────────────────────────────────────────────────────
-def test_each_tab_exports_what_was_measured_in_it(window, monkeypatch, tmp_path):
+def test_only_the_run_with_local_modes_exports_their_columns(window, monkeypatch, tmp_path):
     """Measured in turn in two tabs, then exported from each: every file holds
     its own tab's measurements, with the LOCMODES columns only for the run that
     has local modes, and is offered beside its own file."""
@@ -102,7 +205,7 @@ def test_each_tab_exports_what_was_measured_in_it(window, monkeypatch, tmp_path)
 
     offered, (header, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
     assert offered == _beside(sample_path(_THIOUREA))
-    assert header == _PLAIN_HEADER
+    assert header == list(M.EXPORT_COLUMNS)
     assert rows == [[M.DISTANCE, bond.label, f"{bond.value:.6f}", "Å"]]
 
     show_tab(window, peroxide)
@@ -138,7 +241,7 @@ def test_a_file_read_behind_the_tab_on_screen_gets_its_local_modes_when_first_sh
     show_tab(window, thiourea)
     measure_a_bond(window)
     offered, (header, *rows) = export(window, monkeypatch, tmp_path / "thiourea.csv")
-    assert offered == _beside(sample_path(_THIOUREA)) and header == _PLAIN_HEADER
+    assert offered == _beside(sample_path(_THIOUREA)) and header == list(M.EXPORT_COLUMNS)
     assert len(rows) == 1
 
 
@@ -168,7 +271,8 @@ def test_a_supercell_in_one_tab_leaves_the_other_tabs_atoms_as_they_were(
     assert [row[4] for row in rows] == ["4"]
 
 
-def test_closing_a_tab_leaves_the_next_ones_export_as_it_was(window, monkeypatch, tmp_path):
+def test_closing_a_tab_leaves_the_next_ones_local_modes_as_they_were(
+        window, monkeypatch, tmp_path):
     """Closing the tab in front shows the one behind it, whose panel, table and
     local modes are its own, untouched by the tab that went."""
     peroxide = _open_peroxide(window)
@@ -184,7 +288,7 @@ def test_closing_a_tab_leaves_the_next_ones_export_as_it_was(window, monkeypatch
     assert [row[4:6] for row in rows] == [["2", "O1–H3"]]
 
 
-def test_an_angle_clicked_in_the_view_is_exported_at_the_atom_clicked_second(
+def test_an_angle_clicked_in_the_view_finds_its_local_mode_at_the_atom_clicked_second(
         window, monkeypatch, tmp_path):
     """H3, then O1, then O2: the angle at O1, the run's coordinate 5. The
     selection used to reach the panel in index order, and the angle exported
@@ -199,14 +303,3 @@ def test_an_angle_clicked_in_the_view_is_exported_at_the_atom_clicked_second(
     assert row[:2] == [M.ANGLE, "–".join(f"{s}({i})" for s, i in zip(symbols, atoms))]
     assert float(row[2]) == pytest.approx(108.0247, abs=1e-3)
     assert row[4:6] == ["5", "H3–O1–O2"]
-
-
-def test_the_export_button_follows_the_tab_on_screen(window):
-    """Greyed while the tab on screen has nothing measured, whatever the others
-    hold: it is that tab's panel the dock shows."""
-    peroxide = _open_peroxide(window)
-    _measure_coordinate(window, 1)
-    open_file(window, sample_path(_THIOUREA))
-    assert not visible_geometry_panel(window)._export_btn.isEnabled()
-    show_tab(window, peroxide)
-    assert visible_geometry_panel(window)._export_btn.isEnabled()

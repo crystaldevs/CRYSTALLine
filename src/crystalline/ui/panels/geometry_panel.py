@@ -282,9 +282,10 @@ class GeometryPanel(QWidget):
         box.addWidget(self._measure_btn)
 
         # Ticked measurements are drawn in the 3D view. A table rather than a
-        # list, sorted by whichever heading is clicked: for a LOCMODES output a
-        # measurement can carry its local mode's force constant, mass and
-        # frequency beside the value, and "the stiffest bonds first" is a sort.
+        # list: the atoms and the value each in a column of their own, sorted
+        # by whichever heading is clicked — "the longest bonds first" is a sort.
+        # For a LOCMODES output a measurement also carries its local mode's
+        # force constant, mass and frequency beside the value.
         self._list = _MeasureTable()
         self._list.setToolTip("Tick a measurement to show it in the 3D view")
         self._list.itemChanged.connect(lambda _item, _column: self._emit_annotations())
@@ -307,12 +308,12 @@ class GeometryPanel(QWidget):
         self._clear_btn.clicked.connect(self.clear_measurements)
         row.addWidget(self._clear_btn, 1)
         box.addLayout(row)
-        # The table, out of the program: for a LOCMODES run, the force constants
-        # of the bonds and angles measured, ready for a spreadsheet or a script.
-        # On a line of its own, the table's width. Beside the other three it
-        # made that row the widest in the panel, and so the Geometry dock's
-        # least width (357 px on macOS, against 323 now that Lattice planes'
-        # Through buttons set it), and had to be called just "Export…".
+        # The table, out of the program: the bonds and angles measured, ready
+        # for a spreadsheet or a script. On a line of its own, the table's
+        # width. Beside the other three it made that row the widest in the
+        # panel, and so the Geometry dock's least width (357 px on macOS,
+        # against 323 now that Lattice planes' Through buttons set it), and had
+        # to be called just "Export…".
         self._export_btn = QPushButton("Export to CSV…")
         self._export_btn.setToolTip(
             "Write the table to a CSV file — every row, in the order shown, with "
@@ -707,10 +708,10 @@ class GeometryPanel(QWidget):
         and a dihedral's central bond are which atoms were picked where: H3,
         then O1, then O2 is the angle at O1. Taken in index order, picking them
         measured the angle at whichever atom happened to sit in the middle of
-        the list — another angle, and no local mode for it. So the atoms still
-        selected keep their places and new ones join at the end: picked one at a
-        time, that is the order of the clicks, and a selection made at once (a
-        plane's Select atoms) comes in index order, as it always has.
+        the list — another angle. So the atoms still selected keep their places
+        and new ones join at the end: picked one at a time, that is the order of
+        the clicks, and a selection made at once (a plane's Select atoms) comes
+        in index order, as it always has.
         """
         given = [int(i) for i in indices]
         still = set(given)
@@ -890,7 +891,7 @@ class GeometryPanel(QWidget):
         try:
             # Listed, not drawn: whether a measurement goes into the view is the
             # user's to decide, with its tick. Drawn straight away, every bond
-            # measured for its force constant put a line and a label over it.
+            # measured to read its length put a line and a label over it.
             item.setCheckState(_COL_NAME, Qt.Unchecked)
             self._fill_measure_row(item, result)
             self._list.addTopLevelItem(item)
@@ -1401,12 +1402,13 @@ class _MeasureTable(QTreeWidget):
         header.setSortIndicatorShown(True)
         header.setSortIndicatorClearable(True)
         header.setSortIndicator(-1, Qt.AscendingOrder)  # in the order measured
-        # The numbers in full, and the atoms in what is left over: a dihedral's
-        # four atoms took the width of the dock, and pushed ωᵃ out of sight
-        # behind a scroll bar. Shortened in the middle, a label keeps both its
-        # ends, and the row's tooltip has the atoms in full anyway. But not to
-        # nothing — in a narrow dock the numbers alone fill it — so the atoms
-        # keep a floor, and the table scrolls sideways past it (_fit_name_column).
+        # The value in full, and the atoms in what is left over: a dihedral's
+        # four atoms could take the width of the dock and push the value out of
+        # sight behind a scroll bar. Shortened in the middle, a label keeps both
+        # its ends. But not to nothing — in a narrow dock the value alone fills
+        # it — so the atoms keep a floor, and the table scrolls sideways past it
+        # (_fit_name_column). For a LOCMODES run the numbers are its local
+        # modes' too, and ωᵃ was the one pushed out of sight.
         header.setSectionResizeMode(QHeaderView.ResizeToContents)
         header.setSectionResizeMode(_COL_NAME, QHeaderView.Interactive)
         header.setStretchLastSection(False)
