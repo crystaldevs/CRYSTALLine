@@ -1,7 +1,7 @@
 """One tab per open file: what each tab owns, and how the window reaches it.
 
 Several files can be open at once, one shown at a time. A tab is everything the
-window used to hold for its one file — the structure as loaded and as shown,
+window holds for one file — the structure as loaded and as shown,
 the cell view and supercell, the phonon modes, the undo history, the orbital or
 density on screen — together with the widgets that show it: a 3D view of its
 own, and its own Phonons, Info, Display, Geometry, Point-symmetry and Plots

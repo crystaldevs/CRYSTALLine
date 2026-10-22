@@ -208,10 +208,8 @@ def test_both_representations_draw_a_figure():
     pytest.importorskip("CRYSTALClear")
     from matplotlib.figure import Figure
 
-    from crystalline.crystalio.vci import plot_vci, plottable
+    from crystalline.crystalio.vci import plot_vci
 
-    if not plottable():
-        pytest.skip("the installed CRYSTALClear cannot draw VCI states")
     run, out = vci_run(_VCI_OUTS[0])
 
     for _label, key in REPRESENTATIONS:
@@ -225,10 +223,8 @@ def test_a_window_holding_no_state_is_refused():
     """Rather than drawing an empty figure — the window is simply wrong."""
     pytest.importorskip("CRYSTALClear")
 
-    from crystalline.crystalio.vci import plot_vci, plottable
+    from crystalline.crystalio.vci import plot_vci
 
-    if not plottable():
-        pytest.skip("the installed CRYSTALClear cannot draw VCI states")
     run, out = vci_run(_VCI_OUTS[0])
     above_everything = run.energies[-1] + 1000.0
 
@@ -242,10 +238,8 @@ def test_too_wide_a_window_is_refused_rather_than_drawn():
     the figure is built."""
     pytest.importorskip("CRYSTALClear")
 
-    from crystalline.crystalio.vci import plot_vci, plottable
+    from crystalline.crystalio.vci import plot_vci
 
-    if not plottable():
-        pytest.skip("the installed CRYSTALClear cannot draw VCI states")
     run, out = vci_run(_VCI_OUTS[0])
 
     with pytest.raises(ValueError, match="max_states"):

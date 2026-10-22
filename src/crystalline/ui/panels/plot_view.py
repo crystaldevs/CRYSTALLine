@@ -1020,10 +1020,10 @@ class PlotPanel(QWidget):
     def clear(self) -> None:
         """Close every plot, releasing its figure.
 
-        Called when a new file is loaded. Nothing used to close them, so the
-        figures of every file opened in a session stayed live — each one a
-        matplotlib ``Figure`` and a Qt canvas that Qt still repaints — and the
-        window grew heavier with every plot ever drawn.
+        Called when a new file is loaded. Left open, the figures of every file
+        opened in a session would stay live — each one a matplotlib ``Figure``
+        and a Qt canvas that Qt still repaints — and the window would grow
+        heavier with every plot ever drawn.
 
         Correctness, not only weight: a spectrum carries a pick handler wired to
         *its* file's modes, so a plot left behind from the previous structure

@@ -27,10 +27,6 @@ from crystalline.core.adp import ADPSet
 from crystalline.core.phonons import PhononMode, PhononModes
 from crystalline.core.structure import Structure
 
-# CRYSTALClear reports phonon frequencies in THz; the domain model stores cm^-1.
-# 1 THz = 1e12 Hz -> nu[cm^-1] = 1e12 / c[cm/s] = 1e12 / 2.99792458e10.
-THZ_TO_CM = 33.356409519815204
-
 # Lines that mark a CRYSTAL frequency (FREQCALC) run — the same header
 # CRYSTALClear itself keys on when parsing phonons.
 _FREQ_MARKERS = (
@@ -134,12 +130,57 @@ def load(path: str, initial: bool = False) -> LoadedFile:
             structure, qmodes = load_dispersion(path)
             return LoadedFile(structure=structure, modes=qmodes[0], qmodes=qmodes)
         except Exception as exc:  # noqa: BLE001 - any parse failure, same answer
-            note = (f"This output has a frequency calculation, but its modes could "
-                    f"not be read ({type(exc).__name__}: {exc}). The structure is "
-                    f"shown without them.")
-            return LoadedFile(structure=load_structure(path, initial=initial),
-                              modes=None, note=note)
+            bands_only, supercell = _dispersion_without_modes(path)
+            structure = _expanded_cell(path, initial) if supercell else None
+            if bands_only:
+                note = ("This output computes phonon bands along a path, and CRYSTAL "
+                        "prints no eigenvectors for them unless asked to with MODES, "
+                        "so there are no modes to show. The bands themselves are "
+                        "plotted by Plot → Phonon bands & DOS…")
+            else:
+                note = (f"This output has a frequency calculation, but its modes could "
+                        f"not be read ({type(exc).__name__}: {exc}). The structure is "
+                        f"shown without them.")
+            if structure is not None:
+                note += (" The cell shown is the one the SCELPHONO supercell was built "
+                         "from, which the frequencies belong to.")
+            else:
+                structure = load_structure(path, initial=initial)
+            return LoadedFile(structure=structure, modes=None, note=note)
     return LoadedFile(structure=load_structure(path, initial=initial), modes=None)
+
+
+def _dispersion_without_modes(path: str) -> tuple:
+    """``(bands only, supercell)`` for a frequency output whose modes are missing.
+
+    *Bands only*: a dispersion run along a path (``DISPERSI`` with ``BANDS``)
+    prints its frequencies and, unless asked with ``MODES``, says it prints no
+    eigenvectors. *Supercell*: the run built a ``SCELPHONO`` supercell, which
+    is what its geometry sections then describe.
+    """
+    bands_only = supercell = False
+    try:
+        with open(path, "r", errors="ignore") as handle:
+            for line in handle:
+                if "MODES PRINTING DISABLED" in line:
+                    bands_only = True
+                elif line.strip().upper() == "SCELPHONO":
+                    supercell = True
+                if bands_only and supercell:
+                    break
+    except OSError:
+        pass
+    return bands_only, supercell
+
+
+def _expanded_cell(path: str, initial: bool) -> Optional[Structure]:
+    """The cell a SCELPHONO run expanded, or ``None`` if it cannot be read."""
+    from CRYSTALClear.crystal_io import Crystal_output
+
+    try:
+        return Structure.from_ase(_out_primitive_to_ase(Crystal_output(path), initial=initial))
+    except Exception:  # noqa: BLE001 - the run's own geometry is the fallback
+        return None
 
 
 def load_structure(path: str, initial: bool = False) -> Structure:
@@ -167,8 +208,8 @@ def _structure_for_modes(out, natom_modes: int) -> Structure:
     Normally the geometry of the run, but a SCELPHONO calculation builds a
     supercell to get its force constants and then reports the modes of the cell
     it expanded — 60 of them for a 20-atom cell whose geometry sections describe
-    540 atoms. Reshaping the eigenvectors against the wrong one is what used to
-    make such a file fail to open at all.
+    540 atoms. Reshaped against the wrong one, the eigenvectors would keep such
+    a file from opening at all.
 
     Raises:
         ValueError: When neither cell has as many atoms as the modes span, so
@@ -313,6 +354,8 @@ def _modes_at(freqs, eigvecs, natom: int, qpoint, activity: bool, out) -> Phonon
     modes carry ``None`` and the panel's activity filter switches itself off
     rather than showing an empty list.
     """
+    from CRYSTALClear.units import thz_to_cm
+
     nmode = len(freqs)
     gamma = qpoint is None or not np.any(np.abs(np.asarray(qpoint, dtype=float)) > 1e-6)
     if activity and gamma:
@@ -334,7 +377,8 @@ def _modes_at(freqs, eigvecs, natom: int, qpoint, activity: bool, out) -> Phonon
             eigenvector = np.real(eigenvector)
         modes.append(
             PhononMode(
-                frequency=float(np.real(freqs[i])) * THZ_TO_CM,
+                # CRYSTALClear reports THz; the domain model stores cm⁻¹.
+                frequency=float(thz_to_cm(np.real(freqs[i]))),
                 eigenvector=eigenvector,
                 ir_active=ir[i],
                 raman_active=raman[i],
@@ -592,13 +636,12 @@ def _superscript(exponent: int) -> str:
 def _setup_rows(out) -> dict:
     """Display rows describing how the calculation was set up.
 
-    Reads ``Crystal_output.get_calculation_info`` (CRYSTALClear >= 0.2.16).
-    Older CRYSTALClear releases don't have it, so the panel simply falls back
-    to the computed-properties rows instead of erroring.
+    Reads ``Crystal_output.get_calculation_info``. An output it cannot read
+    leaves the panel with the computed-properties rows instead of an error.
     """
     try:
         info = out.get_calculation_info()
-    except Exception:  # noqa: BLE001 - absent method, or an output it can't read
+    except Exception:  # noqa: BLE001 - an output it can't read
         return {}
 
     rows: dict = {}

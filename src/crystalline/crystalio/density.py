@@ -39,8 +39,9 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+from CRYSTALClear.units import au_to_angstrom
 
-BOHR = 0.5291772109038  # Angstrom, CODATA — the unit both formats are written in
+BOHR = au_to_angstrom(1.0)  # Angstrom: the unit both formats are written in
 
 # What a field *is*. The kind decides how it should be drawn: a charge density
 # is non-negative and wants one surface, a spin density is signed and wants
