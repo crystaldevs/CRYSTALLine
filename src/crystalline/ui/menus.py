@@ -556,9 +556,6 @@ def _build_plot_menu(window) -> None:
     disabled if CRYSTALClear is missing.
     """
     from crystalline.crystalio import available_plots, crystalclear_available
-    from crystalline.crystalio.anscan import plottable as anscan_plottable
-    from crystalline.crystalio.pes import plottable as pes_plottable
-    from crystalline.crystalio.vci import plottable as vci_plottable
 
     plot_menu = window.menuBar().addMenu("&Plot")
     window._plot_kinds = available_plots()
@@ -585,31 +582,31 @@ def _build_plot_menu(window) -> None:
     window._electronic_action = QAction("Electronic bands & DOS…", window)
     window._electronic_action.triggered.connect(window._open_electronic)
     plot_menu.addAction(window._electronic_action)
+    # And the phonon counterpart, from the files a dispersion run writes.
+    window._phonon_bands_action = QAction("Phonon bands & DOS…", window)
+    window._phonon_bands_action.triggered.connect(window._open_phonon_bands)
+    plot_menu.addAction(window._phonon_bands_action)
     window._spectra_action = QAction("Vibrational spectra…", window)
     window._spectra_action.triggered.connect(window._open_spectra)
     plot_menu.addAction(window._spectra_action)
     # Likewise for the VCI wavefunctions: a run holds one state per
     # configuration, so which states and how much mixing to keep are choices
-    # only the user can make (see crystalline.crystalio.vci). Listed only when
-    # the installed CRYSTALClear can actually draw them.
-    if vci_plottable():
-        window._vci_action = QAction("VCI states…", window)
-        window._vci_action.triggered.connect(window._open_vci)
-        plot_menu.addAction(window._vci_action)
+    # only the user can make (see crystalline.crystalio.vci).
+    window._vci_action = QAction("VCI states…", window)
+    window._vci_action.triggered.connect(window._open_vci)
+    plot_menu.addAction(window._vci_action)
     # And for the anharmonic scan, where what goes on top of the potential —
     # wavefunctions, densities, how tall — is the choice, and the coefficients
     # come from a second file (see crystalline.crystalio.anscan).
-    if anscan_plottable():
-        window._anscan_action = QAction("Anharmonic scan…", window)
-        window._anscan_action.triggered.connect(window._open_anscan)
-        plot_menu.addAction(window._anscan_action)
+    window._anscan_action = QAction("Anharmonic scan…", window)
+    window._anscan_action.triggered.connect(window._open_anscan)
+    plot_menu.addAction(window._anscan_action)
     # And for the PES an ANHAPES run differentiates: a quartic surface over
     # every mode it was given, of which the figure is always a one- or two-mode
     # cut (see crystalline.crystalio.pes).
-    if pes_plottable():
-        window._pes_action = QAction("Anharmonic PES…", window)
-        window._pes_action.triggered.connect(window._open_pes)
-        plot_menu.addAction(window._pes_action)
+    window._pes_action = QAction("Anharmonic PES…", window)
+    window._pes_action.triggered.connect(window._open_pes)
+    plot_menu.addAction(window._pes_action)
     # Crystalline orbitals are not a matplotlib figure at all — they are drawn in
     # the 3D view over the structure — but this is where someone looks for "plot
     # something the run computed", so the entry belongs here.

@@ -22,10 +22,8 @@ selection is made of: a dialog that answers ``selection_state()`` has the answer
 kept, and is handed it back through ``set_selection_state()``. The spectra
 dialog names its ticked curves, which is the same rule as for a combo — a name,
 never a position — so a curve this output does not have is simply not ticked.
-Ticks were left out of this entirely at first, on the grounds that the curves a
-file holds are its contents rather than a setting; but what the user ticked is
-a setting, and reopening the dialog to find it blank is what sent them back to
-the menu.
+The curves a file holds are its contents, but which of them were ticked is a
+setting, and a dialog reopened blank would send the user back to choosing.
 """
 
 from __future__ import annotations

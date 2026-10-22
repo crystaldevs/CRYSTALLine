@@ -23,6 +23,7 @@ Qt-free, like the rest of ``core``.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from fractions import Fraction
 from typing import List, Optional, Sequence, Tuple
@@ -484,19 +485,13 @@ def band_shrink(segments: Sequence[Tuple[tuple, tuple]]) -> int:
                 denominators.add(ratio.denominator)
     shrink = 1
     for d in denominators:
-        shrink = shrink * d // _gcd(shrink, d)
+        shrink = shrink * d // math.gcd(shrink, d)
     if shrink > _MAX_BAND_ISS:
         raise PropertiesInputError(
             f"This path needs a shrinking factor of {shrink}, which means its "
             f"points are not the special points of the lattice. Check the path."
         )
     return shrink
-
-
-def _gcd(a: int, b: int) -> int:
-    while b:
-        a, b = b, a % b
-    return a
 
 
 # ── the deck ──────────────────────────────────────────────────────────────

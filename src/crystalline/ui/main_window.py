@@ -61,7 +61,6 @@ from crystalline.core.structure import Structure
 from crystalline.core.undo import UndoHistory
 
 # Orbital energies are stored in Hartree and shown in the unit bands are quoted in.
-_HARTREE_TO_EV = 27.211386245988
 
 
 @dataclass(frozen=True)
@@ -75,8 +74,8 @@ class _Snapshot:
     lattice-parameter edit changes the source itself. None of them touch the
     shown atoms in a way that can be replayed onto a differently-derived cell —
     an atom index in a 2x2x1 supercell does not mean what it meant in the unit
-    cell — so each one used to clear the history instead, taking every edit
-    before it down as well.
+    cell — so on their own they could only clear the history, taking every edit
+    before them down as well.
 
     Carrying the derivation alongside the atoms is what lets undo step back
     through the lot: restore the source, put the three view settings back,
@@ -1652,6 +1651,70 @@ class MainWindow(QMainWindow):
         self._run_busy(recipe.redrawn, "Building the electronic structure plot…", show,
                        "Plot failed")
 
+    # ── phonon bands and DOS ────────────────────────────────────────────
+    def _open_phonon_bands(self) -> None:
+        """Phonon bands, a phonon DOS or both, the way the electronic ones are.
+
+        The files are those a dispersion run writes beside its output; the
+        output itself, when one is open, says which band file is its own and
+        how the corners of its path are written.
+        """
+        import dataclasses
+        from pathlib import Path
+
+        from crystalline.crystalio.phonon_bands import plot_phonons
+        from crystalline.ui.panels import phonon_controls as controls
+        from crystalline.ui.panels.phonon_dialog import PhononDialog
+
+        structure = None
+        current = getattr(self, "structure", None)
+        if current is not None and len(current):
+            try:
+                # The analysis cell, so the path's corners are recognised in
+                # the same cell the path was written for.
+                structure = self._analysis_cell()
+            except Exception:  # noqa: BLE001 - naming the corners is a nicety
+                structure = None
+        opened = self._output_path or (self._tab.path if self._tab is not None else None)
+        folder = str(Path(opened).parent) if opened else ""
+        output = self._output_path or None
+
+        def dialog_for() -> PhononDialog:
+            dialog = PhononDialog(structure=structure, folder=folder, parent=self,
+                                  output=output)
+            self._restore_dialog(dialog, "phonon_bands")
+            return dialog
+
+        dialog = dialog_for()
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "phonon_bands")
+
+        def answer(accepted) -> dict:
+            bands_path, dos_path, options = accepted.request()
+            return {"bands_path": bands_path, "dos_path": dos_path,
+                    **dataclasses.asdict(options), **accepted.extent()}
+
+        def ask(options):
+            again = dialog_for()
+            again.set_request(*controls.plot_arguments(options))
+            if again.exec() != QDialog.Accepted:
+                return None
+            self._remember_dialog(again, "phonon_bands")
+            return answer(again)
+
+        recipe = PlotRecipe(
+            draw=lambda **options: plot_phonons(*controls.plot_arguments(options)),
+            edit=ask, title=controls.title, controls=controls.PhononControls,
+            aspect=controls.aspect, options=answer(dialog))
+
+        def show(drawn) -> None:
+            figure, _options = drawn
+            self.plot_panel.add_figure(figure, controls.title(recipe.options), recipe=recipe)
+            self._reveal_plot_dock()
+
+        self._run_busy(recipe.redrawn, "Building the phonon band plot…", show, "Plot failed")
+
     def _update_spectra_action(self) -> None:
         """Enable the spectra entry only for an output that has any."""
         action = getattr(self, "_spectra_action", None)
@@ -1944,7 +2007,9 @@ class MainWindow(QMainWindow):
         if not self._refresh_orbital():
             self._orbital = None
             return
-        energy = data.orbitals[choice["index"]].energy * _HARTREE_TO_EV
+        from CRYSTALClear.units import H_to_eV
+
+        energy = H_to_eV(data.orbitals[choice["index"]].energy)
         drawn = "amplitude" if imaginary is None else {
             "phase": "|ψ|, coloured by cell phase",
             "modulus": "|ψ|",
@@ -2253,13 +2318,12 @@ class MainWindow(QMainWindow):
         """Enable the field entry once the tab holds a file, Clear while one is drawn.
 
         The grids sit beside the file the tab was opened from, so without one
-        there is nowhere to look: the dialog opened on no folder and listed
-        nothing. That was only reachable while the window was reading — which it
-        now does in the background, leaving every menu live over a tab whose
-        file has not arrived yet, where opening a file used to hold the whole
-        window still. Every other entry that needs the file is already enabled
-        from what was read; this one is enabled by there being a file at all,
-        so a geometry (.cif, .gui) keeps it and its Browse button.
+        there is nowhere to look, and the dialog would open on no folder and
+        list nothing. The window reads a file in the background, leaving every
+        menu live over a tab whose file has not arrived yet. Every other entry
+        that needs the file is enabled from what was read; this one is enabled
+        by there being a file at all, so a geometry (.cif, .gui) keeps it and
+        its Browse button.
         """
         tab = self._tab
         field = getattr(self, "_density_action", None)
@@ -3196,8 +3260,8 @@ class MainWindow(QMainWindow):
         Adding or deleting an atom makes them inapplicable — there is no
         displacement for an atom the calculation never saw — so the panel drops
         them. Undoing that edit brings the geometry back, and the modes should
-        come back with it: the panel cannot know, having thrown them away, so it
-        used to stay empty and grey for the rest of the session however the
+        come back with it: the panel cannot know, having thrown them away, and
+        would stay empty and grey for the rest of the session however the
         structure was put back. Moving an atom or changing an element keeps the
         count, so the panel keeps the modes and this does nothing.
 
@@ -3766,14 +3830,10 @@ class MainWindow(QMainWindow):
         Built from :meth:`_analysis_cell` — the shown structure folded back into
         a single unit cell — so symmetry reduction sees one clean cell rather
         than a supercell tiling or boundary-completed duplicates, *and* the deck
-        describes the geometry currently on screen.
-
-        This used to pass ``_source``, the pristine loaded cell. That got the
-        cell right but silently discarded every edit made since the file was
-        opened: a dragged atom, an added or deleted one, a changed element all
-        came out as the original geometry, with nothing on screen to say so.
-        (Lattice-parameter edits were the exception — those are applied to
-        ``_source`` itself, so they came through either way.)
+        describes the geometry currently on screen. ``_source``, the cell as
+        loaded, has the right cell but none of the edits made since: a dragged
+        atom, an added or deleted one, a changed element would all come out as
+        the original geometry, with nothing on screen to say so.
         """
         structure = self._analysis_cell()
         if len(structure) == 0:
@@ -3844,8 +3904,9 @@ class MainWindow(QMainWindow):
         """Tell the user a save failed — never with an empty dialog.
 
         pymatgen's symmetry errors (``SymmetryUndeterminedError``) carry no
-        message at all, which used to render as a blank message box; fall back
-        to the exception's type name so there is always something to report.
+        message at all, which would show as a blank message box; the
+        exception's type name is the fallback, so there is always something to
+        report.
         """
         QMessageBox.critical(
             self, "Save failed", f"Could not save the {what}:\n{exc or type(exc).__name__}"

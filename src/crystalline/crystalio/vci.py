@@ -222,19 +222,6 @@ def vci_run(path: Optional[str]):
     return run, out
 
 
-def plottable() -> bool:
-    """Whether the installed CRYSTALClear can draw either representation.
-
-    Both functions arrived together, so a build carrying neither simply means
-    the entry is not offered rather than an entry that fails when used.
-    """
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return False
-    return all(hasattr(CCplt, name) for name in PLOT_FUNCTIONS.values())
-
-
 def plot_vci(
     out,
     *,
@@ -261,18 +248,13 @@ def plot_vci(
     The options that only one representation understands are not shared:
     ``signed`` and ``annotate`` belong to the map, ``weight`` to the Sankey.
     """
-    from crystalline.crystalio.plotting import PlotUnavailable, _plot_module, _to_figure
+    from crystalline.crystalio.plotting import _plot_module, _to_figure
 
     if representation not in PLOT_FUNCTIONS:
         raise ValueError(f"unknown VCI representation {representation!r}")
 
     CCplt = _plot_module()  # imports CRYSTALClear with a non-interactive backend
-    function = getattr(CCplt, PLOT_FUNCTIONS[representation], None)
-    if function is None:
-        raise PlotUnavailable(
-            "The installed CRYSTALClear cannot draw VCI states "
-            f"(it has no plot.{PLOT_FUNCTIONS[representation]})."
-        )
+    function = getattr(CCplt, PLOT_FUNCTIONS[representation])
 
     shared = dict(
         frange=list(frange) if frange is not None else None,
@@ -296,6 +278,5 @@ __all__ = [
     "has_vci",
     "load_vci",
     "plot_vci",
-    "plottable",
     "vci_run",
 ]

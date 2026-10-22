@@ -23,7 +23,6 @@ from crystalline.crystalio.pes import (
     PESRun,
     has_pes,
     pes_run,
-    representations,
 )
 
 _BANNER = "CALCULATION OF CUBIC AND QUARTIC TERMS"
@@ -79,15 +78,6 @@ def test_the_cuts_and_the_maps_are_named_by_a_key_each():
 
 def test_every_representation_names_a_plot_function():
     assert {key for _label, key in REPRESENTATIONS} == set(PLOT_FUNCTIONS)
-
-
-def test_only_the_representations_crystalclear_can_draw_are_offered(monkeypatch):
-    """The surface arrived after the map; an older build has to offer one
-    choice rather than an entry that fails once it is picked."""
-    import CRYSTALClear.plot as CCplt
-
-    monkeypatch.delattr(CCplt, "plot_cry_pes_3D", raising=False)
-    assert {key for _label, key in representations()} == {"map"}
 
 
 # ── how strongly a pair couples ─────────────────────────────────────────

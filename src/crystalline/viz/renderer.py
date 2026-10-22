@@ -1650,10 +1650,9 @@ class StructureRenderer:
 
         This is all the expensive part — contouring, splitting, deciding which
         cell each piece belongs to — and none of it depends on which atoms are
-        on screen. Switching between the conventional and the primitive cell,
-        or anything else that rebuilds the scene, used to redo it every time
-        and took seconds for MgO; now it is done once per field and isovalue,
-        and a rebuild only places the pieces.
+        on screen. Done on every rebuild — a switch between the conventional
+        and the primitive cell, say — it takes seconds for MgO, so it is done
+        once per field and isovalue, and a rebuild only places the pieces.
         """
         key = (id(field), float(options.isovalue), id(options.colour_by),
                bool(options.clip_to_cell), np.round(np.asarray(cell, dtype=float), 6).tobytes())
@@ -2181,8 +2180,9 @@ class StructureRenderer:
         the settings, and rebuilding twice makes the view flicker.
 
         With the ellipsoids switched off nothing on screen changes, so there is
-        nothing to rebuild: opening a file used to build its scene twice, the
-        second time for tensors — most often none at all — that are not drawn.
+        nothing to rebuild; otherwise opening a file would build its scene
+        twice, the second time for tensors — most often none at all — that are
+        not drawn.
         """
         shown = self._settings.show_adp_ellipsoids
         was_drawn = shown and self._adp_tensors is not None
@@ -3292,8 +3292,7 @@ def _hull_mesh(polyhedra, overrides: Optional[dict] = None) -> Optional[pv.PolyD
     and ~47x faster there, and it is what ``_draw_adp_ellipsoids`` already does
     for the ellipsoid field.
 
-    Points are deliberately *not* welded (the old call passed
-    ``merge_points=False``): neighbouring polyhedra share ligand atoms, and
+    Points are deliberately *not* welded: neighbouring polyhedra share ligand atoms, and
     fusing those vertices would join two independent solids — the shared edge
     turns non-manifold and drops out of the outline, and shading bleeds from one
     polyhedron into the next. Keeping each hull's own copy of its points
