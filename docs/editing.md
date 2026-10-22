@@ -90,8 +90,9 @@ that of the current structure.
 ## Measurements
 
 The **Geometry** panel is in three sections, **Measure**, **Lattice planes**
-and **Atoms**, each folded or unfolded with a click on its title. The ones left
-open stay open in every tab and the next time the program is started.
+and **Atoms**, each folded or unfolded with a click on its title. All three
+start folded each time the program is started, and one unfolded stays unfolded
+in every tab.
 
 **Measure** measures the current selection:
 
