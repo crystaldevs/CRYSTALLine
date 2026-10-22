@@ -1019,6 +1019,23 @@ def test_a_measured_internal_coordinate_has_its_local_mode_beside_it(qapp):
     assert _row(panel, 1)[1:] == ["108.025°", "0.700", "0.600", "1.000", "1300.0"]
 
 
+def test_a_measurement_made_before_the_local_modes_came_has_its_own_when_they_do(qapp):
+    """The window reads a run's local modes after its tab is up: a bond
+    measured in the meantime shows only its length, then its force constant
+    beside it, without being measured again."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    structure, source = _peroxide()
+    panel = GeometryPanel(structure)
+    panel.set_source_index(source)
+    bond = _measure(panel, 0, 1)
+    assert bond.local == () and panel._list.isColumnHidden(_COL_K)
+    panel.set_local_modes(_peroxide_modes())
+    assert not panel._list.isColumnHidden(_COL_K)
+    assert [c.number for c in panel._measurements[0].local] == [1]
+    assert _row(panel, 0)[1:] == ["1.450 Å", "4.200", "", "8.000", "950.0"]
+
+
 def test_a_measurement_that_is_none_of_them_has_nothing_beside_it(qapp):
     panel = _locmodes_panel()
     assert _measure(panel, 0, 3).local == ()               # O1···H4: not an internal coordinate

@@ -180,6 +180,9 @@ class MainWindow(QMainWindow):
         # the Info panel's rows, which cost more than the structure and are
         # read after it, once no file is waiting (see _read_next).
         self._pending_details: list = []
+        # LOCMODES runs whose local modes are still to be read, the same way and
+        # for the same reason, just before the details (see _read_next).
+        self._pending_local_modes: list = []
         self._reading = False
         self._reading_path: Optional[str] = None
         self._reader: Optional[Worker] = None
@@ -3275,9 +3278,16 @@ class MainWindow(QMainWindow):
         ms against 230 on a 3.5 MB anharmonic run, and more with every MB), and
         the structure is what was asked for. So it is read once nothing else
         is waiting, and arrives in the panel a moment after the structure.
+
+        A LOCMODES run's local modes are read the same way, after the files and
+        before any details: the Measure table's force constants, which a
+        measurement made meanwhile is given when they come. Read with the
+        structure, they held its first frame back by a third of a second on
+        DAFADNP (717 ms against 355, 2026-10-22).
         """
         details = self._details_queue()
-        if not self._pending_reads and not details:
+        local_modes = self._local_modes_queue()
+        if not self._pending_reads and not details and not local_modes:
             self._reading = False
             self._reader = None
             self._reading_path = None
@@ -3297,6 +3307,11 @@ class MainWindow(QMainWindow):
                 self._update_reading_status()
                 QTimer.singleShot(_DETAILS_PAUSE_MS, self._read_next)
                 return
+            if local_modes:
+                # The pause stands for the details that follow: the local modes
+                # change only the Measure table, which has nothing to settle.
+                self._read_local_modes_next(local_modes)
+                return
             self._details_paused = False
             self._read_details_next(details)
             return
@@ -3309,6 +3324,8 @@ class MainWindow(QMainWindow):
             try:
                 tab = self._show_read_file(path, read, front)
                 if tab is not None and getattr(read, "output_path", None):
+                    if getattr(read, "capabilities", {}).get("locmodes"):
+                        self._local_modes_queue().append((read.output_path, tab))
                     self._details_queue().append((read.output_path, tab))
             finally:
                 self._read_next()
@@ -3379,6 +3396,65 @@ class MainWindow(QMainWindow):
         """Show the output's own rows, with the crystallography left as it is."""
         self._output_props = props or {}
         self.info_panel.set_output_props(self._output_props)
+
+    def _local_modes_queue(self) -> list:
+        """The LOCMODES runs whose local modes are still to be read (see :meth:`_read_next`)."""
+        queue = getattr(self, "_pending_local_modes", None)
+        if queue is None:
+            queue = self._pending_local_modes = []
+        return queue
+
+    def _read_local_modes_next(self, queue: list) -> None:
+        """Read the next run's local modes, and hand them to the tab it is in.
+
+        Quietly, as the details are (:meth:`_read_details_next`); a section
+        that will not read is said, by :meth:`_set_local_modes`.
+        """
+        path, tab = queue.pop(0)
+        self._reading_path = None
+        self._update_reading_status()
+
+        def done(result) -> None:
+            try:
+                self._deliver_local_modes(tab, path, *result)
+            finally:
+                self._read_next()
+
+        self._reader = Worker(lambda: _read_local_modes(path))
+        self._reader.finished.connect(done)
+        self._reader.failed.connect(lambda _exc: self._read_next())
+        self._reader.start()
+
+    def _deliver_local_modes(self, tab: FileTab, path: str, modes, note: Optional[str]) -> None:
+        """Put a run's local modes into ``tab``, if it still holds that run.
+
+        As :meth:`_deliver_details`: a tab read in behind keeps them with the
+        rest of what was read, for :meth:`_fill_tab` when it is built; one that
+        has been closed, or has taken another file since, is left alone.
+        """
+        if tab not in self._tabs:
+            return
+        if tab.pending is not None:
+            pending_path, read = tab.pending
+            if pending_path == path:
+                read.local_modes, read.local_modes_note = modes, note
+            return
+        if tab.path != path:
+            return
+        self._routed(tab, self._set_local_modes)(path, modes, note)
+
+    def _set_local_modes(self, path: str, modes, note: Optional[str]) -> None:
+        """Give the Measure section a run's local modes, or say why there are none.
+
+        Its rows are looked up again (:meth:`GeometryPanel.set_local_modes`), so
+        a measurement made before they came has its local mode beside it now.
+        The note names the file: by the time it is said, another tab may be on
+        screen.
+        """
+        self.geometry_panel.set_local_modes(modes)
+        if note:
+            self.statusBar().showMessage(
+                f"Local modes not read from {os.path.basename(path)}: {note}", 8000)
 
     def _update_reading_status(self) -> None:
         """Say in the status bar which file is being read, and how many are to come.
@@ -3480,13 +3556,13 @@ class MainWindow(QMainWindow):
         # Lattice planes outlive a change of view, not a change of crystal.
         self.geometry_panel.clear_lattice_planes()
         # A LOCMODES run's force constants go beside the measurements that are
-        # its internal coordinates — before the view is built, which tells the
-        # panel which atom on screen is which (see _apply_cell_view). Run here
-        # only as the tab is shown, so a note about them is seen when it is said.
-        self.geometry_panel.set_local_modes(read.local_modes)
+        # its internal coordinates. Usually none yet: they are read after the
+        # tab is shown (see _read_next) and come through _deliver_local_modes;
+        # a tab read in behind may have been handed them while it waited. None
+        # also takes the previous file's away. Run here only as the tab is
+        # shown, so a note about them is seen when it is said.
+        self._set_local_modes(path, read.local_modes, read.local_modes_note)
         self.geometry_panel.set_source_file(path)  # an export is offered beside it
-        if read.local_modes_note:
-            self.statusBar().showMessage(f"Local modes not read: {read.local_modes_note}", 8000)
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
         self._adps = read.adps
@@ -4119,6 +4195,8 @@ class _ReadFile:
     capabilities: dict              # probe key → what _probe found
     # A LOCMODES run's internal coordinates and their local modes, for the
     # Measure section; and, when the run has them and they would not read, why.
+    # Both None as read: _read_local_modes reads them once the tab is up, and
+    # a tab still waiting behind is handed them here (_deliver_local_modes).
     local_modes: Optional[object] = None
     local_modes_note: Optional[str] = None
 
@@ -4131,7 +4209,7 @@ def _read_file(path: str) -> _ReadFile:
     most runs carry no ADPs, not every output has the rows the Info panel shows,
     and a probe that fails here is simply left for the window to ask again.
     """
-    from crystalline.crystalio import LocalModesError, load, load_adp, read_local_modes
+    from crystalline.crystalio import load, load_adp
 
     loaded = load(path)
     # Geometry-only files (.gui/.f34/.cif) carry no results to plot.
@@ -4146,21 +4224,30 @@ def _read_file(path: str) -> _ReadFile:
             capabilities[key] = _probe(key, output_path)
         except Exception:  # noqa: BLE001 - asked again, and reported, by the window
             pass
-    # Read here, with the rest, rather than when a measurement asks: a tenth of
-    # a second on a large run, and pandas to import the first time. Only for
-    # an output the probe found a LOCMODES section in, so that every other
-    # output is scanned for one once.
-    local_modes, local_modes_note = None, None
-    if capabilities.get("locmodes"):
-        try:
-            local_modes = read_local_modes(output_path)
-        except LocalModesError as exc:
-            local_modes_note = str(exc)
-        except Exception as exc:  # noqa: BLE001 - never let this break loading a file
-            local_modes_note = f"the LOCMODES section could not be read ({exc})"
-    # The run's own rows are not read here: see _read_details.
-    return _ReadFile(loaded, output_path, adps, None, capabilities,
-                     local_modes, local_modes_note)
+    # Neither the run's own rows nor its local modes are read here: see
+    # _read_details and _read_local_modes.
+    return _ReadFile(loaded, output_path, adps, None, capabilities)
+
+
+def _read_local_modes(path: str) -> tuple:
+    """A LOCMODES run's local modes, for the Measure section, as (modes, note).
+
+    Read after its structure, not with it (see :meth:`MainWindow._read_next`):
+    0.3 s on DAFADNP, CRYSTALClear parsing the tables and summing the CNM
+    once per internal coordinate, which held the tab's first frame back.
+    Asked only of an output the probe found a LOCMODES section in, so every
+    other output is scanned for one once. ``note`` says why there are none
+    when the section is there and will not read; a failure never breaks the
+    tab, whose structure is already open.
+    """
+    from crystalline.crystalio import LocalModesError, read_local_modes
+
+    try:
+        return read_local_modes(path), None
+    except LocalModesError as exc:
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001 - never let this break an open file
+        return None, f"the LOCMODES section could not be read ({exc})"
 
 
 def _read_details(path: str) -> dict:

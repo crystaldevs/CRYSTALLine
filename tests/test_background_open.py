@@ -122,6 +122,7 @@ def _window():
         _update_reading_status = MainWindow._update_reading_status
         _details_queue = MainWindow._details_queue
         _read_details_next = MainWindow._read_details_next
+        _local_modes_queue = MainWindow._local_modes_queue
 
         def __init__(self):
             self._reading_status = _Label()
@@ -316,6 +317,9 @@ class _Read:
     def __init__(self, path):
         self.output_path = None if path.endswith(".gui") else path
         self.output_props = None
+        # A LOCMODES run, as the probe finds one: here, by its name.
+        self.capabilities = {"locmodes": "locmodes" in path}
+        self.local_modes = self.local_modes_note = None
 
 
 class _DetailsTab:
@@ -337,6 +341,9 @@ def _details_window():
         _details_queue = MainWindow._details_queue
         _read_details_next = MainWindow._read_details_next
         _deliver_details = MainWindow._deliver_details
+        _local_modes_queue = MainWindow._local_modes_queue
+        _read_local_modes_next = MainWindow._read_local_modes_next
+        _deliver_local_modes = MainWindow._deliver_local_modes
         _routed = MainWindow._routed
         _acting_on = MainWindow._acting_on
 
@@ -362,6 +369,9 @@ def _details_window():
         def _set_output_props(self, props):
             self.delivered.append((self._tab, props))
 
+        def _set_local_modes(self, path, modes, note):
+            self.delivered.append((self._tab, modes))
+
         def _refresh_chrome(self):
             pass
 
@@ -381,8 +391,13 @@ def reads(monkeypatch):
         order.append(("details", path))
         return {"Total energy (eV)": path}
 
+    def read_local_modes(path):
+        order.append(("local modes", path))
+        return f"the local modes of {path}", None
+
     monkeypatch.setattr(mw, "_read_file", read_file)
     monkeypatch.setattr(mw, "_read_details", read_details)
+    monkeypatch.setattr(mw, "_read_local_modes", read_local_modes)
     return order
 
 
@@ -410,6 +425,52 @@ def test_details_reach_the_tab_of_their_output(qapp, qtbot, reads):
 
     assert window.delivered == [(front, {"Total energy (eV)": "/runs/a.out"})]
     assert behind.pending[1].output_props == {"Total energy (eV)": "/runs/b.out"}
+
+
+def test_a_locmodes_run_s_local_modes_are_read_after_the_files_and_before_the_details(
+        qapp, qtbot, reads):
+    """They held a large run's first frame back by a third of a second when
+    read with its structure. After every file, so that a file waits for
+    none of them; before any details, since a measurement wants them and the
+    Info panel's rows are only read."""
+    window = _details_window()
+    for path, front in (("/runs/locmodes.out", True), ("/runs/b.out", False),
+                        ("/runs/locmodes_1GPa.out", False)):
+        window._load_path(path, front=front)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+    assert reads == [("file", "/runs/locmodes.out"), ("file", "/runs/b.out"),
+                     ("file", "/runs/locmodes_1GPa.out"),
+                     ("local modes", "/runs/locmodes.out"),
+                     ("local modes", "/runs/locmodes_1GPa.out"),
+                     ("details", "/runs/locmodes.out"), ("details", "/runs/b.out"),
+                     ("details", "/runs/locmodes_1GPa.out")]
+    front, _plain, behind = window._tabs
+    assert window.delivered[0] == (front, "the local modes of /runs/locmodes.out")
+    assert behind.pending[1].local_modes == "the local modes of /runs/locmodes_1GPa.out"
+
+
+def test_local_modes_wait_for_the_file_to_settle_and_the_details_wait_no_longer(
+        qapp, qtbot, monkeypatch, reads):
+    """One pause after the file is shown, as for the details alone: the local
+    modes change only the Measure table, and a second pause before the
+    details would only hold the Info panel's rows back."""
+    import time
+
+    times = {}
+    for name in ("_read_file", "_read_local_modes", "_read_details"):
+        def timed(path, read=getattr(mw, name), name=name):
+            times[name] = time.monotonic()
+            return read(path)
+
+        monkeypatch.setattr(mw, name, timed)
+    window = _details_window()
+    window._load_path("/runs/locmodes.out", front=True)
+    qtbot.waitUntil(lambda: not window._reading, timeout=5000)
+
+    pause = mw._DETAILS_PAUSE_MS / 1000
+    assert times["_read_local_modes"] - times["_read_file"] >= pause * 0.9
+    assert times["_read_details"] - times["_read_local_modes"] < pause * 0.5
 
 
 def test_details_for_a_tab_closed_meanwhile_go_nowhere(qapp, qtbot, monkeypatch, reads):

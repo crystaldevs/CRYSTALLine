@@ -204,9 +204,11 @@ def test_a_row_naming_an_atom_the_cell_has_not_got_is_left_out():
 
 
 # ── the window ────────────────────────────────────────────────────────────
-def test_a_file_is_read_with_its_local_modes(monkeypatch):
-    """Read with the rest of the file, off the main thread; and when there is a
-    LOCMODES section that will not read, why not, for the window to say."""
+def test_a_file_is_read_without_its_local_modes_which_come_after(monkeypatch):
+    """Not with the structure: on DAFADNP they held the tab's first frame back
+    by a third of a second. The probe says there are some, for the window to
+    read them once the tab is up; and when there is a LOCMODES section that
+    will not read, the later read says why, for the window to say."""
     pytest.importorskip("PySide6")
     import crystalline.crystalio as crystalio
     from crystalline.ui import main_window as mw
@@ -214,32 +216,95 @@ def test_a_file_is_read_with_its_local_modes(monkeypatch):
     monkeypatch.setattr(crystalio, "read_local_modes", lambda path: ("the modes of", path))
     plain = sample_path("thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out")
     read = mw._read_file(plain)
-    assert read.local_modes is None and read.local_modes_note is None   # none to read
-    assert read.capabilities["locmodes"] is False
+    assert read.local_modes is None and read.local_modes_note is None
+    assert read.capabilities["locmodes"] is False                       # none to read
 
     monkeypatch.setattr(crystalio, "has_local_modes", lambda path: True)
     read = mw._read_file(plain)
-    assert read.local_modes == ("the modes of", plain) and read.local_modes_note is None
+    assert read.local_modes is None and read.local_modes_note is None   # not yet
     assert read.capabilities["locmodes"] is True
+    assert mw._read_local_modes(plain) == (("the modes of", plain), None)
 
     def unreadable(_path):
         raise crystalio.LocalModesError("the LOCMODES section lists no internal coordinates")
 
     monkeypatch.setattr(crystalio, "read_local_modes", unreadable)
-    read = mw._read_file(plain)
-    assert read.local_modes is None and "no internal coordinates" in read.local_modes_note
+    modes, note = mw._read_local_modes(plain)
+    assert modes is None and "no internal coordinates" in note
+
+    monkeypatch.setattr(crystalio, "read_local_modes", lambda path: 1 / 0)
+    modes, note = mw._read_local_modes(plain)
+    assert modes is None and note.startswith("the LOCMODES section could not be read")
 
 
-def test_the_window_hands_the_measure_section_its_local_modes_and_atoms():
-    """Checked on the source, like the rest of the window's plumbing: a real
-    window needs a live 3D view."""
+@pytest.fixture
+def window(qapp, monkeypatch, tmp_path):
+    from _window import close_window, make_window
+
+    made = make_window(monkeypatch, tmp_path)
+    yield made
+    close_window(made)
+
+
+def _locmodes_run(monkeypatch, modes):
+    """coesite standing in for a LOCMODES run, found as the probe finds one,
+    with ``modes`` as what reading its local modes gives."""
+    import crystalline.crystalio as crystalio
+
+    run = sample_path("coesite/coesite_ela.out")
+    monkeypatch.setattr(crystalio, "has_local_modes", lambda path: path == run)
+    monkeypatch.setattr(crystalio, "read_local_modes", lambda path: modes)
+    return run
+
+
+def test_the_tab_is_shown_first_and_the_local_modes_reach_it_after(window, monkeypatch):
+    """The Measure section gets them when they come, through the tab's own
+    routing; one read in behind keeps them for when it is built; one that
+    has taken another file since is left alone."""
+    from _window import open_file, show_tab
+
+    from crystalline.ui import main_window as mw
+
+    modes = _modes(_bond(1, 0, 1))
+    run = _locmodes_run(monkeypatch, modes)
+    tab = window._show_read_file(run, mw._read_file(run))
+    assert window.geometry_panel._local_modes is None               # up without them
+    window._deliver_local_modes(tab, run, *mw._read_local_modes(run))
+    assert window.geometry_panel._local_modes is modes
+
+    plain = sample_path("thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out")
+    front = open_file(window, plain)
+    behind = window._show_read_file(run, mw._read_file(run), front=False)
+    window._deliver_local_modes(behind, run, modes, None)
+    assert window.geometry_panel._local_modes is None                # the tab in front has none
+    show_tab(window, behind)
+    assert window.geometry_panel._local_modes is modes
+
+    show_tab(window, front)
+    window._deliver_local_modes(front, run, modes, None)             # not its file
+    assert window.geometry_panel._local_modes is None
+
+
+def test_local_modes_that_will_not_read_are_said_naming_their_file(window, monkeypatch):
+    """Said when they would have come: by then another tab may be on screen."""
+    from crystalline.ui import main_window as mw
+
+    run = _locmodes_run(monkeypatch, None)
+    tab = window._show_read_file(run, mw._read_file(run))
+    window._deliver_local_modes(tab, run, None, "the LOCMODES section lists no internal coordinates")
+    assert window.statusBar().currentMessage() == (
+        "Local modes not read from coesite_ela.out: "
+        "the LOCMODES section lists no internal coordinates")
+    assert window.geometry_panel._local_modes is None
+
+
+def test_the_window_hands_the_measure_section_its_atoms():
+    """Checked on the source: the atoms on screen come with every view."""
     pytest.importorskip("PySide6")
     import inspect
 
     from crystalline.ui.main_window import MainWindow
 
-    assert "self.geometry_panel.set_local_modes(read.local_modes)" in inspect.getsource(
-        MainWindow._fill_tab)
     assert "self.geometry_panel.set_source_index(source_index)" in inspect.getsource(
         MainWindow._apply_cell_view)
 

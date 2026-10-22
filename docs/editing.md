@@ -112,7 +112,10 @@ over a row gives the coordinate as CRYSTAL numbers it, with the cell of each
 atom outside the reference one and CRYSTAL's own value, which for some
 coordinates is not the plain angle of the atoms. A measurement that is none of
 the internal coordinates leaves the four columns empty, and sorts below the
-rest. The section is read by CRYSTALClear, which is installed with CRYSTALLine.
+rest. The section is read by CRYSTALClear, which is installed with CRYSTALLine,
+just after the structure is shown, so on a large run the four columns appear
+a moment after the file opens; anything measured before then gets its local
+mode when they do.
 How much of each normal mode every internal
 coordinate is, the same section's characterisation of normal modes, is drawn
 from the Plot menu (see [local modes](plots.md#local-modes)).

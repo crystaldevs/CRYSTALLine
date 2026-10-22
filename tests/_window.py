@@ -158,13 +158,17 @@ def open_file(window, path, read=None, front=True):
     ``read`` is what the reader made of it — :func:`main_window._read_file`
     unless given — and the rest is the window's own: a tab taken or added, and
     filled, at the front or behind the tab on screen; then, as the reading
-    queue does once nothing else is waiting, the output's details — the Info
-    panel's rows about the run — if they are still to read. Returns the tab.
+    queue does once nothing else is waiting, a LOCMODES run's local modes and
+    the output's details — the Info panel's rows about the run — if they are
+    still to read. Returns the tab.
     """
     from crystalline.ui import main_window
 
     read = read if read is not None else main_window._read_file(path)
     tab = window._show_read_file(path, read, front=front)
+    if (read.capabilities.get("locmodes") and read.local_modes is None
+            and read.local_modes_note is None):
+        window._deliver_local_modes(tab, path, *main_window._read_local_modes(read.output_path))
     if read.output_props is None and read.output_path:
         window._deliver_details(tab, path, main_window._read_details(read.output_path))
     QApplication.processEvents()
