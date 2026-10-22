@@ -363,7 +363,7 @@ def _restyle(figure, memory: Dict[str, str], legend: bool,
     """
     from matplotlib.container import BarContainer
 
-    from crystalline.crystalio.figure_style import INK, STYLE
+    from crystalline.crystalio.figure_style import INK, STYLE, keep_as_drawn
 
     ax = figure.axes[0]
     bars = [c for c in ax.containers if isinstance(c, BarContainer)]
@@ -390,7 +390,8 @@ def _restyle(figure, memory: Dict[str, str], legend: bool,
                         if p.get_x() <= x <= p.get_x() + p.get_width()
                         and p.get_y() <= y <= p.get_y() + p.get_height()), None)
             if hit is not None:
-                text.set_color(_text_colour(hit.get_facecolor()))
+                # Chosen against its bar, so the window's colours leave it be.
+                keep_as_drawn(text).set_color(_text_colour(hit.get_facecolor()))
                 break
     for spine in ax.spines.values():
         spine.set_linewidth(STYLE["axes.linewidth"])

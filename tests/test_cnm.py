@@ -227,6 +227,20 @@ def test_a_number_on_a_bar_is_in_the_colour_that_reads_on_it():
     assert {t.get_text(): t.get_color() for t in figure.axes[0].texts}["60"] == INK
 
 
+def test_in_the_dark_window_a_number_keeps_the_colour_that_reads_on_its_bar():
+    """The window draws a figure in its own colours, swapping the paper's ink
+    and white (figure_style.to_screen): taken for those, the numbers turned
+    light on the light bars and dark on the dark ones."""
+    from crystalline.crystalio import figure_style
+    from crystalline.ui.theme import DARK
+
+    figure = cnm.plot_cnm(_run(), modes=(4,), colours={})
+    drawn = {t.get_text(): t.get_color() for t in figure.axes[0].texts}
+    assert {"white", figure_style.INK} <= set(drawn.values())          # both kinds there
+    figure_style.to_screen(figure, background=DARK.scene, ink=DARK.text, rule=DARK.border)
+    assert {t.get_text(): t.get_color() for t in figure.axes[0].texts} == drawn
+
+
 def test_moving_the_threshold_keeps_every_group_in_its_colour():
     from matplotlib.colors import to_hex
 
