@@ -4,12 +4,12 @@ Design notes
 ------------
 * **All atoms are drawn as a single glyphed mesh** (one VTK actor), not one
   actor per atom. VTK's per-frame cost scales with the number of *actors*, so a
-  cell with thousands of atoms (a ZIF-8 supercell, say) went from interactive to
-  tens of seconds — and eventually a crash — under the old one-actor-per-atom
-  scheme. Glyphing collapses that to a single actor whose build/redraw is ~1000×
-  faster at those sizes. Per-atom **picking** maps a pick's world position back
-  to the nearest atom centre; **position updates** (drag / phonon animation)
-  re-glyph the point cloud, which is cheap now that it is one mesh.
+  cell with thousands of atoms (a ZIF-8 supercell, say) would take tens of
+  seconds per frame — and eventually crash — with one actor per atom. Glyphing
+  collapses that to a single actor whose build/redraw is ~1000× faster at those
+  sizes. Per-atom **picking** maps a pick's world position back to the nearest
+  atom centre; **position updates** (drag / phonon animation) re-glyph the
+  point cloud, which is cheap because it is one mesh.
 * Element colours and radii come from ``ase.data`` (Jmol colours, covalent
   radii) so they match community conventions.
 * No Qt here: the plotter is supplied by the caller (a ``pyvistaqt`` interactor
@@ -154,7 +154,7 @@ _GIZMO_VIEWPORT = (0.0, 0.0, 0.24, 0.24)
 # The lettering, taken from vtkAxesActor — the stock marker this one replaces.
 # A caption scales its text to its own normalised box, and that actor gives its
 # letters a wide, short one, which is what makes them larger and better placed
-# than the small square box the gizmo used to use. The font size, the italic,
+# than a small square box would. The font size, the italic,
 # the justification and the padding are its too.
 _LATTICE_LABEL_BOX = (0.25, 0.1)
 _LATTICE_LABEL_FONT_SIZE = 12
@@ -326,6 +326,11 @@ class StructureRenderer:
         # Connectivity derived from that reference, computed once and reused for
         # every frame of an animation instead of being rebuilt per frame.
         self._frozen_bond_pairs: Optional[tuple] = None
+        # An edit being previewed — a drag, a rotation dialled in — links the
+        # atoms by where they are, even with a mode's equilibrium fixing the
+        # bonds: the edit changes the chemistry an animation keeps. Off again
+        # once the edit is committed (a rebuild) or taken back.
+        self._editing_preview = False
         self._frozen_hbond_pairs: Optional[np.ndarray] = None
         # The geometry the bonds on screen were last worked out from — the
         # reference, or the atoms themselves — so a move to where the atoms
@@ -476,6 +481,15 @@ class StructureRenderer:
         self._bond_structure = bond_structure
         self._rebuild()
 
+    def set_bond_structure(self, bond_structure: Optional[Structure]) -> None:
+        """Replace the clean cell coordination is worked out on, without drawing.
+
+        For an edit: the atoms on screen have moved, and the polyhedra must be
+        found among them where they are now, not where the cell was derived —
+        a corner left behind at an atom's old place. The caller redraws.
+        """
+        self._bond_structure = bond_structure
+
     def refresh(self) -> None:
         """Redraw after the current structure was edited (add/remove atoms)."""
         self._rebuild()
@@ -501,9 +515,27 @@ class StructureRenderer:
             self._redraw_mode_arrows()  # arrows ride along with the atoms
         self.plotter.render()
 
+    def preview_positions(self, positions: np.ndarray) -> None:
+        """Show the atoms at ``positions`` without touching the structure.
+
+        For a motion being dialled in — a rotation in its dialog — before it is
+        committed: the atoms, bonds and polyhedra move as in an animation
+        (:meth:`update_positions`), and the selection halos ride along with
+        their atoms, as they do in a drag. Called with the structure's own
+        positions, it puts everything back.
+        """
+        positions = np.asarray(positions, dtype=float)
+        base = np.asarray(self._structure.positions, dtype=float)
+        self._editing_preview = not np.allclose(positions, base)
+        for index, actor in self._highlight_actors.items():
+            actor.SetPosition(*(positions[index] - base[index]))
+        self.update_positions(positions)
+        self.plotter.render()  # the halos, if the atoms were already there
+
     def _bonding_geometry(self, positions: Optional[np.ndarray] = None) -> np.ndarray:
-        """The geometry bonds are worked out from: the reference, if one is set."""
-        if self._bond_reference is not None:
+        """The geometry bonds are worked out from: the reference, if one is set
+        and no edit is being previewed."""
+        if self._bond_reference is not None and not self._editing_preview:
             return self._bond_reference
         return self._positions if positions is None else positions
 
@@ -619,6 +651,7 @@ class StructureRenderer:
         world_pos = np.asarray(world_pos, dtype=float)
         base = np.asarray(self._structure.positions, dtype=float)
         delta = world_pos - base[index]
+        self._editing_preview = True   # the atom re-bonds as it goes (see __init__)
         # The move group is fixed for the duration of a drag; cache it per atom.
         if index != self._drag_primary:
             self._drag_primary = index
@@ -737,6 +770,7 @@ class StructureRenderer:
         self._numbers = np.empty(0, dtype=int)
         self._radii = np.empty(0, dtype=float)
         self._drag_primary = None
+        self._editing_preview = False
         self._drag_group = []
         self._bond_actor = None
         self._hbond_actor = None
@@ -799,9 +833,10 @@ class StructureRenderer:
         self._draw_annotations()  # measurements survive a rebuild (plotter.clear())
         self._draw_symmetry_elements()  # and so do the shown symmetry elements
         self._draw_lattice_planes()  # and the lattice planes asked for
-        # A drawn field used to vanish on any rebuild — a display setting, an
-        # edit — while its actors were still counted as shown. It goes last so
-        # a slice's cutaway reaches every actor the rebuild has just made.
+        # A drawn field is redrawn on every rebuild — a display setting, an
+        # edit — or it would vanish while its actors are still counted as
+        # shown. It goes last so a slice's cutaway reaches every actor the
+        # rebuild has just made.
         self._draw_density()
         self._restore_camera(saved_camera)
         self.plotter.render()
@@ -940,7 +975,8 @@ class StructureRenderer:
         While a bond reference is set the pairs are computed from it once and
         cached, so an animation pays the neighbour search a single time.
         """
-        if self._bond_reference is None or len(self._bond_reference) != len(self._positions):
+        if (self._bond_reference is None or len(self._bond_reference) != len(self._positions)
+                or self._editing_preview):
             return None
         if self._frozen_bond_pairs is None:
             self._frozen_bond_pairs = _bonded_pairs(self._bond_reference, numbers, tolerance)
@@ -961,7 +997,8 @@ class StructureRenderer:
             hydrogen_bonds_from_positions,
         )
 
-        if self._bond_reference is not None and len(self._bond_reference) == len(self._positions):
+        if (self._bond_reference is not None and len(self._bond_reference) == len(self._positions)
+                and not self._editing_preview):
             if self._frozen_hbond_pairs is None:
                 self._frozen_hbond_pairs = hydrogen_bond_pairs(self._bond_reference, self._numbers)
             segments = hydrogen_bond_segments(self._positions, self._frozen_hbond_pairs)
@@ -2040,9 +2077,9 @@ class StructureRenderer:
         boundary-completion), which a near-neighbour algorithm can handle — the
         packed cell's duplicate images would confuse it. The distance fallback
         runs whenever CrystalNN is unavailable, too slow, *or* found no polyhedra
-        — previously an empty CrystalNN result drew nothing (the coordination
-        showed up only on big supercells, where the atom count tipped it into the
-        fallback).
+        — otherwise an empty CrystalNN result would draw nothing, and the
+        coordination would show up only on big supercells, where the atom count
+        tips it into the fallback.
 
         The analysed polyhedra are then replicated onto every *shown* centre, so
         the image atoms that boundary-completion adds are coordinated too rather
@@ -2318,10 +2355,10 @@ class StructureRenderer:
         so the gizmo shows orientation alone and never rescales with the lattice
         parameters (editing a, b or c must not grow or shrink it).
 
-        It used to be an ordinary set of arrows anchored below the structure's
-        lower corner. That put it at a *world* position, so every camera change
-        moved it: the three axis-alignment views each showed it somewhere
-        different, which is exactly what a gizmo must not do.
+        Not an ordinary set of arrows anchored below the structure's lower
+        corner: that puts it at a *world* position, so every camera change moves
+        it, and the three axis-alignment views each show it somewhere different,
+        which is exactly what a gizmo must not do.
 
         A VTK orientation-marker widget instead lives in screen space — always
         the same corner, always the same size — and only turns to follow the
@@ -2955,28 +2992,28 @@ def _hex_to_rgb(color: str) -> np.ndarray:
     return np.array([int(text[k : k + 2], 16) for k in (0, 2, 4)], dtype=np.uint8)
 
 
-# Two atoms both below this Pauling electronegativity are treated as cations and
-# not bonded to each other — stops covalent radii from spuriously bonding big
-# cations (Ca–Ca, Ca–Si) in ionic crystals, while leaving C–C, C–O, Si–O, etc.
-_CATION_ELECTRONEGATIVITY = 2.0
+# Which atoms are cations, and so not bonded to each other: the rule lives with
+# the other bonding rules, in core.bonds, so the cell code completing molecules at
+# the boundary and the bonds drawn here cannot disagree about what is bonded.
+from crystalline.core.bonds import (  # noqa: E402
+    CATION_ELECTRONEGATIVITY as _CATION_ELECTRONEGATIVITY,
+    POLYHEDRON_MAX_VERTICES,
+    cation_contact as _cation_contact,
+)
 
 
 @lru_cache(maxsize=None)
 def _electronegativity(z: int) -> float:
-    try:
-        from pymatgen.core import Element
+    from crystalline.core.bonds import electronegativity
 
-        value = Element.from_Z(int(z)).X
-        return float(value) if value and not np.isnan(value) else 0.0
-    except Exception:  # noqa: BLE001 - pymatgen missing / element without EN
-        return 0.0
+    return electronegativity(z)
 
 
 def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     """Return the (i, j) index arrays of bonded atom pairs (KD-tree neighbour search).
 
     Two atoms bond if their distance < ``tolerance * (r_i + r_j)`` AND they are
-    not both cations. The KD-tree finds only pairs within the maximum possible
+    not both cations (two metalloids, Si–Si, still bond: see ``core.bonds``). The KD-tree finds only pairs within the maximum possible
     bond length, avoiding the O(N^2) all-pairs loop that dominated load/redraw
     time for large structures.
     """
@@ -2999,8 +3036,8 @@ def _bonded_pairs(positions: np.ndarray, numbers: np.ndarray, tolerance: float):
     i, j = i[keep], j[keep]
     if len(i) == 0:
         return i, j
-    en = np.array([_electronegativity(int(z)) for z in numbers])
-    both_cations = (en[i] < _CATION_ELECTRONEGATIVITY) & (en[j] < _CATION_ELECTRONEGATIVITY)
+    numbers = np.asarray(numbers, dtype=int)
+    both_cations = _cation_contact(numbers[i], numbers[j])
     return i[~both_cations], j[~both_cations]
 
 
@@ -3380,7 +3417,7 @@ def _fallback_polyhedra(atoms, tolerance: float, min_vertices: int) -> list:
 
     polyhedra = []
     for center, pts in ligands.items():
-        if len(pts) < min_vertices:
+        if not min_vertices <= len(pts) <= POLYHEDRON_MAX_VERTICES:
             continue
         polyhedra.append(
             (int(numbers[center]), np.asarray(positions[center], dtype=float),

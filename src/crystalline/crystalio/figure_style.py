@@ -221,4 +221,119 @@ def finish(figure) -> None:
             _recolour(handle)
 
 
-__all__ = ["CYCLE", "INK", "STYLE", "apply", "finish", "keep_title"]
+# ── on screen and on paper ────────────────────────────────────────────────
+# A figure is drawn for paper: white, in ink. In the window it can be drawn in
+# the window's own colours instead — the 3D view's background, the theme's text
+# colour for its ink — and put back on paper to be saved. Only the paper's own
+# colours change: a curve's colour, a colour map, the Fermi level stay as drawn.
+
+#: Where a figure on screen keeps what it had on paper, to give it back.
+_ON_PAPER = "_crystalline_on_paper"
+
+_PAPER = "#ffffff"
+_INKS = (INK, "#000000")
+_RULES = ("#dde3e8", "#cfd6dc", "#e2e7eb")   # grid lines; a 3D box's edges; its grid
+
+
+def _hex(colour):
+    """``colour`` as ``#rrggbb``, or ``None`` for one that shows nothing."""
+    from matplotlib.colors import to_hex, to_rgba
+
+    try:
+        rgba = to_rgba(colour)
+    except (TypeError, ValueError):
+        return None
+    return None if rgba[3] == 0 else to_hex(rgba, keep_alpha=False).lower()
+
+
+def _screen_colour(colour, swap):
+    """What ``colour`` becomes on screen (its alpha kept), or ``None`` if it stays."""
+    from matplotlib.colors import to_rgba
+
+    new = swap.get(_hex(colour))
+    return None if new is None else to_rgba(new, alpha=to_rgba(colour)[3])
+
+
+def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
+    """Draw ``figure`` in the window's colours; :func:`to_paper` undoes it.
+
+    Called again with other colours — the theme changed — it starts from paper,
+    so nothing is swapped twice.
+    """
+    import numpy as np
+    from matplotlib.collections import Collection
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import Patch
+    from matplotlib.text import Text
+
+    to_paper(figure)
+    swap = {_PAPER: background, **{c: ink for c in _INKS}, **{c: rule for c in _RULES}}
+    if _hex(background) == _PAPER:
+        # The window is paper already — the light theme's 3D view is white —
+        # and the house ink is what reads on it, whatever the theme's text is.
+        return
+    undo = []
+
+    def change(get, set_):
+        old = get()
+        new = _screen_colour(old, swap)
+        if new is not None:
+            undo.append((set_, old))
+            set_(new)
+
+    def change_each(get, set_):
+        old = np.asarray(get())
+        if old.ndim != 2 or not len(old):
+            return
+        new = [(_screen_colour(c, swap) or tuple(c)) for c in old]
+        if any(tuple(a) != tuple(b) for a, b in zip(new, old)):
+            undo.append((set_, old.copy()))
+            set_(new)
+
+    for artist in figure.findobj():
+        if isinstance(artist, Text):
+            change(artist.get_color, artist.set_color)
+        elif isinstance(artist, Line2D):
+            change(artist.get_color, artist.set_color)
+            change(artist.get_markerfacecolor, artist.set_markerfacecolor)
+            change(artist.get_markeredgecolor, artist.set_markeredgecolor)
+        elif isinstance(artist, Patch):
+            change(artist.get_facecolor, artist.set_facecolor)
+            change(artist.get_edgecolor, artist.set_edgecolor)
+        elif isinstance(artist, Collection) and artist.get_array() is None:
+            # One mapped through a colour map is data, and stays as it is.
+            change_each(artist.get_facecolor, artist.set_facecolor)
+            change_each(artist.get_edgecolor, artist.set_edgecolor)
+
+    for ax in figure.axes:
+        # Ticks are made afresh as an axis is zoomed, from the axes' own
+        # settings: those are what must change, not only the ticks there now.
+        for name, axis in getattr(ax, "_axis_map", {}).items():
+            ticks = axis.get_major_ticks()
+            old = ticks[0].tick1line.get_color() if ticks else None
+            new = _screen_colour(old, swap) if old is not None else None
+            if new is not None:
+                undo.append((lambda c, a=ax, n=name: a.tick_params(axis=n, which="both",
+                                                                  colors=c), old))
+                ax.tick_params(axis=name, which="both", colors=new)
+            info = getattr(axis, "_axinfo", None)        # a 3D box draws from this
+            if info is not None:
+                for key in ("grid", "axisline", "tick"):
+                    entry = info.get(key, {})
+                    old = entry.get("color")
+                    new = _screen_colour(old, swap) if old is not None else None
+                    if new is not None:
+                        undo.append((lambda c, e=entry: e.__setitem__("color", c), old))
+                        entry["color"] = new
+    setattr(figure, _ON_PAPER, undo)
+
+
+def to_paper(figure) -> None:
+    """Back in the colours it is saved in, if :func:`to_screen` changed them."""
+    for set_, old in reversed(getattr(figure, _ON_PAPER, None) or ()):
+        set_(old)
+    setattr(figure, _ON_PAPER, None)
+
+
+__all__ = ["CYCLE", "INK", "STYLE", "apply", "finish", "keep_title", "to_paper",
+           "to_screen"]

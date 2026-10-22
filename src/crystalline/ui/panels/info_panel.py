@@ -227,8 +227,8 @@ def _reduction_rows(structure: Structure) -> List[Tuple[str, str]]:
 def _form(parent: Optional[QWidget]) -> QFormLayout:
     """A form whose rows survive a narrow dock.
 
-    Values used to be clipped at the right edge when the dock was narrower than
-    label + value (``8 × 8 × 8 (125 in the IBZ)`` showing as ``125 in the``).
+    A dock narrower than label + value would clip the value at the right edge
+    (``8 × 8 × 8 (125 in the IBZ)`` showing as ``125 in the``).
     ``WrapLongRows`` drops the value onto its own line instead, and the fields
     are allowed to shrink rather than forcing the dock wider.
     """

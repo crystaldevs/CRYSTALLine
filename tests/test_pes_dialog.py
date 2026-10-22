@@ -173,7 +173,7 @@ def test_the_widget_answers_with_plot_pes_keywords(qapp):
     options = PESOptions().options()
 
     assert set(options) == {"span", "harmonic", "levels", "nstates", "scale_wf",
-                            "legend", "quantity", "representation"}
+                            "legend", "linewidth", "quantity", "representation"}
 
 
 def test_the_wavefunction_height_is_offered_only_while_states_are_solved(qapp):
@@ -290,20 +290,43 @@ def test_switching_the_cut_does_not_resize_the_window(qapp):
     dialog.hide()
 
 
-def test_the_legend_tick_sits_with_the_overlays_it_names(qapp):
-    """On by default, as on a spectrum. It names the parabola and the states
-    drawn over the potential, so it goes away with them for a pair cut — a
-    contour map is read against its colourbar, and its plotter takes no
-    legend at all."""
+def test_the_legend_tick_sits_under_appearance_as_on_every_plot(qapp):
+    """On by default, as on a spectrum, and with the line width under
+    Appearance, as on a spectrum. Both are about lines drawn over the
+    potential, so the section goes for a pair cut — a contour map is read
+    against its colourbar, and its plotter takes no legend at all."""
     from crystalline.ui.panels.pes_options import PESOptions
 
     knobs = PESOptions(1000.0)
     knobs.show()
+    knobs._look.header.click()          # unfolded: it opens folded
     assert knobs.options()["legend"] is True
 
     knobs.set_options({"dimension": "2D"})
-    assert not knobs.legend.isVisible()
+    assert not knobs.legend.isVisible() and not knobs._look.header.isVisible()
 
-    knobs.set_options({"dimension": "1D", "legend": False})
+    knobs.set_options({"dimension": "1D", "legend": False, "linewidth": 3.0})
     assert knobs.legend.isVisible() and knobs.options()["legend"] is False
+    assert knobs.options()["linewidth"] == 3.0
     knobs.hide()
+
+
+def test_the_line_width_sets_the_potential_and_keeps_the_states_finer():
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from matplotlib.collections import LineCollection
+    from matplotlib.figure import Figure
+
+    from crystalline.crystalio.pes import scale_line_widths
+
+    figure = Figure()
+    ax = figure.add_subplot()
+    potential, = ax.plot([0, 1], [0, 1], linewidth=2.0)
+    state, = ax.plot([0, 1], [1, 0], linewidth=1.0)
+    level = ax.add_collection(LineCollection([[(0, 0.5), (1, 0.5)]], linewidths=0.3))
+
+    scale_line_widths(ax, 3.0)
+    assert potential.get_linewidth() == 3.0
+    assert state.get_linewidth() == 1.5
+    assert level.get_linewidths()[0] == pytest.approx(0.45)

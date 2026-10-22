@@ -8,6 +8,8 @@ is: build a panel, dock it, connect its signals here.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
 from contextlib import contextmanager
 from typing import Optional, Sequence
 
@@ -42,10 +44,16 @@ from crystalline.core.cells import (
     CellView,
     as_view,
     complete_boundary,
+    conventional_matrix,
     expand_modes_to_conventional,
+    own_atoms,
+    primitive_of,
+    repeating_tile,
+    reshaped_cell,
     tile_supercell,
     to_analysis_cell,
     to_conventional,
+    without_boundary_copies,
 )
 from crystalline.core.adp import ADPSet
 from crystalline.core.phonons import PhononModes
@@ -86,6 +94,19 @@ class _Snapshot:
     # and a window left believing in edits that are not there treats the next
     # cell-setting switch as destructive and records a step for it.
     edited: bool = False
+    # The cell drawn round the atoms, as rows of rounded numbers so snapshots
+    # compare. A lattice-parameter change reshapes it without touching the
+    # source, so undoing one has to put it back along with the atoms.
+    unit_cell: tuple = ()
+
+
+def _cell_key(cell) -> tuple:
+    """A cell as rows of rounded numbers: comparable, and stored in a snapshot."""
+    if cell is None:
+        return ()
+    return tuple(tuple(float(v) for v in row) for row in np.round(np.asarray(cell, dtype=float), 8))
+
+
 from crystalline.viz.phonon_animator import PhononAnimator
 from crystalline.ui import menus
 from crystalline.ui.file_tabs import (
@@ -113,7 +134,7 @@ _APPLICATION_TITLE = "CRYSTALLine — CRYSTAL structure & phonon viewer"
 # Geometry of the floating Plots window on the first plot: a fraction of the main
 # window's width (never below the minimum), 4:3, inset from its lower-right corner.
 # The figure's width, not the window's: the controls are added beside it, and at
-# 55% with them the window came out nearly as wide as the main one.
+# 55% with them the window would be nearly as wide as the main one.
 _PLOT_FLOAT_WIDTH_FRACTION = 0.45
 # How long an output's details wait after a file is shown: long enough for its
 # 3D view to settle at its size — the Phonons panel coming in narrows it — and
@@ -202,7 +223,7 @@ class MainWindow(QMainWindow):
         self._file_tabs.setTabsClosable(True)
         self._file_tabs.setMovable(True)
         self._file_tabs.setElideMode(Qt.ElideMiddle)  # keep both ends of a long run name
-        self._file_tabs.setUsesScrollButtons(True)
+        self._file_tabs.setUsesScrollButtons(True)  # scrolls when crowded; arrows hidden by the theme
         self.setCentralWidget(self._file_tabs)
 
         # The panels of every tab live in the docks, in a stack per dock that
@@ -814,12 +835,20 @@ class MainWindow(QMainWindow):
         # the moment anything moves it — a drag, an arrow-key nudge, an undo.
         self.geometry_panel.sync_position()
         self.geometry_panel.refresh_planes()  # atoms may have moved onto or off a plane
-        self.viewport.renderer.refresh()
         # Editing the geometry: stop any animation and re-anchor it to the edited
         # geometry (drop the modes if the atom count changed). Passing the new
         # positions avoids resetting atoms back to the stale equilibrium, which
-        # would undo the edit that was just made.
+        # would undo the edit that was just made. Before the redraw, not after:
+        # the selected mode's equilibrium is also the geometry the bonds are
+        # worked out from, so redrawn first, the edited atoms would be linked
+        # as they were bonded before the edit — a chain turned apart still
+        # drawn joined across the gap.
         self.phonon_panel.invalidate_on_edit(s.positions)
+        # Coordination is worked out on a clean cell, the copies on the faces
+        # taken off: the edited one, or the polyhedra stay where the atoms were.
+        self._bond_structure, _parents = without_boundary_copies(s)
+        self.viewport.renderer.set_bond_structure(self._bond_structure)
+        self.viewport.renderer.refresh()
         self._reconcile_modes_with_edit(s)
 
     # ── undo ────────────────────────────────────────────────────────────
@@ -832,6 +861,7 @@ class MainWindow(QMainWindow):
             supercell=tuple(self._supercell),
             boundary=bool(self._show_boundary),
             edited=bool(self._shown_edited),
+            unit_cell=_cell_key(self._unit_cell),
         )
 
     def _capture_undo(self, _structure: Optional[Structure] = None) -> None:
@@ -897,6 +927,11 @@ class MainWindow(QMainWindow):
                 self._set_supercell(snapshot.supercell)
                 self._show_boundary = snapshot.boundary
                 self._apply_cell_view()
+                if snapshot.unit_cell:
+                    # The cell the atoms were drawn in, if a lattice change had
+                    # reshaped it: set before the atoms, which redraw round it.
+                    self._unit_cell = np.array(snapshot.unit_cell, dtype=float)
+                    self.viewport.renderer.set_reference_cell(self._unit_cell)
                 self.structure.restore(snapshot.shown)
                 self._update_cell_view_controls()
                 self._update_boundary_control()
@@ -924,6 +959,7 @@ class MainWindow(QMainWindow):
             and tuple(snapshot.supercell) == tuple(self._supercell)
             and bool(snapshot.boundary) == bool(self._show_boundary)
             and snapshot.source == self._source.to_ase()
+            and snapshot.unit_cell == _cell_key(self._unit_cell)
         )
 
     def _update_boundary_control(self) -> None:
@@ -992,6 +1028,7 @@ class MainWindow(QMainWindow):
         geometry.delete_requested.connect(on(self._delete_selected))
         geometry.duplicate_requested.connect(on(self._duplicate_selected))
         geometry.translate_requested.connect(on(self._translate_selected))
+        geometry.rotate_requested.connect(on(self._rotate_selected))
         geometry.set_element_requested.connect(on(self._set_element_of_selection))
         geometry.set_position_requested.connect(on(self._set_position_of_selection))
         geometry.add_atom_requested.connect(on(self._add_atom))
@@ -1072,11 +1109,17 @@ class MainWindow(QMainWindow):
 
         Re-derived from the pristine source through the ordinary pipeline, so a
         shown orbital is rebuilt over whichever cell this makes — the two must
-        never drift apart. Editing the shown structure and then switching is a
-        re-derive, so those edits are dropped, as they are for every other Cell
-        action.
+        never drift apart. Edits on screen are carried into the other cell
+        when it can hold them (:meth:`_switch_keeping_edits`), and otherwise
+        the user is asked before they are dropped.
         """
         if view is self._cell_view:
+            return
+        if self._shown_edited:
+            # The edits are carried into the other cell where it can hold them
+            # (see _switch_keeping_edits); that is a change, and an undo step.
+            self._switch_keeping_edits(view)
+            self._update_cell_view_controls()
             return
         self._cell_view = view
         # Which of the two settings a crystal is drawn in is a way of looking at
@@ -1084,21 +1127,13 @@ class MainWindow(QMainWindow):
         # Ctrl+Z goes on belonging to the edits. The baseline still moves with
         # it, or the next edit would push the *old* setting onto the stack and
         # undoing that edit would flip the cell as well.
-        #
-        # Unless there were edits to lose. This re-derives from the source, so
-        # anything done to the shown structure since it was built is dropped
-        # here — that is a change, it is the only copy of that work, and it is
-        # recorded so undo can step back to it, setting and all.
-        if self._shown_edited:
+        self._suppress_undo = True
+        try:
             self._apply_cell_view()
-        else:
-            self._suppress_undo = True
-            try:
-                self._apply_cell_view()
-            finally:
-                self._suppress_undo = False
-            self._history.rebase(self._snapshot())
-            self._update_undo_action()
+        finally:
+            self._suppress_undo = False
+        self._history.rebase(self._snapshot())
+        self._update_undo_action()
         self._update_cell_view_controls()
 
     def _update_cell_view_controls(self) -> None:
@@ -1353,10 +1388,9 @@ class MainWindow(QMainWindow):
                 "Load a CRYSTAL .out from a frequency calculation to plot its spectra.",
             )
             return
-        # Read once, for the list and for the plot alike. The list used to come
-        # from a read of its own and the plot from another after OK: the whole
-        # output parsed twice, with the window frozen for both — 560 ms on a
-        # 3.5 MB anharmonic run, and it grows with the output.
+        # Read once, for the list and for the plot alike, rather than once for
+        # each: a parse of the whole output takes 560 ms on a 3.5 MB anharmonic
+        # run, and it grows with the output.
         self._read_for_dialog("spectra", (path,), lambda: load_spectra(path),
                               "Reading the spectra…",
                               lambda data: self._show_spectra(path, data), "Spectra failed")
@@ -1543,10 +1577,10 @@ class MainWindow(QMainWindow):
     def _open_electronic(self) -> None:
         """A band structure, a DOS or both, with every option in view.
 
-        They used to be two one-click entries drawn at CRYSTALClear's defaults —
-        an x axis of k-distances, energies only relative, no way to put the two
-        side by side. They read files of their own, from a .d3 run, so the
-        dialog looks beside the loaded output for them first.
+        A dialog rather than one-click entries drawn at CRYSTALClear's defaults,
+        which give an x axis of k-distances, energies only relative, and no way
+        to put the two side by side. They read files of their own, from a .d3
+        run, so the dialog looks beside the loaded output for them first.
         """
         from pathlib import Path
 
@@ -2061,8 +2095,8 @@ class MainWindow(QMainWindow):
         # The previously shown orbital goes first, and the view is settled
         # second: every step below re-derives the displayed cell, and each one
         # would otherwise kick off a full rebuild of an orbital that is about to
-        # be replaced anyway — which is no longer cheap now that a tiled orbital
-        # is sampled as finely per cell as a single one.
+        # be replaced anyway — which is not cheap, since a tiled orbital is
+        # sampled as finely per cell as a single one.
         self._clear_orbital()
         self._show_orbital_structure(data)
         tiling = self._tile_to_period(choice["kpoint"], data.cell) if choice["tile"] else None
@@ -2160,9 +2194,9 @@ class MainWindow(QMainWindow):
         At once, if this version of the files has been read for ``kind``
         before (see :mod:`~crystalline.crystalio.remembered`): opening the same
         dialog on the same output again is how a second plot is made, and it
-        used to read the whole output again. Otherwise on a worker, behind the
-        spinner — no longer with the window frozen and a wait cursor, which on
-        a large output looked like a hang.
+        need not read the whole output again. Otherwise on a worker, behind the
+        spinner, not with the window frozen under a wait cursor, which on a
+        large output looks like a hang.
         """
         from crystalline.crystalio import remembered
 
@@ -2490,6 +2524,9 @@ class MainWindow(QMainWindow):
         if self.phonon_panel.select_mode(index):
             self._phonon_dock.show()
             self._phonon_dock.raise_()
+            # Moving, not only selected: the answer to "what is this band?" is
+            # the structure doing it, and a selected mode at rest is a list row.
+            self.phonon_panel.play()
 
     def _reveal_plot_dock(self) -> None:
         """Show the Plots dock — floating, the first time a plot is built.
@@ -2508,9 +2545,9 @@ class MainWindow(QMainWindow):
             tab.plots_open = True  # this file's plots are open: bring them back with it
         if not self._plot_dock_floated:
             self._plot_dock_floated = True
-            # Placed and sized before it is shown: shown first, it came up
+            # Placed and sized before it is shown: shown first, it comes up
             # where a docked panel would be, at the size of one, and then
-            # jumped to where it belongs.
+            # jumps to where it belongs.
             self._plot_dock.setFloating(True)
             screen = self.screen()
             where = _floating_plot_geometry(
@@ -2749,6 +2786,48 @@ class MainWindow(QMainWindow):
         if vector is not None:
             self.structure.translate_atoms(indices, vector)
 
+    def _rotate_selected(self) -> None:
+        """Turn the selection about an axis, shown in the view as it is dialled in.
+
+        Each selected atom's periodic images turn with it (see
+        :func:`~crystalline.core.rigid_motion.rotated_selection`), as they move
+        with it in a drag. The lattice vectors offered as axes are those of the
+        cell drawn — the crystallographic cell's a, b, c when that is shown.
+        Applied once, on OK, as one edit: one undo step.
+        """
+        indices = self.structure_panel.selected_indices()
+        if not self._editing or not indices:
+            return
+        from crystalline.core.rigid_motion import rotated_selection
+        from crystalline.ui.panels.rotate_dialog import RotateDialog
+
+        renderer = self.viewport.renderer
+        base = np.asarray(self.structure.positions, dtype=float)
+
+        def moves(axis, angle, centre) -> dict:
+            return rotated_selection(base, indices, renderer.periodic_image_indices,
+                                     axis, angle, centre)
+
+        def preview(axis, angle, centre) -> None:
+            shown = base.copy()
+            if axis is not None:
+                for index, position in moves(axis, angle, centre).items():
+                    shown[index] = position
+            renderer.preview_positions(shown)
+
+        dialog = RotateDialog(indices, base, self.structure.symbols, cell=self._unit_cell,
+                              preview=preview, parent=self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        rotation = dialog.rotation()
+        if rotation is None or abs(rotation[1]) < 1e-9:
+            preview(None, 0.0, None)
+            return
+        self.structure.move_atoms(moves(*rotation))   # -> undo + redraw
+        # The redraw rebuilds the scene and drops the selection halos; the
+        # selection itself is unchanged, so they go back on.
+        self.viewport.set_selection(indices)
+
     def _nudge_selection(self, vector) -> None:
         """Move the selection by ``vector`` (an arrow-key step in the view plane)."""
         indices = self.structure_panel.selected_indices()
@@ -2839,18 +2918,65 @@ class MainWindow(QMainWindow):
         return [box.value() for box in boxes]
 
     def _on_boundary_toggled(self, enabled: bool) -> None:
+        """Draw molecules cut by the cell faces whole, or not — edits and all.
+
+        Completing molecules is a way of drawing the crystal, not a change to
+        it, so whatever has been done to the atoms is kept: the copies drawn on
+        the faces are taken off the edited atoms and put back, or not, around
+        them (:meth:`_rebuild_keeping_edits`). Without edits there is nothing to
+        keep, and the view is simply derived again.
+        """
         self._show_boundary = bool(enabled)
-        self._apply_cell_view()
+        if self._shown_edited:
+            self._rebuild_keeping_edits()
+        else:
+            self._apply_cell_view()
+
+    def _rebuild_keeping_edits(self) -> None:
+        """Redraw the boundary copies around the atoms as they are now.
+
+        The copies come off the shown structure (each one is labelled with the
+        atom it copies, and the lattice shift it was drawn at), leaving the
+        edited cell; that is completed again, or not, as the setting now says.
+        When the edits moved atoms but neither added nor removed any, the cell
+        is the derivation's own, atom for atom, and its phonon modes and ADPs
+        go along with it; otherwise the modes cannot be laid on it, as after
+        any such edit.
+        """
+        own, parents = without_boundary_copies(self.structure)
+        drawn, self._show_boundary = self._show_boundary, False
+        try:
+            analysis, analysis_modes, _unit_cell, _clean, analysis_index = self._compose_view(
+                self._cell_view, self._supercell, self._modes
+            )
+        finally:
+            self._show_boundary = drawn
+        intact = (parents is not None and len(parents) == len(analysis)
+                  and np.array_equal(parents, np.arange(len(analysis))))
+        modes = analysis_modes if intact else None
+        index = None
+        if analysis_index is not None and parents is not None and np.all(parents >= 0):
+            index = np.asarray(analysis_index)[parents]
+        if self._show_boundary:
+            shown, shown_modes, shown_index = complete_boundary(own, modes, per_atom=index)
+        else:
+            shown, shown_modes, shown_index = own_atoms(own), modes, index
+        # The cell as drawn: a lattice change may have reshaped it from the file's.
+        self._show_derived(shown, shown_modes, self._unit_cell, own, shown_index, edited=True)
 
     def _open_lattice_dialog(self) -> None:
-        """Edit the crystal's lattice parameters (a, b, c, α, β, γ).
+        """Edit the lattice parameters (a, b, c, α, β, γ) of the cell on screen.
 
-        Applied to the pristine source and re-derived through the same pipeline
-        as the other Cell actions, so the current view (conventional cell,
-        supercell, boundary completion) is rebuilt on the new lattice. Atoms keep
-        their fractional coordinates (the cell is reshaped around them).
+        The cell drawn — crystallographic or primitive, whichever is shown — is
+        the one offered, and the one reshaped: the atoms on screen, edits and
+        supercell included, keep their fractional coordinates as it changes
+        shape around them, and the crystal keeps facing the way it did. The
+        file's own cell is left as it is, so Restore geometry still goes back
+        to it, and the change is one undo step.
         """
-        if not self._source.is_periodic or np.allclose(self._source.cell, 0.0):
+        cell_now = None if self._unit_cell is None else np.asarray(self._unit_cell, dtype=float)
+        if (not self.structure.is_periodic or cell_now is None or cell_now.shape != (3, 3)
+                or abs(np.linalg.det(cell_now)) < 1e-8):
             QMessageBox.information(
                 self,
                 "Lattice parameters",
@@ -2858,7 +2984,9 @@ class MainWindow(QMainWindow):
             )
             return
 
-        a, b, c, alpha, beta, gamma = (float(v) for v in self._source.cellpar)
+        from ase.geometry import cell_to_cellpar
+
+        a, b, c, alpha, beta, gamma = (float(v) for v in cell_to_cellpar(cell_now))
         dialog = QDialog(self)
         dialog.setWindowTitle("Lattice parameters")
         form = QFormLayout(dialog)
@@ -2887,9 +3015,45 @@ class MainWindow(QMainWindow):
 
         if dialog.exec() != QDialog.Accepted:
             return
-        self._source.set_lattice_parameters(*(box.value() for box in boxes))
-        self._apply_cell_view()
+        self._reshape_lattice(reshaped_cell(cell_now, [box.value() for box in boxes]))
         self.info_panel.show_structure(self._analysis_cell(), self._output_props)
+
+    def _reshape_lattice(self, new_unit_cell) -> None:
+        """Give the cell on screen the shape ``new_unit_cell``, atoms keeping their fractions.
+
+        The boundary copies come off (:func:`~crystalline.core.cells.without_boundary_copies`),
+        the box they leave — the unit cell, or the supercell of it — is reshaped
+        with the atoms in it, and the copies go back on. The phonon modes and
+        ADPs stay with the atoms when the edits on screen neither added nor
+        removed any.
+        """
+        new_unit_cell = np.asarray(new_unit_cell, dtype=float)
+        cell_now = np.asarray(self._unit_cell, dtype=float)
+        if np.allclose(new_unit_cell, cell_now):
+            return
+        reps = tuple(self._supercell)
+        own, parents = without_boundary_copies(self.structure)
+        here, here_modes, _unit_cell, here_index = self._clean_view(self._cell_view, reps)
+        intact = (parents is not None and len(parents) == len(here)
+                  and np.array_equal(parents, np.arange(len(here))))
+        index = None
+        if here_index is not None and parents is not None and np.all(parents >= 0):
+            index = np.asarray(here_index)[parents]
+        modes = here_modes if intact else None
+
+        # The box is the unit cell repeated along the periodic directions:
+        # rows box = D · cell, so the change of cell, new = cell · T, reshapes
+        # the box by the same T.
+        change = np.linalg.solve(cell_now, new_unit_cell)
+        atoms = own.to_ase()
+        atoms.set_cell(np.asarray(atoms.cell, dtype=float) @ change, scale_atoms=True)
+        reshaped = Structure.from_ase(atoms)
+
+        if self._show_boundary:
+            shown, shown_modes, shown_index = complete_boundary(reshaped, modes, per_atom=index)
+        else:
+            shown, shown_modes, shown_index = own_atoms(reshaped), modes, index
+        self._show_derived(shown, shown_modes, new_unit_cell, reshaped, shown_index, edited=True)
 
     def _open_supercell_dialog(self) -> None:
         """Prompt for the na × nb × nc repetitions and rebuild the view.
@@ -2955,9 +3119,162 @@ class MainWindow(QMainWindow):
                 return
         # A supercell chosen here is the user's own: the phonon panel's Untile
         # must not offer to throw it away for a cell they never asked for.
-        self._tile_restore = None
-        self._set_supercell(tuple(box.value() for box in boxes))
-        self._apply_cell_view()
+        restore, self._tile_restore = self._tile_restore, None
+        if not self._retile(reps):
+            self._tile_restore = restore
+
+    def _retile(self, reps) -> bool:
+        """Show the crystal as a ``reps`` supercell, edits and all. Whether it did.
+
+        Without edits on screen the view is simply derived again. With them, the
+        supercell is tiled from the edited atoms rather than from the file:
+
+        * when every tile holds the same edit — any edit made before tiling, and
+          one made to a molecule with all its periodic images — from the one
+          edited cell (:func:`~crystalline.core.cells.repeating_tile`);
+        * when the tiles differ (an atom moved or removed in one of them), from
+          the edited supercell itself, if the new one is a whole number of it
+          along each axis;
+        * otherwise the edit cannot be carried, and the user is asked whether
+          to build the supercell from the file instead — which Undo takes back.
+
+        Phonon modes and ADPs come along when the edits moved atoms without
+        adding or removing any, as for :meth:`_rebuild_keeping_edits`.
+        """
+        reps = tuple(int(r) for r in reps)
+        if not self._shown_edited:
+            self._set_supercell(reps)
+            self._apply_cell_view()
+            return True
+        current = tuple(self._supercell)
+        own, parents = without_boundary_copies(self.structure)
+        clean = lambda supercell: self._clean_view(self._cell_view, supercell)
+        here, here_modes, _unit_cell, here_index = clean(current)
+        unit_cell = self._unit_cell     # as drawn, which a lattice change may have reshaped
+        intact = (parents is not None and len(parents) == len(here)
+                  and np.array_equal(parents, np.arange(len(here))))
+        index = None
+        if here_index is not None and parents is not None and np.all(parents >= 0):
+            index = np.asarray(here_index)[parents]
+
+        unit = repeating_tile(own, current, unit_cell) if intact or current == (1, 1, 1) else None
+        if unit is not None:
+            base, base_modes, _unit_cell, base_index = clean((1, 1, 1))
+            same = intact and len(unit) == len(base)
+            modes = base_modes if same else None
+            unit_index = base_index if same else (index if current == (1, 1, 1) else None)
+            tiled, tiled_modes, tiled_index = tile_supercell(unit, reps, modes, per_atom=unit_index)
+        elif all(r % c == 0 for r, c in zip(reps, current)):
+            ratio = tuple(r // c for r, c in zip(reps, current))
+            tiled, tiled_modes, tiled_index = tile_supercell(
+                own, ratio, here_modes if intact else None, per_atom=index)
+        else:
+            shape = lambda r: "×".join(str(v) for v in r)
+            if not self._start_again_from_file(
+                    "Supercell",
+                    f"The edits in this {shape(current)} supercell are not the same in every "
+                    f"cell, so they cannot be carried into a {shape(reps)} one.",
+                    f"Build the {shape(reps)} supercell from the file instead?"):
+                return False
+            self._set_supercell(reps)
+            self._apply_cell_view()
+            return True
+
+        if self._show_boundary:
+            shown, shown_modes, shown_index = complete_boundary(tiled, tiled_modes,
+                                                                per_atom=tiled_index)
+        else:
+            shown, shown_modes, shown_index = own_atoms(tiled), tiled_modes, tiled_index
+        self._set_supercell(reps)
+        self._show_derived(shown, shown_modes, unit_cell, tiled, shown_index, edited=True)
+        return True
+
+    def _clean_view(self, view: CellView, supercell):
+        """The derivation without boundary copies: ``(cell, modes, unit_cell, index)``."""
+        drawn, self._show_boundary = self._show_boundary, False
+        try:
+            cell, modes, unit_cell, _clean, index = self._compose_view(view, supercell, self._modes)
+        finally:
+            self._show_boundary = drawn
+        return cell, modes, unit_cell, index
+
+    def _start_again_from_file(self, title: str, why: str, offer: str) -> bool:
+        """Ask whether to drop the edits on screen for the structure as read."""
+        answer = QMessageBox.question(
+            self, title, f"{why}\n\n{offer} Undo brings the edits back.",
+            QMessageBox.Yes | QMessageBox.Cancel, QMessageBox.Cancel,
+        )
+        return answer == QMessageBox.Yes
+
+    def _switch_keeping_edits(self, view: CellView) -> bool:
+        """Show the edited crystal in the other cell, crystallographic or primitive.
+
+        The edited unit cell is taken off the drawing (its boundary copies, and
+        a supercell's other tiles when they repeat it), carried into the other
+        cell, and tiled and completed as before:
+
+        * into the crystallographic cell, by the expansion the cell as read was
+          given — an edit to one atom reaches every centring copy of it;
+        * into the primitive cell, when every centring copy of each atom was
+          edited alike (:func:`~crystalline.core.cells.primitive_of`). An edit
+          that tells the copies apart — one of two centred chains turned —
+          leaves no smaller primitive cell to show it in.
+
+        When it cannot be carried, the user is asked whether to show the other
+        cell from the file instead. Returns whether the cell was switched.
+        """
+        reps = tuple(self._supercell)
+        own, parents = without_boundary_copies(self.structure)
+        here, _modes, _unit_cell, _index = self._clean_view(self._cell_view, reps)
+        unit_cell = self._unit_cell     # as drawn, which a lattice change may have reshaped
+        intact = (parents is not None and len(parents) == len(here)
+                  and np.array_equal(parents, np.arange(len(here))))
+        unit = repeating_tile(own, reps, unit_cell) if intact or reps == (1, 1, 1) else None
+        base, _base_modes, _base_cell, base_index = self._clean_view(self._cell_view, (1, 1, 1))
+        unit_intact = unit is not None and intact and len(unit) == len(base)
+        target, target_modes, _target_cell, target_index = self._clean_view(view, (1, 1, 1))
+
+        carried = None
+        matrix = conventional_matrix(self._source)
+        if unit is not None and view is CellView.CRYSTALLOGRAPHIC:
+            from crystalline.core.phonons import PhononModes
+
+            primitive_modes = self._clean_view(CellView.PRIMITIVE, (1, 1, 1))[1]
+            expanded, modes, _payload = expand_modes_to_conventional(
+                unit, primitive_modes if unit_intact and primitive_modes is not None
+                else PhononModes([]), per_atom=None, matrix=matrix)
+            carried = (expanded, modes if unit_intact and target_modes is not None else None,
+                       target_index if unit_intact else None)
+        elif unit is not None and unit_intact:
+            # The primitive cell of the cell as drawn: conventional = M · primitive.
+            primitive_cell = np.linalg.solve(matrix.astype(float), np.asarray(unit.cell, dtype=float))
+            reduced = primitive_of(unit, base, base_index, primitive_cell)
+            if reduced is not None:
+                carried = (reduced, target_modes, target_index)
+
+        if carried is None:
+            why = ("These edits tell apart atoms that the centring of the crystallographic "
+                   "cell makes copies of each other, so the edited crystal has no smaller "
+                   "primitive cell to show them in."
+                   if view is CellView.PRIMITIVE and unit is not None and unit_intact else
+                   "These edits cannot be carried into the other cell.")
+            if not self._start_again_from_file("Cell", why, "Show it from the file instead?"):
+                return False
+            self._cell_view = view
+            self._apply_cell_view()
+            return True
+
+        cell, modes, index = carried
+        tiled, tiled_modes, tiled_index = tile_supercell(cell, reps, modes, per_atom=index)
+        if self._show_boundary:
+            shown, shown_modes, shown_index = complete_boundary(tiled, tiled_modes,
+                                                                per_atom=tiled_index)
+        else:
+            shown, shown_modes, shown_index = own_atoms(tiled), tiled_modes, tiled_index
+        self._cell_view = view
+        self._show_derived(shown, shown_modes, np.asarray(cell.cell, dtype=float), tiled,
+                           shown_index, edited=True)
+        return True
 
     def _set_supercell(self, reps) -> None:
         """Record the supercell tiling and keep the menu action's label in step."""
@@ -3077,12 +3394,13 @@ class MainWindow(QMainWindow):
         different q — it is where the *panel* took over, not the last stop.
         """
         reps = tuple(int(r) for r in reps)
+        restore = self._tile_restore
         if reps == self._tile_restore:
             self._tile_restore = None  # this is the way back; the panel is done
         elif self._tile_restore is None:
             self._tile_restore = self._supercell
-        self._set_supercell(reps)
-        self._apply_cell_view()
+        if not self._retile(reps):
+            self._tile_restore = restore
 
     # ── drag and drop ───────────────────────────────────────────────────
     @guard()
@@ -3954,9 +4272,9 @@ class MainWindow(QMainWindow):
             ("png", "PNG frame sequence", True),
             ("jpg", "JPEG frame sequence", True),
         ]
-        # Sizes, as before — the frames are drawn by the view on screen, but they
-        # are fitted to whichever of these is chosen rather than coming out the
-        # shape the window happens to be. A view with docks either side of it is
+        # Sizes, as for a picture — the frames are drawn by the view on screen,
+        # but they are fitted to whichever of these is chosen rather than coming
+        # out the shape the window happens to be. A view with docks either side of it is
         # taller than it is wide, and a portrait animation is letterboxed in
         # black by every viewer there is.
         from crystalline.viz.export import _window_size
@@ -4049,7 +4367,18 @@ class MainWindow(QMainWindow):
                 CellView.PRIMITIVE, self._supercell, self._modes
             )
 
+        self._show_derived(shown, modes, unit_cell, analysis, source_index)
+
+    def _show_derived(self, shown, modes, unit_cell, analysis, source_index,
+                      edited: bool = False) -> None:
+        """Put a derived view on screen: structure, modes, ADPs, and an undo step.
+
+        ``edited`` says the view carries edits the source does not — a view
+        rebuilt around them (:meth:`_rebuild_keeping_edits`) — so that a later
+        re-derive still knows there is work to lose.
+        """
         self._replace_structure(shown, unit_cell, analysis)
+        self._shown_edited = bool(edited)
         self._adp_index = source_index
         # The same index tells the Measure section which of a LOCMODES run's
         # atoms a measurement was taken on.
@@ -4112,7 +4441,9 @@ class MainWindow(QMainWindow):
                 analysis, analysis_modes, per_atom=analysis_index
             )
         else:
-            shown, shown_modes, shown_index = analysis, analysis_modes, analysis_index
+            # Labelled as its own atoms, as a completed view labels its copies:
+            # see _rebuild_keeping_edits.
+            shown, shown_modes, shown_index = own_atoms(analysis), analysis_modes, analysis_index
         return shown, shown_modes, unit_cell, analysis, shown_index
 
     def _replace_structure(self, new: Structure, unit_cell=None, bond_structure=None) -> None:

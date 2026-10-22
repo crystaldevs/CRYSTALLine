@@ -616,8 +616,11 @@ def test_no_view_is_redrawn_on_a_timer():
     from crystalline.ui.panels.zone_picker import _ZoneView
     from crystalline.ui.viewport import Viewport
 
-    assert "QtInteractor(self, auto_update=False)" in inspect.getsource(Viewport.__init__)
-    assert "QtInteractor(self, auto_update=False)" in inspect.getsource(_ZoneView.__init__)
+    from crystalline.ui.viewport import make_interactor
+
+    assert "make_interactor(self, auto_update=False)" in inspect.getsource(Viewport.__init__)
+    assert "make_interactor(self, auto_update=False)" in inspect.getsource(_ZoneView.__init__)
+    assert "QtInteractor(parent, **options)" in inspect.getsource(make_interactor)
 
 
 def _drawing_stub(monkeypatch):

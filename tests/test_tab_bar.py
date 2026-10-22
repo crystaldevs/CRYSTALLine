@@ -170,3 +170,153 @@ def test_a_crowded_bar_lays_its_tabs_out_that_wide(qapp):
     assert bar.tabRect(0).width() >= bar.minimumTabSizeHint(0).width()
     assert bar.tabRect(0).width() < bar.tabSizeHint(0).width()   # elided, and the bar scrolls
     tabs.close()
+
+
+def _themed(tabs):
+    from crystalline.ui import theme
+
+    tabs.setStyleSheet(theme.stylesheet(theme.LIGHT))
+    QApplication.processEvents()
+    return tabs
+
+
+def test_a_crowded_bar_has_no_arrows(qapp):
+    """Qt's two scroll arrows take no room and draw nothing; the row scrolls
+    all the same, to whichever tab is chosen."""
+    from PySide6.QtWidgets import QToolButton
+
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    arrows = bar.findChildren(QToolButton)
+    assert arrows and all(arrow.width() == 0 for arrow in arrows)
+
+    tabs.setCurrentIndex(tabs.count() - 1)
+    QApplication.processEvents()
+    last = bar.tabRect(tabs.count() - 1)
+    assert last.left() >= 0 and last.right() <= bar.width() + 2   # brought into view
+    tabs.close()
+
+
+def test_the_end_where_tabs_are_cut_off_fades(qapp):
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    assert bar.hidden_ends() == (False, True)        # at the start: more to the right
+
+    tabs.setCurrentIndex(tabs.count() - 1)
+    QApplication.processEvents()
+    assert bar.hidden_ends() == (True, False)        # at the end: more to the left
+
+    tabs.setCurrentIndex(tabs.count() // 2)
+    _swipe(bar, 14, times=3)
+    left, right = bar.hidden_ends()
+    assert left and right                            # in the middle: both
+    tabs.close()
+
+
+def test_a_row_that_fits_does_not_fade(qapp):
+    tabs = QTabWidget()
+    tabs.setTabBar(SlidingTabBar(tabs))
+    tabs.setTabsClosable(True)
+    for name in _NAMES:
+        tabs.addTab(QWidget(), name)
+    tabs.resize(1200, 120)
+    tabs.show()
+    QApplication.processEvents()
+    assert tabs.tabBar().hidden_ends() == (False, False)
+    tabs.close()
+
+
+def _fade(bar, side):
+    return next(fade for fade in bar._fades if fade.side == side)
+
+
+def test_the_fades_lie_over_the_close_buttons(qapp):
+    """Under the buttons, a × at the edge would stand sharp over a faded tab."""
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    tabs.addTab(QWidget(), "added_last.out")         # a close button made after the fades
+    QApplication.processEvents()
+
+    widgets = [child for child in bar.children() if isinstance(child, QWidget)]
+    assert set(widgets[-2:]) == set(bar._fades)      # last children: drawn on top
+    right = _fade(bar, 1)
+    assert right.isVisible() and not _fade(bar, -1).isVisible()
+    assert right.geometry().right() == bar.rect().right()
+    tabs.close()
+
+
+def test_a_click_on_a_fade_scrolls_a_tab_that_way(qapp):
+    """What the arrows did: the row moves, the file shown does not change."""
+    from PySide6.QtTest import QTest
+
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    first = bar.tabRect(0).left()
+
+    QTest.mouseClick(_fade(bar, 1), Qt.LeftButton)
+    QApplication.processEvents()
+    assert bar.tabRect(0).left() < first             # scrolled right
+    assert bar.currentIndex() == 0                   # still showing the same file
+    assert _fade(bar, -1).isVisible()                # and now there is more to the left
+
+    scrolled = bar.tabRect(0).left()
+    QTest.mouseClick(_fade(bar, -1), Qt.LeftButton)
+    QApplication.processEvents()
+    assert bar.tabRect(0).left() > scrolled          # and back
+    assert bar.currentIndex() == 0
+    tabs.close()
+
+
+def test_a_click_on_a_fade_never_closes_the_tab_under_it(qapp):
+    from PySide6.QtTest import QTest
+
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    tabs.setCurrentIndex(tabs.count() - 1)
+    QApplication.processEvents()
+    count = tabs.count()
+    left = _fade(bar, -1)
+    for x in range(1, left.width(), 3):              # anywhere on it, × or not
+        QTest.mouseClick(left, Qt.LeftButton, Qt.NoModifier, QPoint(x, left.height() // 2))
+    assert tabs.count() == count
+    tabs.close()
+
+
+def test_an_up_and_down_swipe_scrolls_the_row_sideways(qapp):
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    first = bar.tabRect(0).left()
+    pad = QPointingDevice("trackpad", 8, QInputDevice.DeviceType.TouchPad,
+                          QPointingDevice.PointerType.Finger,
+                          QInputDevice.Capability.Position | QInputDevice.Capability.PixelScroll,
+                          2, 0)
+    pos = QPointF(bar.width() / 2, bar.height() / 2)
+    for _ in range(6):
+        event = QWheelEvent(pos, QPointF(bar.mapToGlobal(pos.toPoint())), QPoint(0, -14),
+                            QPoint(0, -28), Qt.NoButton, Qt.NoModifier, Qt.ScrollUpdate,
+                            False, Qt.MouseEventNotSynthesized, pad)
+        QApplication.sendEvent(bar, event)
+        QApplication.processEvents()
+    assert bar.tabRect(0).left() < first             # down scrolls on to the right
+    assert bar.currentIndex() == 0
+    tabs.close()
+
+
+def test_a_mouse_wheel_scrolls_the_row_and_does_not_switch_files(qapp):
+    """Qt's own bar changes the tab shown on a wheel notch."""
+    tabs = _themed(_crowded_tabs())
+    bar = tabs.tabBar()
+    first = bar.tabRect(0).left()
+    mouse = QPointingDevice("wheel mouse", 9, QInputDevice.DeviceType.Mouse,
+                            QPointingDevice.PointerType.Generic,
+                            QInputDevice.Capability.Position | QInputDevice.Capability.Scroll,
+                            1, 3)
+    pos = QPointF(bar.width() / 2, bar.height() / 2)
+    event = QWheelEvent(pos, QPointF(bar.mapToGlobal(pos.toPoint())), QPoint(0, 0),
+                        QPoint(0, -120), Qt.NoButton, Qt.NoModifier, Qt.NoScrollPhase,
+                        False, Qt.MouseEventNotSynthesized, mouse)
+    QApplication.sendEvent(bar, event)
+    QApplication.processEvents()
+    assert bar.tabRect(0).left() < first
+    assert bar.currentIndex() == 0
+    tabs.close()

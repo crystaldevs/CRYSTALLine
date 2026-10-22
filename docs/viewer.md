@@ -15,7 +15,10 @@ have a switch at the right of their title, which works with the section folded.
   colour and width.
 - **Unit cell**: colour and width of the cell edges.
 - **Coordination polyhedra**: opacity, minimum coordination and edge width, in
-  the style used by VESTA.
+  the style used by VESTA. A polyhedron is drawn round each centre with 4 to 8
+  ligands; with **Complete coordination at cell boundary** on, every corner of
+  one is a drawn atom. Twelve-coordinated sites, such as the A site of a
+  perovskite, are left as spheres.
 - **Thermal ellipsoids** and **Phonon arrows**: available when the output
   provides them.
 - **Measurements & symmetry**: the colours of the objects drawn by the

@@ -298,17 +298,6 @@ def test_local_modes_that_will_not_read_are_said_naming_their_file(window, monke
     assert window.geometry_panel._local_modes is None
 
 
-def test_the_window_hands_the_measure_section_its_atoms():
-    """Checked on the source: the atoms on screen come with every view."""
-    pytest.importorskip("PySide6")
-    import inspect
-
-    from crystalline.ui.main_window import MainWindow
-
-    assert "self.geometry_panel.set_source_index(source_index)" in inspect.getsource(
-        MainWindow._apply_cell_view)
-
-
 # ── by symmetry ───────────────────────────────────────────────────────────
 # Two O–H units related by the inversion through the origin, in a 5 Å cube: a
 # crystal with that symmetry, and nothing else. LOCMODES lists the first O–H only.

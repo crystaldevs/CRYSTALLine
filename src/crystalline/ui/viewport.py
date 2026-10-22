@@ -62,6 +62,31 @@ _WHEEL_IDLE_MS = 250
 _UNCONFIRMED_SIZE_MS = 1000
 
 
+def make_interactor(parent: QWidget, **options) -> QtInteractor:
+    """A pyvistaqt view inside ``parent``, every widget around it left shown or hidden as it was.
+
+    From pyvistaqt 0.13 the view is a ``QOpenGLWidget``. Put into a parent whose
+    native window draws as raster — and the overlays' own native windows make
+    the tab pages around a view native too (see ``ParentOverlay``) — Qt
+    re-creates that window for OpenGL, and gives the widget back the visibility
+    it read off ``isVisible()`` beforehand. In a window that is not on screen
+    yet that is False, and the widget is hidden for good: the window's first
+    tab, built in the constructor, would come up with its page hidden, and a
+    file opened into it would show nothing at all. Whatever the construction
+    hid or showed that way is put back here.
+    """
+    around = []
+    widget = parent
+    while widget is not None:
+        around.append((widget, widget.isHidden()))
+        widget = widget.parentWidget()
+    interactor = QtInteractor(parent, **options)
+    for widget, hidden in around:
+        if widget.isHidden() != hidden:
+            widget.setHidden(hidden)
+    return interactor
+
+
 class Viewport(QWidget):
     """3D view of the current structure: click to select, drag to move atoms."""
 
@@ -86,7 +111,7 @@ class Viewport(QWidget):
         # while hidden, which the hold below exists to prevent. Its timer holds
         # the interactor's own render, taken before it is replaced below, so it
         # went round that too. Everything that changes the scene asks for a draw.
-        self.interactor = QtInteractor(self, auto_update=False)
+        self.interactor = make_interactor(self, auto_update=False)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.interactor)
@@ -699,4 +724,4 @@ class Viewport(QWidget):
         self.selection_cleared.emit()
 
 
-__all__ = ["Viewport"]
+__all__ = ["Viewport", "make_interactor"]
