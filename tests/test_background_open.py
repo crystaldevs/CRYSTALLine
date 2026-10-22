@@ -425,6 +425,24 @@ def test_details_for_a_tab_closed_meanwhile_go_nowhere(qapp, qtbot, monkeypatch,
     assert window.delivered == []
 
 
+def test_the_status_bar_is_laid_out_as_the_reading_label_comes_and_goes(qapp, monkeypatch):
+    """At once, not a turn later: the label goes just after the new tab was
+    laid out, and left to Qt the atom count was seen in the label's place for
+    a frame or two on the first file of every session sampled (6 of 6)."""
+    from PySide6.QtCore import QEvent
+
+    sent = []
+    monkeypatch.setattr(mw.QApplication, "sendPostedEvents", lambda *a: sent.append(a))
+    window = _window()
+    window._reading, window._reading_path = True, "/runs/a.out"
+    window._update_reading_status()
+    assert window._reading_status.visible
+    window._reading = False
+    window._update_reading_status()
+    assert not window._reading_status.visible
+    assert sent == [(None, QEvent.LayoutRequest)] * 2
+
+
 def test_details_are_read_without_a_word(qapp, qtbot, monkeypatch, reads):
     """The structure is on screen: "Reading a.out…" would say it was not."""
     window = _details_window()
@@ -455,3 +473,4 @@ def test_details_wait_a_moment_after_the_file_is_shown(qapp, qtbot, reads):
 
     qtbot.waitUntil(lambda: ("details", "/runs/a.out") in reads, timeout=5000)
     assert time.perf_counter() - shown >= mw._DETAILS_PAUSE_MS / 1000 * 0.8
+
