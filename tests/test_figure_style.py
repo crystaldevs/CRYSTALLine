@@ -241,6 +241,28 @@ def test_back_on_paper_it_is_exactly_as_drawn_however_often_it_was_shown():
             to_hex(ax.xaxis.label.get_color())] == before
 
 
+def test_a_tick_the_axis_makes_on_screen_goes_back_on_paper_too():
+    """An axis makes more ticks as it is zoomed, or drawn at the window's size,
+    each a copy of its first. Saved from the dark window, two of DAFADNP's
+    spectrum's minor ticks came out pale on the white paper."""
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    from crystalline.crystalio import figure_style
+
+    figure, ax = _drawn()
+    FigureCanvasAgg(figure).draw()
+    made = len(ax.yaxis.minorTicks)
+    _dark(figure)
+    ax.set_ylim(0, 3)
+    figure.canvas.draw()
+    assert len(ax.yaxis.minorTicks) > made              # made on screen
+    figure_style.to_paper(figure)
+    figure.canvas.draw()
+
+    ticks = [tick for axis in (ax.xaxis, ax.yaxis) for tick in axis.majorTicks + axis.minorTicks]
+    assert {to_hex(tick.tick1line.get_color()) for tick in ticks} == {figure_style.INK}
+
+
 def test_a_window_already_white_and_inked_leaves_the_figure_alone():
     from crystalline.crystalio import figure_style
 
