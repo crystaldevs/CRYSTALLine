@@ -21,47 +21,34 @@ def test_registry_is_well_formed():
         assert k.label and k.caption and k.file_filter
         assert k.source in ("output", "data")
         assert callable(k.build)
-    # phonon dispersion comes from data files; spectra/elastic/EOS come
-    # straight from the CRYSTAL output.
-    assert {"phonon_band", "phonon_dos"} <= set(keys)
+    # elastic/EOS come straight from the CRYSTAL output.
     assert {"ela_young", "eos"} <= set(keys)
     # IR and Raman are deliberately absent: a run's spectra span polarisations
     # and anharmonic levels, so they live behind the vibrational-spectra dialog.
     assert not {"ir", "raman"} & set(keys)
-    # ...and electronic bands/DOS likewise, behind the electronic dialog: they
-    # have options, a combined view, and a choice of energy reference.
-    assert not {"electron_band", "electron_dos"} & set(keys)
+    # ...and bands/DOS likewise, electronic and phonon, behind their dialogs:
+    # they have options, a combined view, and files to find.
+    assert not {"electron_band", "electron_dos", "phonon_band", "phonon_dos"} & set(keys)
 
 
 def test_output_plots_read_the_out_file_and_data_plots_need_a_file():
     by_key = {k.key: k for k in plotting.available_plots()}
     assert by_key["ela_young"].source == "output"
     assert by_key["eos"].source == "output"
-    assert by_key["phonon_band"].source == "data"
     assert by_key["xrd"].source == "data"
     # elastic surfaces are grouped into a submenu
     assert by_key["ela_young"].group == "Elastic properties"
     assert by_key["eos"].group is None  # ungrouped entries sit at the top level
 
 
-def test_2d_elastic_entries_appear_only_when_crystalclear_can_draw_them(monkeypatch):
-    """``plot_cry_ela_2D`` is newer than some CRYSTALClear builds, so the 2D
-    sections are registered on capability, not unconditionally."""
-    monkeypatch.setattr(plotting, "_has_plot_function", lambda name: False)
-    assert not [k for k in plotting.available_plots() if k.key.startswith("ela2d")]
-
-    monkeypatch.setattr(plotting, "_has_plot_function", lambda name: True)
+def test_the_elastic_entries_come_as_surfaces_and_as_sections():
     kinds = {k.key: k for k in plotting.available_plots()}
-    keys = ["ela2d_young", "ela2d_comp", "ela2d_shear", "ela2d_poisson"]
-    assert set(keys) <= set(kinds)
-    for key in keys:
-        kind = kinds[key]
-        assert kind.source == "output"  # read straight from the loaded .out
-        assert kind.group == "Elastic properties (2D)"  # own submenu, beside the 3D one
-        assert kind.probe == ("get_elatensor", "elatensor")
-    # the 3D surfaces keep their own submenu
-    assert kinds["ela_young"].group == "Elastic properties"
-
+    for prefix, group in (("ela", "Elastic properties"), ("ela2d", "Elastic properties (2D)")):
+        for quantity in ("young", "comp", "shear", "poisson"):
+            kind = kinds[f"{prefix}_{quantity}"]
+            assert kind.source == "output"  # read straight from the loaded .out
+            assert kind.group == group      # a submenu each
+            assert kind.probe == ("get_elatensor", "elatensor")
 
 def test_to_figure_normalises_return_shapes():
     from matplotlib.figure import Figure
@@ -98,35 +85,21 @@ def test_output_availability_empty_without_a_file():
 
 def test_bad_file_raises(tmp_path):
     pytest.importorskip("CRYSTALClear")
-    kind = {k.key: k for k in plotting.available_plots()}["phonon_dos"]
+    kind = {k.key: k for k in plotting.available_plots()}["xrd"]
     missing = str(tmp_path / "nope.DAT")
     with pytest.raises(Exception):  # FileNotFoundError / parse error, surfaced to UI
         kind.build(missing)
 
 
 # Optional end-to-end: only runs where CRYSTALClear and the sample files exist.
-_F25 = [p for p in [sample.path("zno/ZnO_scelphono_333_shrink_22_tight_bands.f25")] if p]
 _ELA = [p for p in [sample.path("coesite/coesite_ela.out")] if p]
 _FREQ = [p for p in
          [sample.path("thiourea/thiourea_pbed3_Ahlrichs-pVTZ_freqcalc_80K.out")] if p]
 
 
-@pytest.mark.skipif(not _F25, reason="no sample .f25 file available")
-def test_phonon_band_end_to_end():
-    pytest.importorskip("CRYSTALClear")
-    from matplotlib.figure import Figure
-
-    kind = {k.key: k for k in plotting.available_plots()}["phonon_band"]
-    fig = kind.build(_F25[0])
-    assert isinstance(fig, Figure)
-    assert fig.axes  # something was drawn
-
-
 @pytest.mark.skipif(not _ELA, reason="no sample elastic .out available")
 def test_2d_elastic_sections_end_to_end():
     pytest.importorskip("CRYSTALClear")
-    if not plotting._has_plot_function("plot_cry_ela_2D"):
-        pytest.skip("installed CRYSTALClear has no plot_cry_ela_2D")
     from matplotlib.figure import Figure
 
     by_key = {k.key: k for k in plotting.available_plots()}

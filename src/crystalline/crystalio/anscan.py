@@ -228,15 +228,6 @@ def anscan_run(path: Optional[str], wavefunctions: Optional[str]):
     return run, out
 
 
-def plottable() -> bool:
-    """Whether the installed CRYSTALClear can draw an anharmonic scan."""
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return False
-    return hasattr(CCplt, "plot_cry_anscan")
-
-
 def plot_anscan(
     out,
     *,
@@ -254,16 +245,10 @@ def plot_anscan(
     curve is left out; :attr:`AnscanRun.scale_wf` is where a sensible one comes
     from. ``nstates`` counts up from the ground state.
     """
-    from crystalline.crystalio.plotting import PlotUnavailable, _plot_module, _to_figure
+    from crystalline.crystalio.plotting import _plot_module, _to_figure
 
     CCplt = _plot_module()  # imports CRYSTALClear with a non-interactive backend
-    function = getattr(CCplt, "plot_cry_anscan", None)
-    if function is None:
-        raise PlotUnavailable(
-            "The installed CRYSTALClear cannot draw anharmonic scans "
-            "(it has no plot.plot_cry_anscan)."
-        )
-    figure = _to_figure(function(
+    figure = _to_figure(CCplt.plot_cry_anscan(
         out,
         scale_wf=scale_wf,
         scale_prob=scale_prob,
@@ -287,5 +272,4 @@ __all__ = [
     "has_anscan",
     "load_anscan",
     "plot_anscan",
-    "plottable",
 ]

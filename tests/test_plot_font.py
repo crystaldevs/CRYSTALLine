@@ -17,8 +17,8 @@ matplotlib = pytest.importorskip("matplotlib")
 from crystalline.crystalio.plotting import (  # noqa: E402
     DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE,
-    FONT_FAMILIES,
     apply_font,
+    font_families,
     installed_font_names,
 )
 
@@ -34,7 +34,7 @@ def restore_rcparams():
 def test_every_named_family_applies_and_sets_the_maths_font_too():
     """A label like $\\Phi^\\mathbf{n}$ has to be typeset in the same face as the
     text around it, so no recipe may leave mathtext at the default."""
-    for _label, key in FONT_FAMILIES:
+    for _label, key in font_families():
         applied = apply_font(family=key, size=11)
 
         assert "font.family" in applied

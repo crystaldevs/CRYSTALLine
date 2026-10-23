@@ -8,8 +8,9 @@ Two kinds of source, distinguished by :attr:`PlotKind.source`:
   reuses the already-loaded output. Vibrational spectra are *not* among them:
   they run to dozens of curves per file and have their own dialog, in
   :mod:`crystalline.crystalio.spectra`.
-* ``"data"`` — need a PROPERTIES/dispersion data file (``BAND.DAT``, ``DOSS.DAT``,
-  ``fort.25``, ``*SPEC.DAT``): electron/phonon bands & DOS, XRD.
+* ``"data"`` — need a PROPERTIES data file: the XRD pattern. Band
+  structures and densities of states, electronic and phonon, have dialogs of
+  their own.
 
 Kept Qt-free (returns a bare ``matplotlib.figure.Figure``) so the mapping from
 "kind of plot" → "reader + plotter" lives in one testable place, mirroring how
@@ -118,56 +119,15 @@ def _plot_module():
 
 
 # ── builders: from a CRYSTAL .out via Crystal_output ────────────────────────
-def _elastic_builder(choose: str, ndeg: int = 100) -> Callable[[str], object]:
-    """Elastic surface (Young/compressibility/shear/Poisson) from the elastic tensor."""
+def _elastic_builder(menu_key: str) -> Callable[[str], object]:
+    """The elastic view a menu entry opens on, drawn as its tab draws it."""
 
     def build(path: str):
-        CCplt = _plot_module()
-        from CRYSTALClear.crystal_io import Crystal_output
+        from crystalline.crystalio import elastic
 
-        co = Crystal_output(path)
-        co.get_elatensor()
-        from crystalline.crystalio.elastic import elastic_surface
-
-        return elastic_surface(co.elatensor, choose, ndeg, module=CCplt)
+        return elastic.plot_elastic(elastic.read_tensor(path), **elastic.options_for(menu_key))
 
     return build
-
-
-
-
-def _elastic_2d_builder(choose: str, ndeg: int = 200) -> Callable[[str], object]:
-    """Elastic polar sections through the xy/xz/yz planes (the 2D analogue).
-
-    Same properties as the 3D surfaces, drawn as one polar figure overlaying the
-    three principal planes. Needs a CRYSTALClear providing ``plot_cry_ela_2D``
-    (see :func:`_has_plot_function`), which is why the menu entries are
-    registered conditionally.
-    """
-
-    def build(path: str):
-        CCplt = _plot_module()
-        from CRYSTALClear.crystal_io import Crystal_output
-
-        co = Crystal_output(path)
-        co.get_elatensor()
-        return _to_figure(CCplt.plot_cry_ela_2D(co, choose, ndeg))
-
-    return build
-
-
-def _has_plot_function(name: str) -> bool:
-    """Whether the installed CRYSTALClear exposes ``plot.<name>``.
-
-    Lets the menu offer plots that only newer CRYSTALClear builds provide,
-    without breaking against one that doesn't have them — a missing function
-    simply means the entry isn't listed.
-    """
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken: no extras
-        return False
-    return hasattr(CCplt, name)
 
 
 def _eos_builder() -> Callable[[str], object]:
@@ -200,21 +160,6 @@ def _prop_builder(read_method: str, plot_func: str) -> Callable[[str], object]:
     return build
 
 
-def _external_builder(read_method: str, plot_func: str) -> Callable[[str], object]:
-    """Read with ``External_unit`` and plot with ``plot_func``."""
-
-    def build(path: str):
-        CCplt = _plot_module()
-        from CRYSTALClear.crystal_io import External_unit
-
-        reader = External_unit()
-        data = getattr(reader, read_method)(path)
-        obj = data if data is not None else reader
-        return _to_figure(getattr(CCplt, plot_func)(obj))
-
-    return build
-
-
 # ── registry ────────────────────────────────────────────────────────────────
 _OUT = "CRYSTAL output (*.out *.outp);;All files (*)"
 _DAT = "Data files (*.DAT *.dat *.f25 fort.25);;All files (*)"
@@ -223,13 +168,9 @@ _DAT = "Data files (*.DAT *.dat *.f25 fort.25);;All files (*)"
 def available_plots() -> List[PlotKind]:
     """The plot kinds CRYSTALLine offers, in menu order.
 
-    Output-file plots (elastic/EOS) read the loaded ``.out`` directly; data-file
-    plots (bands/DOS/XRD) prompt for the matching PROPERTIES file. IR and Raman
-    are handled by the vibrational-spectra dialog, not from here.
-
-    The 2D elastic sections are listed only when the installed CRYSTALClear can
-    draw them (it needs ``plot_cry_ela_2D``), so an older build just shows the
-    3D surfaces instead of offering menu entries that would fail.
+    Output-file plots (elastic/EOS) read the loaded ``.out`` directly; the XRD
+    pattern prompts for its PROPERTIES file. IR and Raman, and band structures
+    and densities of states, are handled by dialogs of their own, not from here.
     """
     return [
         # ── from the CRYSTAL output file ──
@@ -237,63 +178,34 @@ def available_plots() -> List[PlotKind]:
         # and anharmonic levels, far more than two menu entries could offer, so
         # they live behind the "Vibrational spectra…" dialog instead
         # (see crystalline.crystalio.spectra).
-        PlotKind("ela_young", "Young's modulus", "output", "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_builder("young"), group="Elastic properties",
-                 probe=("get_elatensor", "elatensor")),
-        PlotKind("ela_comp", "Linear compressibility", "output", "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_builder("comp"), group="Elastic properties",
-                 probe=("get_elatensor", "elatensor")),
-        PlotKind("ela_shear", "Shear modulus (avg)", "output", "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_builder("shear avg"), group="Elastic properties",
-                 probe=("get_elatensor", "elatensor")),
-        PlotKind("ela_poisson", "Poisson's ratio (avg)", "output", "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_builder("poisson avg"), group="Elastic properties",
-                 probe=("get_elatensor", "elatensor")),
-        *_elastic_2d_plots(),
+        *_elastic_plots(),
         PlotKind("eos", "Equation of state", "output", "Open CRYSTAL output (.out)", _OUT,
                  _eos_builder(), probe=("get_EOS", "VvsE")),
         # ── from a PROPERTIES / dispersion data file ──
-        # Electronic bands and DOS are not here either: they have a dozen
-        # options worth setting, a combined band+DOS view, and a choice of
-        # energy reference, so they live behind the "Electronic bands & DOS…"
-        # dialog (see crystalline.crystalio.electronic).
-        PlotKind("phonon_band", "Phonon band structure…", "data",
-                 "Open PHONBAND.DAT / fort.25", _DAT,
-                 _external_builder("read_phonon_band", "plot_phonon_band")),
-        PlotKind("phonon_dos", "Phonon density of states…", "data",
-                 "Open PHONDOSS.DAT / fort.25", _DAT,
-                 _external_builder("read_phonon_dos", "plot_phonon_dos")),
+        # Electronic and phonon bands and DOS are not here either: they have a
+        # dozen options worth setting, a combined band+DOS view, and files to
+        # find and tell apart, so they live behind the "Electronic bands &
+        # DOS…" and "Phonon bands & DOS…" dialogs (see
+        # crystalline.crystalio.electronic and .phonon_bands).
         PlotKind("xrd", "Simulated XRD pattern…", "data",
                  "Open XRD spectrum (XRDATO.DAT)", _DAT,
                  _prop_builder("read_cry_xrd_spec", "plot_cry_xrd")),
     ]
 
 
-_ELASTIC_2D_GROUP = "Elastic properties (2D)"
+# The properties of the elastic entries, as (key, label): each as a surface and
+# as sections through the principal planes, in a submenu each.
+_ELASTIC_ENTRIES = (("young", "Young's modulus"), ("comp", "Linear compressibility"),
+                    ("shear", "Shear modulus (avg)"), ("poisson", "Poisson's ratio (avg)"))
+_ELASTIC_GROUPS = (("ela", "Elastic properties"), ("ela2d", "Elastic properties (2D)"))
 
 
-def _elastic_2d_plots() -> List[PlotKind]:
-    """The 2D elastic sections, or nothing if CRYSTALClear can't draw them.
-
-    Mirrors the four 3D surfaces so the two submenus read the same way; the
-    ``choose`` strings are exactly those ``plot_cry_ela_2D`` accepts.
-    """
-    if not _has_plot_function("plot_cry_ela_2D"):
-        return []
+def _elastic_plots() -> List[PlotKind]:
+    """The elastic surfaces, then the sections, read from the loaded output."""
     probe = ("get_elatensor", "elatensor")
-    return [
-        PlotKind("ela2d_young", "Young's modulus", "output", "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_2d_builder("young"), group=_ELASTIC_2D_GROUP, probe=probe),
-        PlotKind("ela2d_comp", "Linear compressibility", "output",
-                 "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_2d_builder("comp"), group=_ELASTIC_2D_GROUP, probe=probe),
-        PlotKind("ela2d_shear", "Shear modulus (avg)", "output",
-                 "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_2d_builder("shear avg"), group=_ELASTIC_2D_GROUP, probe=probe),
-        PlotKind("ela2d_poisson", "Poisson's ratio (avg)", "output",
-                 "Open CRYSTAL output (.out)", _OUT,
-                 _elastic_2d_builder("poisson avg"), group=_ELASTIC_2D_GROUP, probe=probe),
-    ]
+    return [PlotKind(f"{prefix}_{key}", label, "output", "Open CRYSTAL output (.out)", _OUT,
+                     _elastic_builder(f"{prefix}_{key}"), group=group, probe=probe)
+            for prefix, group in _ELASTIC_GROUPS for key, label in _ELASTIC_ENTRIES]
 
 
 def crystalclear_available() -> bool:
@@ -306,69 +218,26 @@ def crystalclear_available() -> bool:
 
 
 # ── typography ──────────────────────────────────────────────────────────────
-# Named font choices offered for every figure, as (label, key). Kept here rather
-# than read from CRYSTALClear so the setting works against any build of it, and
-# so a plot produced by CRYSTALLine itself (the spectra overlay) obeys it too.
-FONT_FAMILIES = (
-    ("STIX", "stix"),
-    ("Matplotlib default", "default"),
-    ("Computer Modern", "cm"),
-    ("Computer Modern Sans", "cmss"),
-    ("Serif", "serif"),
-    ("Sans-serif", "sans-serif"),
-    ("Monospace", "monospace"),
-)
-
-# STIX: a Times-like face with its own matching maths, shipped with matplotlib
-# itself, so every machine draws the same figure with nothing to install — and
-# with the Greek, Å and the true minus sign the figures use (it lacks only the
-# superscript ⁻, which no label here writes as a character).
+# The named recipes are CRYSTALClear's (``plot.set_font``), so a figure drawn
+# here and one drawn in a notebook with CRYSTALClear look alike. STIX is added
+# as the house face: a Times-like face with its own matching maths, shipped with
+# matplotlib itself, so every machine draws the same figure with nothing to
+# install — and with the Greek, Å and the true minus sign the figures use (it
+# lacks only the superscript ⁻, which no label here writes as a character).
+_STIX = {
+    "font.family": "serif",
+    "font.serif": ["STIXGeneral", "DejaVu Serif"],
+    "mathtext.fontset": "stix",
+}
 DEFAULT_FONT_FAMILY = "stix"
 DEFAULT_FONT_SIZE = 10.0
 
-# Every recipe fixes the mathtext font set as well, so an axis label like
-# $\Phi^\mathbf{n}$ is typeset in the same face as the text around it instead of
-# keeping matplotlib's sans-serif maths.
-_FONT_RECIPES = {
-    "stix": {
-        "font.family": "serif",
-        "font.serif": ["STIXGeneral", "DejaVu Serif"],
-        "mathtext.fontset": "stix",
-    },
-    "default": {"font.family": "sans-serif", "mathtext.fontset": "dejavusans"},
-    # Computer Modern is LaTeX's default face, so this is what makes a figure
-    # match the body text of a paper. 'cmr10' ships with matplotlib; 'CMU Serif'
-    # is the fuller Unicode cut of the same design and is preferred when present.
-    # No LaTeX installation is involved either way.
-    "cm": {
-        "font.family": "serif",
-        "font.serif": ["CMU Serif", "cmr10", "DejaVu Serif"],
-        "mathtext.fontset": "cm",
-        # cmr10 carries no U+2212, so a negative tick label would come out as a
-        # missing-glyph box; ASCII hyphens avoid that in every text artist.
-        "axes.unicode_minus": False,
-    },
-    "cmss": {
-        "font.family": "sans-serif",
-        "font.sans-serif": ["CMU Sans Serif", "cmss10", "DejaVu Sans"],
-        "mathtext.fontset": "cm",
-        "axes.unicode_minus": False,
-    },
-    "serif": {"font.family": "serif", "mathtext.fontset": "dejavuserif"},
-    "sans-serif": {"font.family": "sans-serif", "mathtext.fontset": "dejavusans"},
-    "monospace": {"font.family": "monospace", "mathtext.fontset": "dejavusans"},
-}
 
-# Restored before a recipe is applied, so switching away from Computer Modern
-# does not leave its Unicode-minus workaround or its font list behind.
-_FONT_RESET = {
-    "font.family": "sans-serif",
-    "font.serif": ["DejaVu Serif"],
-    "font.sans-serif": ["DejaVu Sans"],
-    "font.monospace": ["DejaVu Sans Mono"],
-    "mathtext.fontset": "dejavusans",
-    "axes.unicode_minus": True,
-}
+def font_families() -> tuple:
+    """The named font choices offered for every figure, as (label, key)."""
+    from CRYSTALClear.plot import FONT_FAMILIES
+
+    return (("STIX", "stix"),) + tuple(FONT_FAMILIES)
 
 
 def apply_font(family: str = DEFAULT_FONT_FAMILY, size: float = DEFAULT_FONT_SIZE) -> dict:
@@ -378,22 +247,20 @@ def apply_font(family: str = DEFAULT_FONT_FAMILY, size: float = DEFAULT_FONT_SIZ
     plots opened from now on and leaves the ones already in the dock alone —
     which is why the dialog says so.
 
-    ``family`` is a key of :data:`FONT_FAMILIES`, or the name of any installed
-    font ("Times New Roman"); an unknown name is passed to matplotlib as-is
-    rather than rejected, and matplotlib falls back with its own warning.
+    ``family`` is a key of :func:`font_families`, or the name of any installed
+    font ("Times New Roman"), which CRYSTALClear passes to matplotlib as it is;
+    matplotlib falls back with its own warning if it has no such font.
     """
     import matplotlib
+    from CRYSTALClear.plot import set_font
 
-    recipe = _FONT_RECIPES.get(family)
-    if recipe is None:
-        # A font named directly. Whether it is a serif or a sans is not knowable
-        # here, so mathtext is left as the reset leaves it.
-        recipe = {"font.family": family}
-
-    applied = dict(_FONT_RESET)
-    applied.update(recipe)
-    applied["font.size"] = float(size)
-    matplotlib.rcParams.update(applied)
+    if family == "stix":
+        # Put on top of CRYSTALClear's reset, so nothing of another recipe stays.
+        applied = set_font(family="default", size=float(size))
+        applied.update(_STIX)
+        matplotlib.rcParams.update(_STIX)
+    else:
+        applied = set_font(family=family, size=float(size))
     global _font_applied
     _font_applied = True
     return applied
@@ -504,10 +371,10 @@ def output_availability(path: Optional[str]) -> set:
 __all__ = [
     "DEFAULT_FONT_FAMILY",
     "DEFAULT_FONT_SIZE",
-    "FONT_FAMILIES",
     "PlotKind",
     "PlotUnavailable",
     "apply_font",
+    "font_families",
     "available_plots",
     "crystalclear_available",
     "installed_font_names",

@@ -595,10 +595,10 @@ class ZonePickerDialog(QDialog):
     def _label_colour(self) -> str:
         """Text that reads against both the marker and the viewport's ground.
 
-        Red-on-red was the old trouble: the labels were the markers' own colour,
-        so wherever the two met the text vanished. The theme's ordinary text
-        colour contrasts with the background by construction and with the red
-        markers by being nothing like them.
+        Not the markers' own colour, which would make the text vanish wherever
+        the two meet. The theme's ordinary text colour contrasts with the
+        background by construction and with the red markers by being nothing
+        like them.
         """
         from PySide6.QtWidgets import QApplication
         from crystalline.ui import theme
@@ -802,9 +802,9 @@ class ZonePickerDialog(QDialog):
     def _legend_selection(self) -> None:
         """The corner reads out the clicked point, and only that.
 
-        It used to list the legs of the path as well — which the Path list
-        beside the view already does, in the same colours. Saying it twice made
-        the corner grow with the path and told the reader nothing new.
+        Not the legs of the path, which the Path list beside the view already
+        shows in the same colours: saying it twice would make the corner grow
+        with the path and tell the reader nothing new.
         """
         fractional = (self._points.get(self._selected)
                       if self._selected is not None else None)

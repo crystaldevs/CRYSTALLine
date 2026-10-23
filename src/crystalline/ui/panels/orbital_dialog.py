@@ -25,6 +25,7 @@ import os
 from typing import List, Optional, Sequence
 
 import numpy as np
+from CRYSTALClear.units import H_to_eV
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -50,7 +51,6 @@ from crystalline.ui.widgets.wrapped_label import WrappedLabel
 
 # Hartree to electronvolt, so the list reads in the unit a band structure is
 # quoted in; the file itself stores Hartree.
-_HARTREE_TO_EV = 27.211386245988
 
 # Grid density along each axis. The cost is cubic, so the range is deliberately
 # short: 60 is a couple of seconds and enough to see the lobes, 120 is for a
@@ -279,7 +279,7 @@ class OrbitalDialog(QDialog):
             elif homo is not None and i == homo + 1:
                 mark = "   ← LUMO"
             item = QListWidgetItem(
-                f"{i + 1:4d}   {orbital.energy * _HARTREE_TO_EV:10.3f} eV"
+                f"{i + 1:4d}   {H_to_eV(orbital.energy):10.3f} eV"
                 f"   occ {orbital.occupation:.2f}{mark}"
             )
             item.setData(Qt.UserRole, i)

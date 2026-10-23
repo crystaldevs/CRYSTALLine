@@ -1,162 +1,61 @@
 """Choose how to plot an electronic band structure, a DOS, or both.
 
-The Plot menu used to carry the two as one-click entries drawn at CRYSTALClear's
-defaults: energies always relative, the path's corners marked with k-distances,
-and no way to put the bands beside the DOS. This dialog is the same move the
-vibrational spectra made — one entry, every option in view — for the one-
-electron properties.
-
-Two columns, what to plot on the left and how it looks on the right, because
-one column of five sections came out twice as tall as it was wide.
+One entry with every option in view, for the one-electron properties: energies
+relative to the Fermi level or absolute, the path's corners named, and the bands
+beside the DOS. The layout and the file handling are those of every band dialog
+(:mod:`~crystalline.ui.panels.bands_dialog`); what is particular here is the
+energy frame and the spin.
 
 The band and DOS files come from a PROPERTIES (``.d3``) run, which is written
 beside the SCF output. The dialog lists every band and DOS file it finds there
 — recognised by content, see :func:`~crystalline.crystalio.electronic.find_files`
-— with the likeliest one already chosen.
-
-The energy window is not remembered from last time: it belongs to the data, and
-a window that suited MgO's valence band shows nothing useful of urea's. It is
-fitted to the files each time — the track spans everything in them, the handles
-start on the suggested window — while the unit, the reference and every colour
-are remembered.
+— with the likeliest one already chosen, and a band file and a DOS of the same
+calculation paired by their Fermi level.
 """
 
 from __future__ import annotations
 
 import math
-import os
-import re
-from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
-    QDoubleSpinBox,
-    QFileDialog,
-    QHBoxLayout,
-    QHeaderView,
-    QLineEdit,
-    QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
-    QVBoxLayout,
-    QWidget,
-)
+from CRYSTALClear.units import H_to_eV, eV_to_H
+from PySide6.QtWidgets import QComboBox, QPushButton, QWidget
 
 from crystalline.crystalio import electronic as el
-from crystalline.ui.panels.controls import (ColourButton, Section, range_row, set_span,
-                                            slider_row)
+from crystalline.ui.panels.bands_dialog import BandsDialog, nice, row, style_box
+from crystalline.ui.panels.controls import ColourButton, Section, range_row, set_span
 from crystalline.ui.safety import guard
-from crystalline.ui.widgets.wrapped_label import WrappedLabel
-
-# By extension only: BAND.DAT and fort.25 are names, and names are rewritten.
-_BAND_FILTER = "Band structures (*.BAND *.DAT *.f25 *.25);;All files (*)"
-_DOS_FILTER = "Densities of states (*.DOSS *.DAT *.f25 *.25);;All files (*)"
-_HARTREE_EV = 27.211386245988
-_KINDS = (("band", "Band file", "BAND.DAT, .BAND or fort.25"),
-          ("dos", "DOS file", "DOSS.DAT, .DOSS or fort.25"))
 
 
-class ElectronicDialog(QDialog):
+class ElectronicDialog(BandsDialog):
     """Pick the files and the options; :meth:`request` hands them to the plotter."""
 
-    # Where band or DOS files were last found in this session — the fallback
-    # when the loaded output's folder has none.
+    TITLE = "Electronic bands & DOS"
+    KINDS = (("band", "Band file", "BAND.DAT, .BAND or fort.25"),
+             ("dos", "DOS file", "DOSS.DAT, .DOSS or fort.25"))
+    BROWSE = {"band": ("Open a band structure",
+                       "Band structures (*.BAND *.DAT *.f25 *.25);;All files (*)"),
+              "dos": ("Open a density of states",
+                      "Densities of states (*.DOSS *.DAT *.f25 *.25);;All files (*)")}
+    K_PLACEHOLDER = "Γ X W L Γ"
+    K_TOOLTIP = ("One name per corner of the path, separated by spaces. Filled in "
+                 "from the loaded structure where the corners can be recognised; "
+                 "“G” is read as Γ.")
     last_folder = ""
 
     def __init__(self, structure=None, folder: str = "",
                  parent: Optional[QWidget] = None, efermi: Optional[float] = None) -> None:
         """``efermi`` is the open output's Fermi level (eV): files recording the
         same one are that calculation's, and are offered first."""
-        super().__init__(parent)
+        super().__init__(structure, folder, parent)
         self._output_efermi = efermi
-        self.setWindowTitle("Electronic bands & DOS")
-        self.resize(960, 600)
-        self._structure = structure
-        self._folder = folder
-        self._bands_info: Optional[el.BandsInfo] = None
-        self._dos_info: Optional[el.DosInfo] = None
-        self._auto_names: List[str] = []
-        self._errors: dict = {}
-        self._loaded: dict = {}
-        self._projection_colours: List[ColourButton] = []
         # The unit and reference the range boxes are written in, so a change
         # of either can carry the numbers across instead of reinterpreting them.
         self._frame_shown = ("eV", el.RELATIVE)
-        # A plot's own energy window and DOS range, when the dialog is opened to
-        # edit one: put on the tracks once the first show has fitted them to
-        # the files, which would otherwise move the handles back to where they
-        # start for a new plot (see set_request).
-        self._held = None
-
-        outer = QVBoxLayout(self)
-
-        columns = QHBoxLayout()
-        left, right = QVBoxLayout(), QVBoxLayout()
-        columns.addLayout(left, 1)
-        columns.addSpacing(24)
-        columns.addLayout(right, 1)
-        outer.addLayout(columns, 1)
-
-        self._build_data(left)
-        self._build_energy(left)
-        self._build_bands(left)
-        left.addStretch(1)
-        self._build_dos(right)
-        self._build_appearance(right)
-        right.addStretch(1)
-
-        self._buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
-        self._buttons.accepted.connect(self.accept)
-        self._buttons.rejected.connect(self.reject)
-        outer.addWidget(self._buttons)
-
-        if not self._populate(folder) and ElectronicDialog.last_folder not in ("", folder):
-            self._populate(ElectronicDialog.last_folder)
-        self._sync()
+        self._build()
 
     # ── building ────────────────────────────────────────────────────────
-    def _build_data(self, column) -> None:
-        data = Section(column, "Data")
-        self.mode = QComboBox(self)
-        for key, label in el.MODES:
-            self.mode.addItem(label, key)
-        self.mode.currentIndexChanged.connect(self._on_mode_changed)
-        data.add("Show", self.mode)
-
-        self._files: dict = {}
-        self._file_rows: dict = {}
-        for kind, caption, hint in _KINDS:
-            combo = QComboBox(self)
-            combo.setEditable(True)
-            combo.setInsertPolicy(QComboBox.NoInsert)
-            combo.setMinimumContentsLength(16)
-            combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-            combo.lineEdit().setPlaceholderText(hint)
-            combo.setToolTip("Every file of this kind in the output's folder, best first. "
-                             "Type a path, or Browse for one elsewhere.")
-            combo.currentIndexChanged.connect(lambda _i, k=kind: self._load(k))
-            combo.lineEdit().editingFinished.connect(lambda k=kind: self._load(k))
-            browse = QPushButton("Browse…", self)
-            browse.clicked.connect(lambda _checked=False, k=kind: self._browse(k))
-            row = QWidget(self)
-            line = QHBoxLayout(row)
-            line.setContentsMargins(0, 0, 0, 0)
-            line.addWidget(combo, 1)
-            line.addWidget(browse)
-            self._files[kind] = combo
-            self._file_rows[kind] = row
-            data.add(caption, row)
-
-        self._summary = WrappedLabel()
-        self._summary.setStyleSheet("color: palette(mid);")
-        data.add_wide(self._summary)
-
-    def _build_energy(self, column) -> None:
+    def _build_window(self, column) -> None:
         # Unit and reference are restored before the dialog is shown, and the
         # window is fitted when it is — in whichever frame they left it in.
         # They carry the window across only when a *person* picks a new one
@@ -177,195 +76,45 @@ class ElectronicDialog(QDialog):
         energy.add("Reference", self.reference)
         # Held in a tuple rather than as attributes of their own, so the
         # dialog's memory passes them by: the window belongs to the data.
-        self._energy = range_row(energy, "Window", -10.0, 10.0, -30.0, 30.0,
+        self._window = range_row(energy, "Window", -10.0, 10.0, -30.0, 30.0,
                                  decimals=2, step=0.5)
         fit = QPushButton("Suggested window", self)
         fit.setToolTip("Down to the first wide gap below the Fermi level — where "
                        "the core levels start — and as far again above the "
                        "bottom of the conduction band.")
-        fit.clicked.connect(lambda _checked=False: self._fit_energy())
-        energy.append(_row(fit))
+        fit.clicked.connect(lambda _checked=False: self._fit_window())
+        energy.append(row(fit))
 
-    def _build_bands(self, column) -> None:
-        bands = Section(column, "Band structure")
-        self._k_edit = QLineEdit(self)
-        self._k_edit.setPlaceholderText("Γ X W L Γ")
-        self._k_edit.setToolTip(
-            "One name per corner of the path, separated by spaces. Filled in "
-            "from the loaded structure where the corners can be recognised; "
-            "“G” is read as Γ.")
-        self._k_edit.textChanged.connect(lambda _text: self._sync())
-        bands.add("Path labels", self._k_edit)
-        self._bands_section = bands
-
-    def _build_dos(self, column) -> None:
-        dos = Section(column, "Density of states")
-        self._table = QTableWidget(0, 2, self)
-        self._table.setHorizontalHeaderLabels(["Projection", "Colour"])
-        self._table.verticalHeader().setVisible(False)
-        header = self._table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self._table.setMinimumHeight(150)
-        # Ticking a projection can be what makes a legend worth having.
-        self._table.itemChanged.connect(lambda _item: self._sync())
-        self._table.setToolTip("Tick the projections to draw. Double-click a name "
-                               "to change what the legend calls it.")
-        dos.add("Projections", self._table)
-        self.overlay = QCheckBox("Draw the projections on one axis", self)
-        self.overlay.setChecked(True)
-        self.overlay.toggled.connect(lambda _on: self._sync())
-        self.overlay.setToolTip(
-            "On one axis with a legend, or one panel each. The band+DOS view "
-            "always draws them together.")
-        dos.add_wide(self.overlay)
+    def _build_dos_extras(self, dos) -> None:
         self.spin_down = QComboBox(self)
         self.spin_down.addItem("Mirrored below the axis", el.SPIN_MIRRORED)
         self.spin_down.addItem("On the same side as spin up", el.SPIN_ALONGSIDE)
         self.spin_down.setToolTip("Only a spin-polarised DOS has a spin-down part.")
         self.spin_down.currentIndexChanged.connect(lambda _i: self._fit_dos())
         dos.add("Spin down", self.spin_down)
-        self.dos_auto = QCheckBox("Fit the DOS axis to what is drawn", self)
-        self.dos_auto.setChecked(True)
-        self.dos_auto.toggled.connect(lambda _on: self._sync())
-        dos.add_wide(self.dos_auto)
-        self._dos_span = range_row(dos, "DOS range", 0.0, 1.0, 0.0, 10.0,
-                                   decimals=2, step=0.1)
-        self._dos_range_row = dos.row_widgets("DOS range")
-        self._dos_section = dos
 
-    def _build_appearance(self, column) -> None:
-        # Folded, as beside the plot: set once, if at all.
-        look = Section(column, "Appearance", collapsed=True)
-        self.band_colour = ColourButton(el.BAND_COLOUR, "Band colour", self)
-        look.add("Bands", _row(self.band_colour))
-
+    def _build_lines(self, look) -> None:
         self.beta_colour = ColourButton(el.BETA_COLOUR, "Spin-down band colour", self)
-        self.beta_style = _style_box(self, "--")
-        look.add("Spin-down bands", _row(self.beta_colour, self.beta_style))
+        self.beta_style = style_box(self, "--")
+        look.add("Spin-down bands", row(self.beta_colour, self.beta_style))
         self._beta_row = look.row_widgets("Spin-down bands")
-
-        self.show_fermi = QCheckBox("Draw", self)
-        self.show_fermi.setChecked(True)
-        self.show_fermi.toggled.connect(lambda _on: self._sync())
-        self.fermi_colour = ColourButton(el.FERMI_COLOUR, "Fermi level colour", self)
-        self.fermi_style = _style_box(self, "-")
-        self.fermi_width = QDoubleSpinBox(self)
-        self.fermi_width.setRange(0.3, 5.0)
-        self.fermi_width.setSingleStep(0.1)
-        self.fermi_width.setDecimals(1)
-        self.fermi_width.setValue(1.5)
-        self.fermi_width.setToolTip("Line width of the Fermi level")
-        look.add("Fermi level", _row(self.show_fermi, self.fermi_colour,
-                                     self.fermi_style, self.fermi_width))
-
-        self.linewidth = slider_row(look, "Line width", 1.0, 0.3, 4.0, 0.1, decimals=1)
-        self._title = QLineEdit(self)
-        self._title.setPlaceholderText("No title")
-        look.add("Title", self._title)
-        self.legend = QCheckBox("Legend", self)
-        self.legend.setChecked(True)
-        look.add_wide(self.legend)
+        (self.show_fermi, self.fermi_colour, self.fermi_style,
+         self.fermi_width) = self._reference_line(look, "Fermi level", el.FERMI_COLOUR, 1.5)
 
     # ── files ───────────────────────────────────────────────────────────
-    def _populate(self, folder: str) -> bool:
-        """List the band and DOS files in ``folder``, and load the best of each."""
-        if not folder:
-            return False
+    def _find_files(self, folder: str):
         bands, doss = el.find_files(folder, efermi=self._output_efermi)
         # A band structure and a DOS from the same calculation, not merely the
         # best-ranked of each — see pair_files.
         chosen = dict(zip(("band", "dos"),
                           el.pair_files(bands, doss, own_run=self._output_efermi is not None)))
-        for kind, paths in (("band", bands), ("dos", doss)):
-            combo = self._files[kind]
-            combo.blockSignals(True)
-            combo.clear()
-            for path in paths:
-                combo.addItem(Path(path).name, path)
-                combo.setItemData(combo.count() - 1, path, Qt.ToolTipRole)
-            combo.setCurrentIndex(paths.index(chosen[kind]) if chosen[kind] in paths
-                                  else (0 if paths else -1))
-            combo.blockSignals(False)
-            if paths:
-                self._load(kind)
-        return bool(bands or doss)
+        return bands, doss, chosen
 
-    def _path(self, kind: str) -> str:
-        combo = self._files[kind]
-        text = combo.currentText().strip()
-        if not text:
-            return ""
-        index = combo.findText(text)
-        if index >= 0 and combo.itemData(index):
-            return str(combo.itemData(index))
-        return os.path.expanduser(text)
+    def _describe_file(self, kind: str, path: str):
+        return el.describe_bands(path) if kind == "band" else el.describe_dos(path)
 
-    @guard()
-    def _browse(self, kind: str) -> None:
-        current = self._path(kind)
-        start = ((str(Path(current).parent) if current else "") or self._folder
-                 or ElectronicDialog.last_folder)
-        path, _filter = QFileDialog.getOpenFileName(
-            self, "Open a band structure" if kind == "band" else "Open a density of states",
-            start, _BAND_FILTER if kind == "band" else _DOS_FILTER)
-        if not path:
-            return
-        self._choose(kind, path)
-
-    def _choose(self, kind: str, path: str) -> None:
-        """Make ``path`` the chosen file of ``kind``, listed if it was not."""
-        combo = self._files[kind]
-        index = combo.findData(path)
-        if index < 0:
-            combo.addItem(Path(path).name, path)
-            index = combo.count() - 1
-            combo.setItemData(index, path, Qt.ToolTipRole)
-        combo.setCurrentIndex(index)
-        self._load(kind)
-
-    @guard()
-    def _load(self, kind: str) -> None:
-        """Read a chosen file for what the dialog needs: ticks, projections, spans."""
-        path = self._path(kind)
-        if self._loaded.get(kind) == path:
-            return
-        self._loaded[kind] = path
-        info, error = None, ""
-        if path:
-            try:
-                info = el.describe_bands(path) if kind == "band" else el.describe_dos(path)
-            except Exception as exc:  # noqa: BLE001 - said in the dialog, not raised
-                error = f"Could not read {Path(path).name}: {exc}"
-            else:
-                ElectronicDialog.last_folder = str(Path(path).parent)
-        self._errors[kind] = error
-        if kind == "band":
-            self._bands_info = info
-            self._auto_names = el.path_labels(info, self._structure) if info else []
-            self._k_edit.setText(" ".join(self._auto_names))
-        else:
-            self._dos_info = info
-            self._fill_projections(info)
-            self._fit_dos()
-        self._fit_energy()
-        self._sync()
-
-    def _fill_projections(self, info: Optional[el.DosInfo]) -> None:
-        self._table.setRowCount(0)
-        self._projection_colours = []
-        count = info.n_projections if info else 0
-        self._table.setRowCount(count)
-        for row in range(count):
-            item = QTableWidgetItem(f"Projection {row + 1}")
-            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable
-                          | Qt.ItemIsEditable | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Checked)
-            self._table.setItem(row, 0, item)
-            swatch = ColourButton(el.PROJECTION_COLOURS[row % len(el.PROJECTION_COLOURS)],
-                                  f"Colour for projection {row + 1}", self)
-            self._table.setCellWidget(row, 1, _centred(swatch))
-            self._projection_colours.append(swatch)
+    def _auto_labels(self, info) -> List[str]:
+        return el.path_labels(info, self._structure)
 
     # ── the energy window ───────────────────────────────────────────────
     def _frame(self):
@@ -380,14 +129,14 @@ class ElectronicDialog(QDialog):
         """eV relative to E_F -> the number the boxes show in ``frame``."""
         unit, reference = frame
         value += self._efermi() if reference == el.ABSOLUTE else 0.0
-        return value / _HARTREE_EV if unit == "Hartree" else value
+        return eV_to_H(value) if unit == "Hartree" else value
 
     def _canonical(self, value: float, frame) -> float:
         unit, reference = frame
-        value = value * _HARTREE_EV if unit == "Hartree" else value
+        value = H_to_eV(value) if unit == "Hartree" else value
         return value - (self._efermi() if reference == el.ABSOLUTE else 0.0)
 
-    def _extent(self):
+    def _spans(self):
         """``(window, span)`` in eV relative to E_F for what is to be drawn."""
         need_bands, need_dos = self._needs()
         bands = self._bands_info if need_bands else None
@@ -405,36 +154,36 @@ class ElectronicDialog(QDialog):
         return window, span
 
     def _format_energy(self, unit: str) -> None:
-        _slider, low, high = self._energy
+        _slider, low, high = self._window
         for box in (low, high):
             box.setDecimals(4 if unit == "Hartree" else 2)
             box.setSingleStep(0.02 if unit == "Hartree" else 0.5)
 
-    def _fit_energy(self) -> None:
+    def _fit_window(self) -> None:
         """Span the track over the data, and set the handles on the suggestion."""
         frame = self._frame()
         self._format_energy(frame[0])
         self._frame_shown = frame
-        window, span = self._extent()
+        window, span = self._spans()
         if window is None:
             return
         bounds = sorted(self._shown(v, frame) for v in span)
         values = sorted(self._shown(v, frame) for v in window)
-        set_span(self._energy, *bounds, *values)
+        set_span(self._window, *bounds, *values)
 
     @guard()
     def _on_frame_chosen(self, _index: int = 0) -> None:
         new, old = self._frame(), self._frame_shown
         if new == old:
             return
-        slider, low, high = self._energy
+        slider, low, high = self._window
         values = [self._shown(self._canonical(box.value(), old), new) for box in (low, high)]
         bounds = sorted(self._shown(self._canonical(v, old), new) for v in slider.bounds())
         self._format_energy(new[0])
-        set_span(self._energy, *bounds, *sorted(values))
+        set_span(self._window, *bounds, *sorted(values))
         if new[0] != old[0]:
             # states/eV <-> states/Hartree: CRYSTALClear rescales the DOS too.
-            factor = _HARTREE_EV if new[0] == "Hartree" else 1.0 / _HARTREE_EV
+            factor = H_to_eV(1.0) if new[0] == "Hartree" else eV_to_H(1.0)
             dslider, dlow, dhigh = self._dos_span
             dbounds = [v * factor for v in dslider.bounds()]
             set_span(self._dos_span, *dbounds, dlow.value() * factor, dhigh.value() * factor)
@@ -444,120 +193,41 @@ class ElectronicDialog(QDialog):
         info = self._dos_info
         if info is None or info.dos_max <= 0:
             return
-        top = info.dos_max * (_HARTREE_EV if self.unit.currentData() == "Hartree" else 1.0)
+        top = info.dos_max * (H_to_eV(1.0) if self.unit.currentData() == "Hartree" else 1.0)
         mirrored = info.spin == 2 and self.spin_down.currentData() == el.SPIN_MIRRORED
-        bound, value = _nice(top * 1.25), _nice(top * 1.05)
+        bound, value = nice(top * 1.25), nice(top * 1.05)
         set_span(self._dos_span, -bound if mirrored else 0.0, bound,
-                   -value if mirrored else 0.0, value)
-
-    def _on_mode_changed(self, _index: int = 0) -> None:
-        self._fit_energy()
-        self._sync()
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt's name
-        # Remembered settings were put back after construction; fit the window
-        # in whatever unit and reference they left.
-        if not getattr(self, "_shown_once", False):
-            self._shown_once = True
-            self._fit_energy()
-            self._fit_dos()
-            self._apply_held()
-        super().showEvent(event)
-
-    def _apply_held(self) -> None:
-        """Put a plot's own window and DOS range on the freshly fitted tracks.
-
-        Widened to take them if need be: a window dragged past where the
-        files' span was rounded to is still the window the plot is drawn in.
-        """
-        if self._held is None:
-            return
-        energy, dos = self._held
-        self._held = None
-        if energy is not None:
-            slider = self._energy[0]
-            low, high = sorted(energy)
-            bottom, top = slider.bounds()
-            set_span(self._energy, min(bottom, low), max(top, high), low, high)
-        if dos is not None:
-            slider = self._dos_span[0]
-            low, high = sorted(dos)
-            bottom, top = slider.bounds()
-            set_span(self._dos_span, min(bottom, low), max(top, high), low, high)
+                 -value if mirrored else 0.0, value)
 
     # ── keeping the controls honest ─────────────────────────────────────
-    def _needs(self):
-        mode = self.mode.currentData()
-        return mode in (el.BANDS, el.BANDS_AND_DOS), mode in (el.DOS, el.BANDS_AND_DOS)
+    def _polarised(self):
+        return (self._bands_info is not None and self._bands_info.spin == 2,
+                self._dos_info is not None and self._dos_info.spin == 2)
 
-    def _sync(self) -> None:
-        """Offer only what the chosen plot uses, and allow OK only when it can work.
-
-        A control that would quietly do nothing is greyed rather than left
-        live: the band settings for a DOS plot, the spin-down choices for a
-        spin-restricted run, the overlay for the combined view (which always
-        overlays).
-        """
-        need_bands, need_dos = self._needs()
-        self._file_rows["band"].setEnabled(need_bands)
-        self._file_rows["dos"].setEnabled(need_dos)
-        self._bands_section.set_enabled(need_bands)
-        self._dos_section.set_enabled(need_dos)
-        polarised_dos = need_dos and self._dos_info is not None and self._dos_info.spin == 2
-        self.spin_down.setEnabled(polarised_dos)
-        self.overlay.setEnabled(self.mode.currentData() == el.DOS)
-        for widget in self._dos_range_row:
-            widget.setEnabled(need_dos and not self.dos_auto.isChecked())
-
-        polarised_bands = (need_bands and self._bands_info is not None
-                           and self._bands_info.spin == 2)
+    def _sync_lines(self, need_bands: bool, need_dos: bool) -> None:
+        """The spin-down choices only for a spin-polarised run."""
+        bands_polarised, dos_polarised = self._polarised()
+        self.spin_down.setEnabled(need_dos and dos_polarised)
         for widget in self._beta_row:
-            widget.setEnabled(polarised_bands)
-        self.band_colour.setEnabled(need_bands)
+            widget.setEnabled(need_bands and bands_polarised)
         for widget in (self.fermi_colour, self.fermi_style, self.fermi_width):
             widget.setEnabled(self.show_fermi.isChecked())
-        # Hidden rather than greyed, as beside the plot and for a single
-        # spectrum: with nothing to tell apart there is no legend to draw.
-        ticked = sum(1 for row in range(self._table.rowCount())
-                     if self._table.item(row, 0) is not None
-                     and self._table.item(row, 0).checkState() == Qt.Checked)
-        self.legend.setVisible(el.legend_names_anything(
-            self.mode.currentData(), ticked,
-            polarised_bands, need_dos and self._dos_info is not None and self._dos_info.spin == 2,
-            self.overlay.isChecked()))
-
-        ready = ((not need_bands or self._bands_info is not None)
-                 and (not need_dos or self._dos_info is not None))
-        self._buttons.button(QDialogButtonBox.Ok).setEnabled(ready)
-        self._summary.setText(self._describe(need_bands, need_dos))
 
     def _describe(self, need_bands: bool, need_dos: bool) -> str:
         lines = []
         if need_bands:
             info = self._bands_info
-            if info is not None:
-                spin = "spin-polarised" if info.spin == 2 else "spin-restricted"
-                lines.append(f"Bands: {info.n_bands} bands, {spin}, "
-                             f"E_F = {info.efermi:.3f} eV")
-                typed = self._typed_labels()
-                if typed and len(typed) != len(info.ticks):
-                    lines.append(f"Path labels: {len(info.ticks)} corners, {len(typed)} "
-                                 "labels typed — the automatic ones will be used.")
-            elif self._errors.get("band"):
-                lines.append(self._errors["band"])
-            else:
-                lines.append("No band file found here — choose one.")
+            lines += self._band_lines(info and (
+                f"Bands: {info.n_bands} bands, "
+                f"{'spin-polarised' if info.spin == 2 else 'spin-restricted'}, "
+                f"E_F = {info.efermi:.3f} eV"))
         if need_dos:
             info = self._dos_info
-            if info is not None:
-                spin = "spin-polarised" if info.spin == 2 else "spin-restricted"
-                lines.append(f"DOS: {info.n_projections} projection"
-                             f"{'s' if info.n_projections != 1 else ''}, {spin}, "
-                             f"E_F = {info.efermi:.3f} eV")
-            elif self._errors.get("dos"):
-                lines.append(self._errors["dos"])
-            else:
-                lines.append("No DOS file found here — choose one.")
+            lines += self._dos_lines(info and (
+                f"DOS: {info.n_projections} projection"
+                f"{'s' if info.n_projections != 1 else ''}, "
+                f"{'spin-polarised' if info.spin == 2 else 'spin-restricted'}, "
+                f"E_F = {info.efermi:.3f} eV"))
         if need_bands and need_dos and self._bands_info and self._dos_info:
             gap = abs(self._bands_info.efermi - self._dos_info.efermi)
             if gap > 0.01:
@@ -568,52 +238,19 @@ class ElectronicDialog(QDialog):
         return "\n".join(lines)
 
     # ── the answer ──────────────────────────────────────────────────────
-    def _typed_labels(self) -> List[str]:
-        return [token for token in re.split(r"[\s,]+", self._k_edit.text().strip()) if token]
-
-    def k_labels(self) -> Optional[List[str]]:
-        """One name per corner, typed or automatic — never the wrong count.
-
-        CRYSTALClear marks the corners with their k-distances when given no
-        names, and refuses a list of the wrong length. So a typed list that
-        does not fit falls back to the automatic names, which always do.
-        """
-        info = self._bands_info
-        if info is None:
-            return None
-        typed = self._typed_labels()
-        if typed and len(typed) == len(info.ticks):
-            return [_greek(token) for token in typed]
-        return list(self._auto_names) or None
-
-    def energy_window(self):
-        _slider, low, high = self._energy
-        return tuple(sorted((low.value(), high.value())))
-
-    def energy_bounds(self):
-        return tuple(self._energy[0].bounds())
-
     def request(self):
         """``(band_path, dos_path, ElectronicOptions)`` for :func:`plot_electronic`."""
         need_bands, need_dos = self._needs()
-        low, high = self.energy_window()
-        _slider, dlow, dhigh = self._dos_span
-        dos_low, dos_high = sorted((dlow.value(), dhigh.value()))
-        rows = [row for row in range(self._table.rowCount())
-                if self._table.item(row, 0).checkState() == Qt.Checked]
+        low, high = self.window_values()
         options = el.ElectronicOptions(
             mode=self.mode.currentData(),
             unit=self.unit.currentData(),
             reference=self.reference.currentData(),
             # A zero-width range means "don't clip", as in the spectra dialog.
             energy_range=None if low == high else (low, high),
-            dos_range=(None if self.dos_auto.isChecked() or dos_low == dos_high
-                       else (dos_low, dos_high)),
+            dos_range=self._dos_range(),
             k_labels=self.k_labels() if need_bands else None,
-            projections=[row + 1 for row in rows] or None,
-            projection_labels=[self._table.item(row, 0).text().strip()
-                               or f"Projection {row + 1}" for row in rows] or None,
-            projection_colours=[self._projection_colours[row].colour() for row in rows] or None,
+            **self._projection_choice(),
             overlay_projections=self.overlay.isChecked(),
             spin_down=self.spin_down.currentData(),
             band_colour=self.band_colour.colour(),
@@ -640,115 +277,23 @@ class ElectronicDialog(QDialog):
         Not plot options: a plot does not need to know how far its window
         could have gone. The controls beside it do, to offer the same track.
         """
-        _slider, dlow, dhigh = self._dos_span
-        return {
-            "energy_bounds": tuple(self._energy[0].bounds()),
-            "dos_bounds": tuple(self._dos_span[0].bounds()),
-            "dos_handles": tuple(sorted((dlow.value(), dhigh.value()))),
-            # What the files hold, for deciding whether a legend names anything.
-            "dos_polarised": self._dos_info is not None and self._dos_info.spin == 2,
-            "bands_polarised": self._bands_info is not None and self._bands_info.spin == 2,
-            "dos_projections": self._dos_info.n_projections if self._dos_info else 0,
-        }
+        bands_polarised, dos_polarised = self._polarised()
+        return {"energy_bounds": self.window_bounds(), **self._extent(),
+                # What the files hold, for deciding whether a legend names anything.
+                "dos_polarised": dos_polarised, "bands_polarised": bands_polarised}
 
     def set_request(self, bands_path: Optional[str], dos_path: Optional[str],
                     options: "el.ElectronicOptions") -> None:
-        """Show a plot's own choices, so that editing it starts from them.
-
-        Everything :meth:`request` hands out comes back: the files, which may
-        have been browsed for anywhere; the projections ticked, with the names
-        and colours they were given; the path labels and the title, typed by
-        hand. The files go first, since reading them is what lays out the
-        projection table and the path labels. The window and the DOS range are
-        held until the dialog is shown (see :meth:`_apply_held`).
-        """
-        index = self.mode.findData(options.mode)
-        if index >= 0:
-            self.mode.setCurrentIndex(index)
-        for kind, path in (("band", bands_path), ("dos", dos_path)):
-            if path:
-                self._choose(kind, path)
-        # Set, not chosen: ``activated`` carries the window across a change of
-        # frame, and the window held below is already in this one.
-        for box, value in ((self.unit, options.unit), (self.reference, options.reference),
-                           (self.spin_down, options.spin_down),
-                           (self.beta_style, options.beta_style),
-                           (self.fermi_style, options.fermi_style)):
-            found = box.findData(value)
-            if found >= 0:
-                box.setCurrentIndex(found)
-        if options.k_labels:
-            self._k_edit.setText(" ".join(options.k_labels))
-        if options.projections is not None:
-            chosen = list(options.projections)
-            names = list(options.projection_labels or [])
-            colours = list(options.projection_colours or [])
-            for row in range(self._table.rowCount()):
-                item = self._table.item(row, 0)
-                ticked = row + 1 in chosen
-                item.setCheckState(Qt.Checked if ticked else Qt.Unchecked)
-                if ticked:
-                    place = chosen.index(row + 1)
-                    if place < len(names):
-                        item.setText(names[place])
-                    if place < len(colours):
-                        self._projection_colours[row].setColour(colours[place])
-        self.overlay.setChecked(options.overlay_projections)
-        self.dos_auto.setChecked(options.dos_range is None)
-        self.band_colour.setColour(options.band_colour)
+        """Show a plot's own choices, so that editing it starts from them."""
+        self._restore(bands_path, dos_path, options, options.energy_range, boxes=(
+            (self.unit, options.unit), (self.reference, options.reference),
+            (self.spin_down, options.spin_down), (self.beta_style, options.beta_style),
+            (self.fermi_style, options.fermi_style)))
         self.beta_colour.setColour(options.beta_colour)
         self.show_fermi.setChecked(options.show_fermi)
         self.fermi_colour.setColour(options.fermi_colour)
         self.fermi_width.setValue(options.fermi_width)
-        self.linewidth.setValue(options.linewidth)
-        self.legend.setChecked(options.legend)
-        self._title.setText(options.title or "")
-        self._held = (options.energy_range, options.dos_range)
         self._sync()
-
-
-# ── small pieces ──────────────────────────────────────────────────────────
-def _nice(value: float) -> float:
-    """Round up to two significant figures: 1.63 -> 1.7, 73.8 -> 74."""
-    if value <= 0:
-        return 1.0
-    step = 10.0 ** (math.floor(math.log10(value)) - 1)
-    return math.ceil(value / step - 1e-9) * step
-
-
-def _style_box(parent, default: str) -> QComboBox:
-    box = QComboBox(parent)
-    for key, label in el.LINE_STYLES:
-        box.addItem(label, key)
-    box.setCurrentIndex(max(0, box.findData(default)))
-    return box
-
-
-def _row(*widgets) -> QWidget:
-    """Controls side by side at the left of a row, at their own sizes."""
-    holder = QWidget()
-    line = QHBoxLayout(holder)
-    line.setContentsMargins(0, 0, 0, 0)
-    line.setSpacing(8)
-    for widget in widgets:
-        line.addWidget(widget, 0)
-    line.addStretch(1)
-    return holder
-
-
-def _centred(widget) -> QWidget:
-    holder = QWidget()
-    line = QHBoxLayout(holder)
-    line.setContentsMargins(4, 0, 4, 0)
-    line.addStretch(1)
-    line.addWidget(widget)
-    line.addStretch(1)
-    return holder
-
-
-def _greek(token: str) -> str:
-    """``G`` / ``Gamma`` -> ``Γ``: CRYSTAL writes Γ as G, and so do people."""
-    return "Γ" if token.lower() in ("g", "gamma") else token
 
 
 __all__ = ["ElectronicDialog"]
