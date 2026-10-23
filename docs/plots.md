@@ -56,6 +56,53 @@ levels to as far above, and **Suggested window** restores it.
 colours; the treatment of the spin-down component; the labels of the path; and
 the colours, styles and widths of the lines.
 
+## Phonon band structures and densities of states
+
+**Plot → Phonon bands & DOS…** draws the phonon bands of a dispersion
+calculation (`DISPERSI` with `BANDS`), its phonon density of states (`PDOS`),
+or the two side by side, with the same layout and the same options beside the
+plot as the electronic ones.
+
+::::{grid} 1 1 2 2
+:gutter: 3
+
+:::{grid-item}
+```{image} dialog-phonon.png
+:alt: The Phonon bands and DOS dialog
+:class: crystal-framed
+```
+:::
+
+:::{grid-item}
+```{image} plot-phonon-bands.png
+:alt: Phonon band structure of ZnO
+:class: crystal-framed
+```
++++
+ZnO, along Γ-K-M-Γ-A-H-K, from a 5×5×5 supercell.
+:::
+
+::::
+
+**The files.** `PHONBANDS.DAT`, `PHONDOS.DAT`, `fort.25` and `*.f25` are read.
+They have the formats of the electronic files and are told apart from them by
+their contents, so each dialog lists only its own. The band file of the open
+output comes first: it is recognised by the frequencies at the first point of
+its path, which the output prints too.
+
+**The path.** A `fort.25` writes the corners of the path as integers without
+their denominator. The output states each segment with it, and so does the
+`BANDS` block of the input deck, and from these the corners are named (Γ, K, M…)
+against the special points of the structure.
+
+**The frequencies.** In cm⁻¹ or THz. The window runs from zero, or from the
+lowest imaginary branch when there is one deeper than the numerical noise at Γ,
+to just above the highest branch, and **Suggested window** restores it.
+
+A run along a path prints no eigenvectors unless asked to with `MODES`, so its
+output opens with the structure and no modes to animate; the bands are plotted
+from here.
+
 ## Vibrational spectra
 
 **Plot → Vibrational spectra…** lists the curves contained in the output:
@@ -98,42 +145,59 @@ spectrum), and only the widths used by the chosen lineshape are enabled.
 - **Anharmonic PES…**: one- and two-dimensional cuts of the potential energy
   surface, with the wavefunctions and probability densities of a double well.
 
-## Properties read from the output
+## Elastic properties
 
-These entries use the open output file and are enabled when it contains the
-data they need. They are drawn by
-[CRYSTALClear](https://crystaldevs.github.io/CRYSTALClear/), whose
-[notebooks](https://crystaldevs.github.io/CRYSTALClear/notebooks/index.html)
-work through each kind of plot in detail, what it is computed from and what
-can be varied, for anyone who wants more than the dialogs here offer.
+**Plot → Elastic properties** draws the directional elastic properties of an
+elastic-constants run (`ELASTCON`) from its elastic tensor: Young's modulus,
+the linear compressibility, the shear modulus and Poisson's ratio. The entries
+are enabled when the open output contains the tensor.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
 
 :::{grid-item}
-
-- **Elastic properties**: Young's modulus, linear compressibility, shear
-  modulus and Poisson's ratio, as three-dimensional surfaces and as sections
-  through them.
-- **Equation of state.**
-- **Phonon band structures and densities of states**, from the data files of a
-  dispersion calculation.
-- **Simulated XRD patterns.**
-
-:::
-
-:::{grid-item}
-```{image} plot-gallery.png
-:alt: Three plots of coesite - a Young's modulus surface and two polar sections - and an equation of state of ZnO
+```{image} plot-elastic-surface.png
+:alt: Young's modulus of coesite as a surface over all directions
 :class: crystal-framed
 ```
 +++
-Coesite: the directional Young's modulus as a surface, the same and the linear
-compressibility as sections through the principal planes. ZnO: an equation of
-state.
+Coesite: Young's modulus in every direction.
+:::
+
+:::{grid-item}
+```{image} plot-elastic-sections.png
+:alt: Linear compressibility of coesite in the xy, xz and yz planes
+:class: crystal-framed
+```
++++
+Coesite: the linear compressibility in the three principal planes.
 :::
 
 ::::
+
+**Two views.** A property is drawn as a surface over all directions, coloured
+by its value, or as sections through the principal planes *xy*, *xz* and *yz*.
+The entries of **Elastic properties** open the surfaces, those of **Elastic
+properties (2D)** the sections.
+
+**Beside the plot.** The tensor is read once, and the property, the view, the
+planes shown, the colour map and the resolution are changed beside the plot,
+which is redrawn from the tensor in memory. The shear modulus and Poisson's
+ratio depend on a second direction, perpendicular to the first, and are shown
+as their average, minimum or maximum over it. The moduli are in GPa, the
+linear compressibility in TPa⁻¹.
+
+The values are computed by
+[CRYSTALClear](https://crystaldevs.github.io/CRYSTALClear/), whose
+[notebooks](https://crystaldevs.github.io/CRYSTALClear/notebooks/index.html)
+work through each kind of plot in detail, what it is computed from and what
+can be varied.
+
+## Equation of state and XRD patterns
+
+**Plot → Equation of state** draws the energy against the volume of an `EOS`
+run, from the open output. **Plot → Simulated XRD pattern…** draws the pattern
+written by a properties run.
 
 ## Crystalline orbitals
 

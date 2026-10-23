@@ -25,7 +25,7 @@ from crystalline.crystalio.pes import (
     DEFAULT_WF_SCALE,
     DEFAULT_RANGE,
     QUANTITIES,
-    representations,
+    REPRESENTATIONS,
 )
 from crystalline.ui.panels.controls import (Section, left, scale_bounds,
                                             set_value_width, slider_row)
@@ -140,7 +140,7 @@ class PESOptions(QWidget):
         surface.add("Show", self.quantity)
 
         self.representation = QComboBox()
-        for label, key in representations():
+        for label, key in REPRESENTATIONS:
             self.representation.addItem(label, key)
         self.representation.setToolTip(
             "A map can be read off; a surface shows the shape.\n"

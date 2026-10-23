@@ -74,7 +74,7 @@ def test_the_controls_open_on_the_plot_s_window_and_its_track(qapp):
     knobs, moves = _knobs(answer)
 
     assert knobs.options()["energy_range"] == answer["energy_range"]
-    assert tuple(knobs._energy[0].bounds()) == answer["energy_bounds"]
+    assert tuple(knobs._window[0].bounds()) == answer["energy_bounds"]
     assert moves == []                       # opened on it, not announced
 
 
@@ -84,7 +84,7 @@ def test_a_dragged_window_is_the_window_drawn(qapp):
     answer = _answer(_dialog(qapp))
     knobs, moves = _knobs(answer)
 
-    knobs._energy[1].setValue(-6.0)
+    knobs._window[1].setValue(-6.0)
 
     assert moves[-1]["energy_range"][0] == -6.0
     assert _draw({**answer, **moves[-1]}) == pytest.approx((-6.0, answer["energy_range"][1]))
@@ -141,7 +141,7 @@ def test_editing_reopens_the_dialog_on_the_plot_s_own_choices(qapp):
     first._title.setText("MgO, my way")
     plotted = _answer(first)
     knobs, moves = _knobs(plotted)
-    knobs._energy[1].setValue(-6.0)
+    knobs._window[1].setValue(-6.0)
     plotted = {**plotted, **moves[-1]}
 
     again = ElectronicDialog(folder=_MGO)
@@ -153,7 +153,7 @@ def test_editing_reopens_the_dialog_on_the_plot_s_own_choices(qapp):
     assert _answer(again) == {**plotted, "dos_handles": _answer(again)["dos_handles"]}
     assert again._table.item(0, 0).checkState() == Qt.Unchecked
     assert again._table.item(1, 0).text() == "Mg s"
-    assert again.energy_window() == (-6.0, plotted["energy_range"][1])
+    assert again.window_values() == (-6.0, plotted["energy_range"][1])
 
 
 def test_the_tab_is_named_by_what_is_drawn():
@@ -237,7 +237,7 @@ def test_the_colours_beside_the_plot_are_the_plots_and_show_where_they_apply():
     assert not knobs.band_colour.isVisibleTo(knobs)       # folded
     assert not knobs.band_colour.isHidden() and not knobs.beta_colour.isHidden()
 
-    knobs.fermi_colour.setColour("#000000")
+    knobs.line_colour.setColour("#000000")
     assert moves and moves[-1]["fermi_colour"] == "#000000"
 
     dos, _moves = _knobs({"mode": el.DOS})

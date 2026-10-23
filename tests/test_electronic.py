@@ -265,7 +265,8 @@ def test_beryllium_is_shown_without_its_1s_band():
 ])
 def test_a_file_is_known_by_what_it_says_it_is(tmp_path, name, first_line, kind):
     path = tmp_path / name
-    path.write_text(first_line + "\n1 2 3\n")
+    # A real BAND.DAT or DOSS.DAT ends on the Fermi level; a phonon one does not.
+    path.write_text(first_line + "\n1 2 3\n# EFERMI (HARTREE)   -0.15411\n")
     assert el.file_kind(path) == kind
 
 
@@ -280,7 +281,7 @@ def test_text_files_rank_above_fort25_then_the_newest(tmp_path):
                               ("looks_like_text.BAND", "-%-0BAND    8   20 0.0", 10),
                               ("notes.txt", "# NKPT   120 NBND 8", 0)):
         path = tmp_path / name
-        path.write_text(header + "\n")
+        path.write_text(header + "\n# EFERMI (HARTREE)   -0.15411\n")
         os.utime(path, (1e9 - age, 1e9 - age))
     bands, doss = el.find_files(tmp_path)
     assert [os.path.basename(p) for p in bands] == [
@@ -292,9 +293,10 @@ def test_text_files_rank_above_fort25_then_the_newest(tmp_path):
 def test_a_coop_file_is_told_from_a_dos_by_its_axis_label_not_its_name(tmp_path):
     """Both open with # NEPTS; a DOSS.DAT's y axis is "DENSITY OF STATES"."""
     header = "# NEPTS   202 NPROJ     2 NSPIN     1\n#\n@ XAXIS LABEL \"E-EFERMI (HARTREE)\"\n"
-    (tmp_path / "DOSS.DAT").write_text(header + '@ YAXIS LABEL "COOP"\n')
+    fermi = "# EFERMI (HARTREE)   -0.15411\n"
+    (tmp_path / "DOSS.DAT").write_text(header + '@ YAXIS LABEL "COOP"\n' + fermi)
     (tmp_path / "COOP.DAT").write_text(
-        header + '@ YAXIS LABEL "DENSITY OF STATES (STATES/HARTREE/CELL)"\n')
+        header + '@ YAXIS LABEL "DENSITY OF STATES (STATES/HARTREE/CELL)"\n' + fermi)
 
     assert el.file_kind(tmp_path / "DOSS.DAT") is None
     assert el.file_kind(tmp_path / "COOP.DAT") == "dos"
@@ -673,9 +675,9 @@ def test_the_window_is_fitted_to_the_data(qapp):
     """It was −10…10 eV on a ±200 eV track for every file, whatever was in it."""
     dialog = _dialog(qapp, folder=_SI)
     info = dialog._bands_info
-    low, high = dialog.energy_window()
+    low, high = dialog.window_values()
     assert (low, high) == info.window
-    bound_low, bound_high = dialog.energy_bounds()
+    bound_low, bound_high = dialog.window_bounds()
     assert bound_low <= info.energy_span[0] and bound_high >= info.energy_span[1]
     assert bound_high - bound_low < 60, "the track spans the data, not ±200 eV"
 
@@ -683,15 +685,15 @@ def test_the_window_is_fitted_to_the_data(qapp):
 @needs_beryllium
 def test_the_track_reaches_the_core_the_window_leaves_out(qapp):
     dialog = _dialog(qapp, folder=_BE)
-    assert dialog.energy_bounds()[0] < -120
-    assert dialog.energy_window()[0] > -25
+    assert dialog.window_bounds()[0] < -120
+    assert dialog.window_values()[0] > -25
 
 
 @needs_silicon
 def test_a_dos_plot_takes_the_window_its_d3_asked_for(qapp):
     dialog = _dialog(qapp, folder=_SI)
     dialog.mode.setCurrentIndex(dialog.mode.findData(el.DOS))
-    low, high = dialog.energy_window()
+    low, high = dialog.window_values()
     span = dialog._dos_info.energy_span
     assert low <= span[0] and high >= span[1]
 
@@ -699,9 +701,9 @@ def test_a_dos_plot_takes_the_window_its_d3_asked_for(qapp):
 @needs_silicon
 def test_the_suggested_window_button_puts_it_back(qapp):
     dialog = _dialog(qapp, folder=_SI)
-    dialog._energy[1].setValue(-2.0)
-    dialog._fit_energy()
-    assert dialog.energy_window() == dialog._bands_info.window
+    dialog._window[1].setValue(-2.0)
+    dialog._fit_window()
+    assert dialog.window_values() == dialog._bands_info.window
 
 
 @needs_silicon
@@ -710,14 +712,14 @@ def test_switching_to_absolute_energies_carries_the_window_across(qapp):
     should say so rather than keep numbers that now mean something else."""
     dialog = _dialog(qapp, folder=_SI)
     efermi = dialog._bands_info.efermi
-    bounds = dialog.energy_bounds()
-    dialog._energy[1].setValue(-5.0)
-    dialog._energy[2].setValue(5.0)
+    bounds = dialog.window_bounds()
+    dialog._window[1].setValue(-5.0)
+    dialog._window[2].setValue(5.0)
     dialog.reference.setCurrentIndex(dialog.reference.findData(el.ABSOLUTE))
     dialog._on_frame_chosen()
     # to the boxes' two decimals
-    assert dialog.energy_window() == pytest.approx((-5.0 + efermi, 5.0 + efermi), abs=0.006)
-    assert dialog.energy_bounds() == pytest.approx(
+    assert dialog.window_values() == pytest.approx((-5.0 + efermi, 5.0 + efermi), abs=0.006)
+    assert dialog.window_bounds() == pytest.approx(
         (bounds[0] + efermi, bounds[1] + efermi), abs=1e-3), "and the track with it"
 
 
@@ -725,12 +727,12 @@ def test_switching_to_absolute_energies_carries_the_window_across(qapp):
 def test_switching_unit_converts_the_window_and_the_dos_range(qapp):
     dialog = _dialog(qapp, folder=_SI)
     dialog.mode.setCurrentIndex(dialog.mode.findData(el.BANDS_AND_DOS))
-    dialog._energy[1].setValue(-10.0)
-    dialog._energy[2].setValue(10.0)
+    dialog._window[1].setValue(-10.0)
+    dialog._window[2].setValue(10.0)
     dos_high = dialog._dos_span[2].value()
     dialog.unit.setCurrentIndex(dialog.unit.findData("Hartree"))
     dialog._on_frame_chosen()
-    assert dialog.energy_window()[1] == pytest.approx(10.0 / 27.211386, abs=1e-3)
+    assert dialog.window_values()[1] == pytest.approx(10.0 / 27.211386, abs=1e-3)
     assert dialog._dos_span[2].value() == pytest.approx(dos_high * 27.211386, rel=1e-3)
 
 
@@ -745,7 +747,7 @@ def test_a_remembered_unit_gets_a_window_in_that_unit(qapp):
     state = capture(first)
     dialog = _dialog(qapp, folder=_SI, state=state)
     window = dialog._bands_info.window
-    assert dialog.energy_window() == pytest.approx(
+    assert dialog.window_values() == pytest.approx(
         (window[0] / 27.211386, window[1] / 27.211386), abs=1e-3)
 
 
@@ -782,8 +784,8 @@ def test_the_request_carries_what_was_chosen(qapp):
     dialog._table.item(1, 0).setCheckState(Qt.Unchecked)
     dialog._table.item(0, 0).setText("Total")
     dialog._projection_colours[2].setColour("#112233")
-    dialog._energy[1].setValue(-4.0)
-    dialog._energy[2].setValue(4.0)
+    dialog._window[1].setValue(-4.0)
+    dialog._window[2].setValue(4.0)
     dialog.band_colour.setColour("#445566")
     dialog.fermi_style.setCurrentIndex(dialog.fermi_style.findData("--"))
     dialog._title.setText("Silicon")
@@ -819,7 +821,7 @@ def test_the_dialog_output_feeds_the_plotter(qapp):
     assert len(figure.axes) == 2
     ticks = [label.get_text() for label in figure.axes[0].get_xticklabels()]
     assert ticks == ["Γ", "X", "W", "L", "Γ"]
-    assert figure.axes[0].get_ylim() == pytest.approx(dialog.energy_window())
+    assert figure.axes[0].get_ylim() == pytest.approx(dialog.window_values())
 
 
 def test_settings_are_remembered_but_files_and_windows_are_not(qapp):

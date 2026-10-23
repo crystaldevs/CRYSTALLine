@@ -308,30 +308,6 @@ def pes_run(path: Optional[str]):
     return run, out
 
 
-def plottable() -> bool:
-    """Whether the installed CRYSTALClear can draw either cut."""
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return False
-    return hasattr(CCplt, "plot_cry_pes_1D") and any(
-        hasattr(CCplt, name) for name in PLOT_FUNCTIONS.values())
-
-
-def representations() -> Tuple[Tuple[str, str], ...]:
-    """The two-mode representations the installed CRYSTALClear can draw.
-
-    The 3D surface arrived after the map, so a build carrying only the latter
-    offers one choice rather than an entry that fails once it is picked.
-    """
-    try:
-        from CRYSTALClear import plot as CCplt
-    except Exception:  # noqa: BLE001 - CRYSTALClear missing/broken
-        return ()
-    return tuple((label, key) for label, key in REPRESENTATIONS
-                 if hasattr(CCplt, PLOT_FUNCTIONS[key]))
-
-
 #: How wide the potential is drawn, in points: CRYSTALClear's own width for it.
 DEFAULT_LINEWIDTH = 2.0
 
@@ -383,7 +359,7 @@ def plot_pes(
     is ignored by a one-mode cut, which is a curve either way; ``linewidth``
     (see :func:`scale_line_widths`) only means something on a one-mode cut.
     """
-    from crystalline.crystalio.plotting import PlotUnavailable, _plot_module, _to_figure
+    from crystalline.crystalio.plotting import _plot_module, _to_figure
 
     if dimension not in {key for _label, key in DIMENSIONS}:
         raise ValueError(f"unknown PES cut {dimension!r}")
@@ -393,11 +369,7 @@ def plot_pes(
     CCplt = _plot_module()  # imports CRYSTALClear with a non-interactive backend
     name = ("plot_cry_pes_1D" if dimension == "1D"
             else PLOT_FUNCTIONS[representation])
-    function = getattr(CCplt, name, None)
-    if function is None:
-        raise PlotUnavailable(
-            f"The installed CRYSTALClear cannot draw a PES (it has no plot.{name})."
-        )
+    function = getattr(CCplt, name)
 
     if dimension == "1D":
         if mode is None:
@@ -472,7 +444,6 @@ __all__ = [
     "PLOT_FUNCTIONS",
     "QUANTITIES",
     "REPRESENTATIONS",
-    "representations",
     "scale_line_widths",
     "PESMode",
     "PESPair",
@@ -481,5 +452,4 @@ __all__ = [
     "load_pes",
     "pes_run",
     "plot_pes",
-    "plottable",
 ]

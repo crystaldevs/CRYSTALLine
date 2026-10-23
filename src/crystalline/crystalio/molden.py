@@ -29,8 +29,9 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
+from CRYSTALClear.units import angstrom_to_au
 
-BOHR_PER_ANGSTROM = 1.8897261254535
+BOHR_PER_ANGSTROM = angstrom_to_au(1.0)
 
 # Atomic orbitals per shell, in the spherical convention these files declare with
 # [5D]/[7F]. "sp" is a Pople combined shell: one s and one p sharing exponents.

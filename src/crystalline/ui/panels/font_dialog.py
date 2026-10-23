@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 from crystalline.crystalio.plotting import (
     DEFAULT_FONT_FAMILY,
     DEFAULT_FONT_SIZE,
-    FONT_FAMILIES,
+    font_families,
     installed_font_names,
 )
 
@@ -52,7 +52,7 @@ class PlotFontDialog(QDialog):
         form = QFormLayout()
 
         self.family = QComboBox(self)
-        for label, key in FONT_FAMILIES:
+        for label, key in font_families():
             self.family.addItem(label, key)
         self.family.addItem("Other installed font…", _OTHER)
         self.family.currentIndexChanged.connect(self._sync)

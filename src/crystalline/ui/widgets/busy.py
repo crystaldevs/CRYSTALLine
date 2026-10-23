@@ -1,8 +1,8 @@
 """A modern busy indicator, and a way to run work without freezing behind it.
 
-The app used to mark long operations with ``Qt.WaitCursor`` — the platform's
-oldest idiom, a spinning disc or an hourglass on the pointer, that says only
-"wait" and says it in the corner of the eye.
+Not ``Qt.WaitCursor`` — the platform's oldest idiom, a spinning disc or an
+hourglass on the pointer, that says only "wait" and says it in the corner of
+the eye.
 
 The two halves here go together on purpose. An animated indicator over work that
 blocks the main thread is *worse* than a cursor: the animation freezes with

@@ -87,5 +87,5 @@ the phase is what distinguishes them.
 
 ## Phonon band structures
 
-Phonon band structures and densities of states are plotted from the **Plot**
-menu; see [Property plots](plots.md).
+Phonon band structures and densities of states are plotted by **Plot → Phonon
+bands & DOS…**; see [Property plots](plots.md#phonon-band-structures-and-densities-of-states).

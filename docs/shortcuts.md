@@ -78,10 +78,11 @@ On macOS the tabs are stepped through with {kbd}`⌃Tab` and {kbd}`⌃⇧Tab`, a
 
 ## Plot
 
-Electronic bands & DOS… · Vibrational spectra… · VCI states… · Anharmonic
-scan… · Anharmonic PES… · elastic properties · equation of state · phonon band
-structure… · phonon density of states… · simulated XRD… · Crystalline
-orbitals… · Clear orbital · Plot font…
+Elastic properties ▸ · Elastic properties (2D) ▸ · Equation of state ·
+Simulated XRD pattern… · Electronic bands & DOS… · Phonon bands & DOS… ·
+Vibrational spectra… · VCI states… · Anharmonic scan… · Anharmonic PES… ·
+Crystalline orbitals… · Clear orbital · Electron density & potential… · Clear
+field · Plot font…
 
 The entries are enabled when the output contains the corresponding data; see
 [Property plots](plots.md).

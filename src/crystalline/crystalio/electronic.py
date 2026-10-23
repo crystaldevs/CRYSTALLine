@@ -1,10 +1,8 @@
 """Electronic band structures and densities of states, with their options.
 
-The Plot menu used to offer a band structure and a DOS as two one-click
-entries, each drawn with every CRYSTALClear option at its default and no way to
-put the two side by side. This is the model behind a dialog instead — the same
-move the vibrational spectra made — and it deals with what the defaults got
-wrong:
+The model behind the electronic bands dialog: a band structure, a DOS, or the
+two side by side, drawn by CRYSTALClear with what its defaults leave out put
+right:
 
 * **The energy reference.** CRYSTAL writes band and DOS energies already
   relative to the Fermi level, and CRYSTALClear draws its Fermi line at zero
@@ -42,6 +40,7 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
+from CRYSTALClear.units import eV_to_H
 
 BANDS = "bands"
 DOS = "dos"
@@ -86,7 +85,6 @@ PROJECTION_COLOURS = ("#0b7a96", "#d9822b", "#8e5bb5", "#c2414b", "#5b6878",
 # is 104 eV below the valence band, MgO's O 2s 12 eV).
 CORE_GAP = 10.0
 
-_HARTREE_EV = 27.211386245988
 _TICK = re.compile(r"\(\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*\)\s*(?:/\s*(\d+))?")
 _OCCUPIED = 0.05          # eV: a band starting below this is (partly) occupied
 
@@ -227,6 +225,30 @@ def file_kind(path) -> Optional[str]:
     them apart is the y-axis label a few lines down — "DENSITY OF STATES" in a
     DOSS.DAT (manual, Appendix D) — so a ``# NEPTS`` file whose label says
     anything else is not taken for a density of states.
+
+    Phonon bands and densities of states are written in the same formats, and
+    are not electronic ones: see :func:`data_kind`.
+    """
+    found = data_kind(path)
+    return found[1] if found is not None and found[0] == ELECTRON else None
+
+
+ELECTRON = "electron"
+PHONON = "phonon"
+
+
+def data_kind(path) -> Optional[Tuple[str, str]]:
+    """``(ELECTRON or PHONON, "band" or "dos")``, or ``None``, from the contents.
+
+    A dispersion run writes its phonon bands and DOS in the formats a
+    PROPERTIES run uses for electrons: ``PHONBANDS.DAT`` opens with the same
+    ``# NKPT`` as a ``BAND.DAT``, and its fort.25 with the same ``-%-0BAND``.
+    They are told apart as CRYSTALClear's readers tell them apart, so that a
+    file is offered where it will be read the way it is meant: an electronic
+    text file ends on the Fermi level (``# EFERMI``), a phonon one does not;
+    an electronic fort.25 records the Fermi level in its header where a
+    phonon one writes zero. A phonon DOS in a fort.25 says so outright
+    (``-%-0PDOS``).
     """
     head = _head(path)
     if not head:
@@ -234,16 +256,41 @@ def file_kind(path) -> Optional[str]:
     first = head[0].strip()
     if first.startswith("-%-"):
         tag = first[4:8].upper()
-        return BAND_FILE if tag == "BAND" else DOS_FILE if tag == "DOSS" else None
+        if tag == "PDOS":
+            return PHONON, DOS_FILE
+        if tag == "DOSS":
+            return ELECTRON, DOS_FILE
+        if tag != "BAND":
+            return None
+        try:
+            fermi = float(head[0][42:54])
+        except ValueError:
+            return ELECTRON, BAND_FILE
+        return (PHONON if abs(fermi) < 1e-5 else ELECTRON), BAND_FILE
     if re.match(r"# NKPT\s+\d+", first):
-        return BAND_FILE
+        return (ELECTRON if _ends_on_the_fermi_level(path) else PHONON), BAND_FILE
     if re.match(r"# NEPTS\s+\d+", first):
+        if not _ends_on_the_fermi_level(path):
+            return PHONON, DOS_FILE
         for line in head[1:]:
             text = line.strip().upper()
             if text.startswith("@ YAXIS LABEL"):
-                return DOS_FILE if "DENSITY OF STATES" in text else None
-        return DOS_FILE
+                return (ELECTRON, DOS_FILE) if "DENSITY OF STATES" in text else None
+        return ELECTRON, DOS_FILE
     return None
+
+
+def _ends_on_the_fermi_level(path) -> bool:
+    """Whether the last line of a text data file records the Fermi level."""
+    try:
+        with open(path, "rb") as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - 512))
+            tail = handle.read().decode(errors="ignore")
+    except OSError:
+        return False
+    lines = [line for line in tail.splitlines() if line.strip()]
+    return bool(lines) and "EFERMI" in lines[-1].upper()
 
 
 def _is_fort25(path) -> bool:
@@ -257,9 +304,10 @@ def find_files(folder, efermi: Optional[float] = None
 
     Files are picked out by extension and identified by their first line —
     never by the rest of the name. Best is a text file over a fort.25 — told
-    apart by that first line: a fort.25 drops the shrinking factor under its tick labels, so its
-    corners cannot be named — then the newest, since ``BAND.DAT`` is
-    overwritten by every run and the one just made is the one wanted.
+    apart by that first line: a fort.25 drops the shrinking factor under its
+    tick labels, so its corners cannot be named — then the newest, since
+    ``BAND.DAT`` is overwritten by every run and the one just made is the one
+    wanted.
 
     First of all, though, the files of the calculation that is open: a folder
     shared by several systems would otherwise offer whichever ran last. Which
@@ -491,36 +539,53 @@ def _band_blocks(text: str, path: str) -> List[BandDeck]:
             n_lines, shrink = int(header[0]), int(header[1])
         except (ValueError, IndexError):
             continue
-        corners: List[Tuple[int, int, int]] = []
-        labels: List[str] = []
-        by_name = True
-        for raw in lines[index + 3: index + 3 + n_lines]:
-            tokens = raw.split()
-            names = [token for token in tokens if token.isalpha()]
-            numbers: List[int] = []
-            for token in tokens[:6]:
-                try:
-                    numbers.append(int(token))
-                except ValueError:
-                    break
-            if len(numbers) == 6:
-                by_name = False
-                start, end = tuple(numbers[:3]), tuple(numbers[3:6])
-                if not corners:
-                    corners.append(start)
-                elif start != corners[-1]:
-                    break                           # a path with a jump in it
-                corners.append(end)
-            elif not (by_name and len(names) == 2):
-                break                               # neither form: not a path line
-            first, second = (names + ["", ""])[:2]
-            if not labels:
-                labels.append(first)
-            labels.append(second)
-        if len(labels) == n_lines + 1 and (by_name or len(corners) == n_lines + 1):
-            blocks.append(BandDeck(path=path, shrink=shrink,
-                                   corners=tuple(corners), labels=tuple(labels)))
+        path_read = read_segments(lines[index + 3: index + 3 + n_lines], n_lines)
+        if path_read is not None:
+            corners, labels = path_read
+            blocks.append(BandDeck(path=path, shrink=shrink, corners=corners, labels=labels))
     return blocks
+
+
+def read_segments(rows: Sequence[str], n_lines: int
+                  ) -> Optional[Tuple[Tuple[Tuple[int, int, int], ...], Tuple[str, ...]]]:
+    """``(corners, labels)`` of a path written one segment per line, or ``None``.
+
+    A segment line is six integers — the two ends, over the shrinking factor —
+    optionally followed by the two letters naming them; or, in a path given by
+    label alone, the two letters with no integers, and then the corners are
+    empty. The PROPERTIES ``BAND`` block and the ``BANDS`` block of a phonon
+    dispersion are written this way. A path that jumps between segments, or a
+    line of neither form, is not read as one.
+    """
+    corners: List[Tuple[int, int, int]] = []
+    labels: List[str] = []
+    by_name = True
+    for raw in rows:
+        tokens = raw.split()
+        names = [token for token in tokens if token.isalpha()]
+        numbers: List[int] = []
+        for token in tokens[:6]:
+            try:
+                numbers.append(int(token))
+            except ValueError:
+                break
+        if len(numbers) == 6:
+            by_name = False
+            start, end = tuple(numbers[:3]), tuple(numbers[3:6])
+            if not corners:
+                corners.append(start)
+            elif start != corners[-1]:
+                return None                         # a path with a jump in it
+            corners.append(end)
+        elif not (by_name and len(names) == 2):
+            return None                             # neither form: not a path line
+        first, second = (names + ["", ""])[:2]
+        if not labels:
+            labels.append(first)
+        labels.append(second)
+    if len(labels) == n_lines + 1 and (by_name or len(corners) == n_lines + 1):
+        return tuple(corners), tuple(labels)
+    return None
 
 
 def deck_labels(ticks: Sequence[str], folder) -> Optional[List[str]]:
@@ -622,10 +687,10 @@ def plot_title(mode: str) -> str:
 def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = None,
                     options: Optional[ElectronicOptions] = None):
     """Draw a band structure, a DOS, or the two side by side. Returns a Figure."""
-    from crystalline.crystalio.plotting import _plot_module, _to_figure
+    from crystalline.crystalio.plotting import _plot_module
 
     options = options or ElectronicOptions()
-    plot = _plot_module()
+    _plot_module()
     need_bands = options.mode in (BANDS, BANDS_AND_DOS)
     need_dos = options.mode in (DOS, BANDS_AND_DOS)
     if need_bands and not bands_path:
@@ -635,13 +700,6 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
 
     bands = _read_bands(bands_path) if need_bands else None
     doss = _read_dos(dos_path) if need_dos else None
-    # A legend of one entry, or of none, is not drawn whatever was asked: it
-    # names the one thing on the plot, which its tab already does.
-    drawn = len(_projections(options.projections, doss.n_proj)) if doss is not None else 0
-    options = replace(options, legend=options.legend and legend_names_anything(
-        options.mode, drawn, bands is not None and int(bands.spin) == 2,
-        doss is not None and int(doss.spin) == 2, options.overlay_projections))
-
     # Everything is read in eV, relative to E_F. An absolute plot moves the data
     # up by E_F *before* CRYSTALClear converts units, so the shift and the unit
     # conversion compose the way they should.
@@ -653,7 +711,29 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
         if doss is not None:
             doss.doss[:, 0, :] += shift
 
-    fermi_at = shift if options.unit == "eV" else shift / _HARTREE_EV
+    fermi_at = shift if options.unit == "eV" else eV_to_H(shift)
+    figure, energy_axis = draw(bands, doss, options, fermi_at)
+    _label_energy(figure, energy_axis, options)
+    return figure
+
+
+def draw(bands, doss, options: ElectronicOptions, fermi_at: float = 0.0):
+    """Draw what is read, in ``options.unit``, and return ``(figure, energy_axis)``.
+
+    The part of :func:`plot_electronic` that does not care what the numbers
+    are: the phonon plot comes through here too, with frequencies where the
+    energies would be and its zero line where the Fermi level is. The axis
+    saying which is left to the caller.
+    """
+    from crystalline.crystalio.plotting import _plot_module, _to_figure
+
+    plot = _plot_module()
+    # A legend of one entry, or of none, is not drawn whatever was asked: it
+    # names the one thing on the plot, which its tab already does.
+    drawn = len(_projections(options.projections, doss.n_proj)) if doss is not None else 0
+    options = replace(options, legend=options.legend and legend_names_anything(
+        options.mode, drawn, bands is not None and int(bands.spin) == 2,
+        doss is not None and int(doss.spin) == 2, options.overlay_projections))
     common = dict(unit=options.unit, energy_range=_span(options.energy_range),
                   fermi=FERMI_COLOUR, title=options.title or None)
 
@@ -670,7 +750,7 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
             linewidth=options.linewidth, **common))
         if beta is not None:
             if options.unit != "eV":
-                beta = beta / _HARTREE_EV
+                beta = eV_to_H(beta)
             _overlay_beta(figure, beta, bands.n_kpoints, options)
         _tidy_k_axis(figure.axes[0])
         energy_axis = "y"
@@ -717,12 +797,11 @@ def plot_electronic(bands_path: Optional[str] = None, dos_path: Optional[str] = 
         energy_axis = "y"
 
     _style_fermi(figure, energy_axis, fermi_at, options)
-    _label_energy(figure, energy_axis, options)
     if options.title:
         from crystalline.crystalio.figure_style import keep_title
 
         keep_title(figure)      # typed into the dialog: wanted
-    return figure
+    return figure, energy_axis
 
 
 # ── finishing touches CRYSTALClear does not offer ─────────────────────────
@@ -890,9 +969,11 @@ __all__ = [
     "BAND_COLOUR",
     "BETA_COLOUR",
     "DOS",
+    "ELECTRON",
     "FERMI_COLOUR",
     "LINE_STYLES",
     "MODES",
+    "PHONON",
     "PROJECTION_COLOURS",
     "REFERENCES",
     "RELATIVE",
@@ -905,6 +986,8 @@ __all__ = [
     "clean_tick",
     "describe_bands",
     "describe_dos",
+    "data_kind",
+    "draw",
     "file_kind",
     "find_files",
     "BandDeck",
@@ -915,6 +998,7 @@ __all__ = [
     "path_labels",
     "plot_title",
     "read_band_decks",
+    "read_segments",
     "plot_electronic",
     "suggest_window",
     "tick_coordinates",

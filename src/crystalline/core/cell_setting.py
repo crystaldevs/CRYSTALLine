@@ -11,12 +11,10 @@ The app offers both views, as :data:`COMPUTED` and :data:`STANDARD`:
 * **as in the file** — the cell exactly as it is held, in whichever setting of
   its group that cell is. :func:`find_setting` recognises it by asking spglib,
   setting by setting, which one describes the cell with no change of basis.
-  (The key is ``"computed"``, from when the app only ever opened CRYSTAL
-  output and the cell on screen was always a computed one. A CIF is not, and
-  neither is an edited structure, so the label names where the cell came from
-  rather than what was done to it.)
-* **standard** — pymatgen's conventional standard cell, which is what the app
-  used to report everywhere.
+  (The key is ``"computed"``, though a CIF's cell is not a computed one and
+  neither is an edited structure's; the label shown names where the cell came
+  from rather than what was done to it.)
+* **standard** — pymatgen's conventional standard cell.
 
 Writing either one into a ``.d12`` needs the setting named the way CRYSTAL
 reads it (manual, geometry input, record ``IFLAG IFHR IFSO``):
