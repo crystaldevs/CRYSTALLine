@@ -107,8 +107,8 @@ The atoms are taken in the order they were picked: the second is the vertex
 of an angle, and the second and third are the central bond of a dihedral.
 
 Measurements are listed in a table, the value beside the atoms. A new
-measurement is listed unticked, and is drawn in the view only once its tick is
-set; unticked again, it stays in the table. A click on a heading sorts the table by that
+measurement is ticked and drawn in the view as it is listed; unticked, it is
+hidden and stays in the table. A click on a heading sorts the table by that
 column, and a third click on the same heading stops sorting. They can be
 coloured individually or by type. The **Thickness** slider sets how thick the
 lines of distances, angles and dihedrals are drawn, in Å: those selected in the

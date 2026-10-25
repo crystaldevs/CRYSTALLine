@@ -49,9 +49,9 @@ def test_measuring_two_atoms_lists_a_distance(qapp):
     result = panel.measurements()[0]
     assert result.kind == M.DISTANCE
     assert result.value == pytest.approx(0.9572, abs=1e-4)
-    # listed, but not drawn until ticked: that is the user's to decide
-    assert emitted and emitted[-1] == []
-    assert panel._items()[0].checkState(0) == Qt.Unchecked
+    # new measurements are shown in 3D straight away
+    assert emitted and len(emitted[-1]) == 1
+    assert panel._items()[0].checkState(0) == Qt.Checked
 
 
 def test_measuring_three_atoms_gives_an_angle(qapp):
@@ -100,18 +100,18 @@ def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
     assert panel._fit_plane_btn.isEnabled()          # where the plane went
 
 
-def test_a_new_measurement_is_listed_and_drawn_only_once_ticked(qapp):
-    """Whether a measurement goes into the view is the user's to decide: drawn
-    straight away, every bond measured to read its length put a line and a
-    label over it."""
+def test_a_new_measurement_is_listed_ticked_and_drawn(qapp):
+    """A measurement is taken to be seen: it comes ticked, in the table's first
+    column, and drawn; unticked, it is hidden and stays listed."""
     panel = GeometryPanel(_water())
     shown = []
     panel.annotations_changed.connect(lambda anns: shown.append(list(anns)))
     panel.set_selection([0, 1])
     panel._measure_selection()
-    assert panel.shown_annotations() == [] and len(panel.measurements()) == 1
-    panel._items()[0].setCheckState(0, Qt.Checked)     # the tick is the first column's
+    assert panel._items()[0].checkState(0) == Qt.Checked     # the tick is the first column's
     assert len(panel.shown_annotations()) == 1 and len(shown[-1]) == 1
+    panel._items()[0].setCheckState(0, Qt.Unchecked)
+    assert panel.shown_annotations() == [] and len(panel.measurements()) == 1
 
 
 def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
@@ -120,7 +120,6 @@ def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
     panel.annotations_changed.connect(lambda anns: shown.append(list(anns)))
     panel.set_selection([0, 1])
     panel._measure_selection()
-    panel._items()[0].setCheckState(0, Qt.Checked)
     assert len(panel.shown_annotations()) == 1
 
     panel._items()[0].setCheckState(0, Qt.Unchecked)
@@ -225,8 +224,6 @@ def test_setting_a_per_item_colour(qapp, monkeypatch):
     panel._measure_selection()  # a distance
     panel.set_selection([1, 0, 2])
     panel._measure_selection()  # an angle
-    for item in panel._items():
-        item.setCheckState(0, Qt.Checked)               # both drawn, so the redraw has them
     assert [m.color for m in panel.measurements()] == [None, None]  # default (group) colour
 
     emitted = []
@@ -263,8 +260,6 @@ def test_the_thickness_slider_sets_every_line_or_the_selected_ones(qapp):
     panel._measure_selection()
     panel.set_selection([1, 0, 2])
     panel._measure_selection()
-    for item in panel._items():
-        item.setCheckState(0, Qt.Checked)               # both drawn, so the redraw has them
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.07, 0.07])
 
     # nothing selected in the list: every line follows, live
@@ -1008,8 +1003,8 @@ def test_sorting_moves_each_measurement_with_its_row(qapp):
     _measure(panel, 3)               # H4, a point: no single value
     _measure(panel, 0, 2)            # O1–H3, 0.970 Å
     _measure(panel, 0, 3)            # O1···H4, 1.978 Å
-    for row in (1, 2):                                    # H4 and O1–H3 drawn, the rest not
-        panel._items()[row].setCheckState(0, Qt.Checked)
+    for row in (0, 3):                                    # H4 and O1–H3 drawn, the rest not
+        panel._items()[row].setCheckState(0, Qt.Unchecked)
 
     panel._list.header().setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
     assert [_row(panel, r)[_COL_VALUE] for r in range(4)] == [
@@ -1286,8 +1281,7 @@ def test_a_local_mode_column_sorts_with_the_empty_rows_last(qapp):
     _measure(panel, 0, 1)            # O1–O2, kᵃ 4.2
     _measure(panel, 0, 3)            # O1···H4, none
     _measure(panel, 0, 2)            # O1–H3, kᵃ 6.5
-    for row in (1, 2):                                    # O1···H4 and O1–H3 drawn, O1–O2 not
-        panel._items()[row].setCheckState(0, Qt.Checked)
+    panel._items()[0].setCheckState(0, Qt.Unchecked)       # O1···H4 and O1–H3 drawn, O1–O2 not
 
     panel._list.header().setSortIndicator(_COL_K, Qt.DescendingOrder)
     assert [_row(panel, r)[_COL_K] for r in range(3)] == ["6.500", "4.200", ""]

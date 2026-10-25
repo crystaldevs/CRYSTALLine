@@ -889,10 +889,9 @@ class GeometryPanel(QWidget):
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
         blocked = self._list.blockSignals(True)  # itemChanged would draw it half-made
         try:
-            # Listed, not drawn: whether a measurement goes into the view is the
-            # user's to decide, with its tick. Drawn straight away, every bond
-            # measured to read its length put a line and a label over it.
-            item.setCheckState(_COL_NAME, Qt.Unchecked)
+            # Drawn as it is listed (Filippo, 2026-10-23): a measurement is
+            # taken to be seen, and unticked it is hidden but kept.
+            item.setCheckState(_COL_NAME, Qt.Checked)
             self._fill_measure_row(item, result)
             self._list.addTopLevelItem(item)
         finally:
@@ -1032,7 +1031,7 @@ class GeometryPanel(QWidget):
         item = QListWidgetItem(self._plane_summary(plane))
         item.setToolTip(self._plane_tooltip(plane))
         item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-        item.setCheckState(Qt.Checked)  # shown straight away: a plane is added to be seen
+        item.setCheckState(Qt.Checked)  # shown straight away, like a measurement
         item.setIcon(_colour_swatch(plane.color))
         blocked = self._plane_list.blockSignals(True)
         self._plane_list.addItem(item)
