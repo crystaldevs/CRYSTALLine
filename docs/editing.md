@@ -90,9 +90,9 @@ that of the current structure.
 ## Measurements
 
 The **Geometry** panel is in three sections, **Measure**, **Lattice planes**
-and **Atoms**, each folded or unfolded with a click on its title. All three
-start folded each time the program is started, and one unfolded stays unfolded
-in every tab.
+and **Atoms**, each folded or unfolded with a click on its title. The ones left
+open stay open in every tab; all three start folded each time the program is
+started.
 
 **Measure** measures the current selection:
 
@@ -103,24 +103,15 @@ in every tab.
 | 3              | an angle                 |
 | 4              | a dihedral angle         |
 
-The atoms are taken in the order they were picked: the second is the vertex
-of an angle, and the second and third are the central bond of a dihedral.
 
-Measurements are listed in a table, the value beside the atoms. A new
-measurement is ticked and drawn in the view as it is listed; unticked, it is
-hidden and stays in the table. A click on a heading sorts the table by that
-column, and a third click on the same heading stops sorting. They can be
-coloured individually or by type. The **Thickness** slider sets how thick the
-lines of distances, angles and dihedrals are drawn, in Å: those selected in the
-table, all of them when none is selected, and the ones measured next. A plane
-through the selected atoms is fitted under **Lattice planes**.
+Measurements remain drawn in the view and can be coloured individually or by
+type. The **Thickness** slider sets how thick the lines of distances, angles and
+dihedrals are drawn, in Å: those selected in the list, all of them when none is
+selected, and the ones measured next. A plane through the selected atoms is
+fitted under **Lattice planes**. The measured quantities are listed in a table
+that can be exported to a `.csv` file.
 
-**Export to CSV…**, under the table's buttons, writes the table to a CSV file,
-offered beside the file the tab has open and named after it: every row in the
-order shown, ticked or not, with the measured values in full rather than to the
-three places the table shows. A point's position takes three columns of its
-own. The file starts with a UTF-8 byte-order mark, so that a spreadsheet shows
-Å and ° as they are.
+
 
 ### Local modes
 
@@ -129,49 +120,14 @@ four more columns. A bond, an angle or a dihedral measured on the atoms of one
 of the internal coordinates LOCMODES computed a force constant for shows that
 coordinate's local mode beside the measured value:
 
-| Column | Quantity | Unit |
-| ------ | -------- | ---- |
-| *k*ᵃ | local force constant | mdyn/Å |
-| *k*ᵃ(d) | local force constant of an angle or a dihedral | mdyn·Å/rad² |
-| *m*ᵃ | local mass | amu for a bond, amu·Å for an angle or a dihedral |
-| *ω*ᵃ | local frequency | cm⁻¹ |
+| Column  | Quantity                                       | Unit                                             |
+| ------- | ---------------------------------------------- | ------------------------------------------------ |
+| *k*ᵃ    | local force constant                           | mdyn/Å                                           |
+| *k*ᵃ(d) | local force constant of an angle or a dihedral | mdyn·Å/rad²                                      |
+| *m*ᵃ    | local mass                                     | amu for a bond, amu·Å for an angle or a dihedral |
+| *ω*ᵃ    | local frequency                                | cm⁻¹                                             |
 
-A measurement is recognised by its atoms and by where they are relative to one
-another, so it can be taken in any cell on screen, and from either end: an
-angle keeps its vertex in the middle, as LOCMODES has it. An internal coordinate
-whose atoms lie in neighbouring cells is found on the images drawn there:
-boundary atoms, or a supercell. A near-linear angle, which LOCMODES treats as
-two bends over the same three atoms, shows both, separated by a slash, as do
-two coordinates LOCMODES defines over the same four atoms. Hovering
-over a row gives the coordinate as CRYSTAL numbers it, with the cell of each
-atom outside the reference one and CRYSTAL's own value, which for some
-coordinates is not the plain angle of the atoms. A measurement that is none of
-the internal coordinates leaves the four columns empty, and sorts below the
-rest. The section is read by CRYSTALClear, which is installed with CRYSTALLine,
-just after the structure is shown, so on a large run the four columns appear
-a moment after the file opens; anything measured before then gets its local
-mode when they do.
-How much of each normal mode every internal
-coordinate is, the same section's characterisation of normal modes, is drawn
-from the Plot menu (see [local modes](plots.md#local-modes)).
 
-LOCMODES does not always list every coordinate of a set the crystal's symmetry
-makes equivalent, and equivalent coordinates share a local mode. A measurement
-that is not listed itself, but that an operation of the crystal carries onto a
-coordinate that is, shows that coordinate's local mode, in *italics*; hovering
-gives the coordinate and the operation, written as in the International Tables
-but with the coordinates named after the primitive cell's axes
-(`-a+1/2, b+1/2, -c+1/2`), so that they are not taken for the Cartesian *x*, *y*
-and *z* of the positions. Only the calculation's own symmetry is
-used: the operations found in the geometry are kept when there are as many as
-CRYSTAL used, and otherwise only those its local modes bear out, and an
-operation under which the local modes differ is never used.
-
-Exported, each measurement carries the internal coordinate it is: its number
-in the output, its atoms as CRYSTAL names them, CRYSTAL's value, and *k*ᵃ,
-*k*ᵃ(d), *m*ᵃ and *ω*ᵃ as printed, and whether it was found as listed or by
-symmetry, with the operation. A near-linear angle is written once for each of
-its two bends.
 
 ## Lattice planes
 
