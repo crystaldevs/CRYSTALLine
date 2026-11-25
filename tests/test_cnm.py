@@ -216,6 +216,25 @@ def test_the_bars_are_drawn_in_the_house_colours():
                                                                   cnm.RESIDUES]
 
 
+def test_the_empty_bars_are_hidden_and_every_group_keeps_its_swatch():
+    """CRYSTALClear gives every group a bar on every mode, empty where it is
+    under the threshold; hidden, they cost nothing to draw. 9 CH is under it
+    on mode 4, its first: hidden before the legend was built, its swatch,
+    a copy of that bar, would have gone with it."""
+    from matplotlib.container import BarContainer
+
+    figure = cnm.plot_cnm(_run(), modes=(4, 5, 6, 7), colours={})
+    ax = figure.axes[0]
+    bars = {c.get_label(): c.patches for c in ax.containers if isinstance(c, BarContainer)}
+    assert bars["9 CH"][0].get_height() == 0                 # under 1 % on mode 4
+    every = [p for patches in bars.values() for p in patches]
+    assert all(p.get_visible() == (p.get_height() != 0) for p in every)
+    assert any(not p.get_visible() for p in every)
+    legend = ax.get_legend()
+    handles = getattr(legend, "legend_handles", None) or legend.legendHandles
+    assert len(handles) == len(bars) and all(h.get_visible() for h in handles)
+
+
 def test_a_number_on_a_bar_is_in_the_colour_that_reads_on_it():
     from crystalline.crystalio.figure_style import INK
 

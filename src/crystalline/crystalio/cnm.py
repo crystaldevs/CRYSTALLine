@@ -400,14 +400,36 @@ def _restyle(figure, memory: Dict[str, str], legend: bool,
     ax.tick_params(axis="x", which="major", top=False)
     setattr(figure, LEGEND_COLUMNS, 0)
     old = ax.get_legend()
-    if old is None:
-        return
-    old.remove()
-    if legend:
-        columns = legend_columns(len(groups))
-        ax.legend(ncol=columns, loc="center left", bbox_to_anchor=(1, 0.5),
-                  prop={"size": LEGEND_SIZE})
-        setattr(figure, LEGEND_COLUMNS, columns)
+    if old is not None:
+        old.remove()
+        if legend:
+            columns = legend_columns(len(groups))
+            ax.legend(ncol=columns, loc="center left", bbox_to_anchor=(1, 0.5),
+                      prop={"size": LEGEND_SIZE})
+            setattr(figure, LEGEND_COLUMNS, columns)
+    # Last, once the legend is built: it copies each group's first bar, its
+    # visibility with the rest, and a group whose first bar is empty would
+    # lose its swatch.
+    _hide_empty(bars)
+
+
+def _hide_empty(bars) -> None:
+    """Hide the bars of no height, which show nothing.
+
+    CRYSTALClear's stacked bars give every group a bar on every mode, empty
+    where the group is under the threshold: 1560 bars on DAFADNP's 13 modes at
+    1 %, 1181 of them empty. Each still cost its share of every draw (326 ms
+    against 252 once hidden at 1×, 331 against 260 at 2×), its edge only
+    stroked over the line it sits on. Hidden, not a pixel changes at 1×; at
+    2× the baseline's upper pixel row is a shade lighter (by at most 40 of
+    255), as the empty bars of the lowest groups no longer stroke over it.
+    Hidden, not removed: the containers keep every bar, which is how the
+    figure says what each group is (:func:`drawn_groups`).
+    """
+    for container in bars:
+        for patch in container.patches:
+            if patch.get_height() == 0:
+                patch.set_visible(False)
 
 
 # ── drawing ─────────────────────────────────────────────────────────────────
