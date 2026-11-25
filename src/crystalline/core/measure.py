@@ -52,6 +52,12 @@ class Measurement:
     color: Optional[str] = None
     # How thick (Å) its line is drawn. A point is a dot, and has no line.
     thickness: float = DEFAULT_THICKNESS
+    # The LOCMODES internal coordinates this is, when the run computed any —
+    # :class:`crystalline.core.local_modes.LocalCoordinate`, usually one; two
+    # for a near-linear angle, which LOCMODES takes as two bends. Empty
+    # otherwise. Kept on the measurement so it follows it through a sort or a
+    # restyle.
+    local: Tuple[object, ...] = ()
 
     @property
     def unit(self) -> str:
@@ -159,23 +165,37 @@ def _label(symbols: Sequence[str], indices: Sequence[int], joiner: str) -> str:
     return f"{text} +{extra} more" if extra > 0 else text
 
 
-# The table's columns, written out: what was measured.
+# The table's columns, written out: what was measured, and — for a LOCMODES run —
+# the internal coordinate it is, in CRYSTAL's terms and units (the K^A ... W^A
+# of its own table of force constants).
 EXPORT_COLUMNS = ("Kind", "Atoms", "Value", "Unit")
 EXPORT_POSITION_COLUMNS = ("x (Å)", "y (Å)", "z (Å)")
+EXPORT_LOCAL_COLUMNS = ("LOCMODES coordinate", "CRYSTAL atoms", "CRYSTAL value",
+                        "K^A (mdyn/Å)", "K^A(D) (mdyn·Å/rad²)",
+                        "M^A (amu; amu·Å for angles and dihedrals)", "W^A (cm⁻¹)",
+                        "Found")
 
 
-def export_rows(measurements: Sequence[Measurement]) -> Tuple[list, list]:
+def export_rows(measurements: Sequence[Measurement],
+                local_modes: bool = False) -> Tuple[list, list]:
     """``(header, rows)`` for writing ``measurements`` out as a table.
 
     One row per measurement, in the order given — the order on screen — with
     the measured value in full rather than to the three places the table
     shows. A point's position goes in three columns of its own, there only
-    when the table has a point.
+    when the table has a point. With ``local_modes``, each row also carries the
+    LOCMODES internal coordinate the measurement is, its numbers as CRYSTAL
+    prints them, and whether it was found as listed or as the symmetry image
+    of a listed coordinate; a near-linear angle, which is two bends, is two rows, the
+    measurement repeated on each, and a measurement that is no internal
+    coordinate leaves those columns empty.
     """
     points = any(m.kind == POINT for m in measurements)
     header = list(EXPORT_COLUMNS)
     if points:
         header += EXPORT_POSITION_COLUMNS
+    if local_modes:
+        header += EXPORT_LOCAL_COLUMNS
     rows = []
     for m in measurements:
         if m.kind == POINT:
@@ -185,8 +205,26 @@ def export_rows(measurements: Sequence[Measurement]) -> Tuple[list, list]:
         if points:
             measured += ([f"{v:.6f}" for v in np.asarray(m.points, dtype=float)[0]]
                          if m.kind == POINT else ["", "", ""])
-        rows.append(measured)
+        if not local_modes:
+            rows.append(measured)
+            continue
+        for coordinate in m.local or (None,):
+            rows.append(measured + _local_cells(coordinate))
     return header, rows
+
+
+def _local_cells(coordinate) -> list:
+    """An internal coordinate's columns: empty when the measurement is none."""
+    if coordinate is None:
+        return [""] * len(EXPORT_LOCAL_COLUMNS)
+    angular = coordinate.angular_force_constant
+    # As listed, or as the symmetry image of the listed coordinate the numbers
+    # are from — the operation carrying the measurement onto it.
+    symmetry = getattr(coordinate, "symmetry", None)
+    found = f"by symmetry ({symmetry})" if symmetry else "as listed"
+    return [str(coordinate.number), coordinate.atom_label(), repr(coordinate.value),
+            repr(coordinate.force_constant), "" if angular is None else repr(angular),
+            repr(coordinate.mass), repr(coordinate.frequency), found]
 
 
 def selection_hint(count: int) -> str:
@@ -216,6 +254,7 @@ __all__ = [
     "measure_point",
     "selection_hint",
     "EXPORT_COLUMNS",
+    "EXPORT_LOCAL_COLUMNS",
     "EXPORT_POSITION_COLUMNS",
     "export_rows",
 ]

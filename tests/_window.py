@@ -158,13 +158,17 @@ def open_file(window, path, read=None, front=True):
     ``read`` is what the reader made of it — :func:`main_window._read_file`
     unless given — and the rest is the window's own: a tab taken or added, and
     filled, at the front or behind the tab on screen; then, as the reading
-    queue does once nothing else is waiting, the output's details — the Info
-    panel's rows about the run — if they are still to read. Returns the tab.
+    queue does once nothing else is waiting, a LOCMODES run's local modes and
+    the output's details — the Info panel's rows about the run — if they are
+    still to read. Returns the tab.
     """
     from crystalline.ui import main_window
 
     read = read if read is not None else main_window._read_file(path)
     tab = window._show_read_file(path, read, front=front)
+    if (read.capabilities.get("locmodes") and read.local_modes is None
+            and read.local_modes_note is None):
+        window._deliver_local_modes(tab, path, *main_window._read_local_modes(read.output_path))
     if read.output_props is None and read.output_path:
         window._deliver_details(tab, path, main_window._read_details(read.output_path))
     QApplication.processEvents()
@@ -214,6 +218,18 @@ def export(window, monkeypatch, path):
     visible_geometry_panel(window)._export_btn.click()
     with open(path, newline="", encoding="utf-8-sig") as handle:
         return offered[0], list(csv.reader(handle))
+
+
+def atoms_on_screen(window, points, atoms, tolerance=1e-3):
+    """The atoms on screen at ``points`` (moved by one lattice translation), or ``None``.
+
+    ``atoms`` are the source atoms the points are positions of — an internal
+    coordinate's, say — and each atom on screen picked is an image of its own.
+    """
+    from _panels import atoms_at
+
+    return atoms_at(window.structure.positions, window._adp_index, points, atoms,
+                    tolerance=tolerance)
 
 
 def measure_a_bond(window):

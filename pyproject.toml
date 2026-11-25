@@ -47,7 +47,11 @@ dependencies = [
     # loader.py calls CifParser.parse_structures, which landed in 2023.11.10
     # (it replaced get_structures). Anything older breaks every CIF code path.
     "pymatgen>=2023.11.10",
-    "CRYSTALClear>=0.2.16",
+    # 0.2.18 for LOCMODES: get_locmodes as the Measure section reads it (0.2.17
+    # dropped a row whose cell index is printed (-1-1-1)) and with its symmetry
+    # grouping, plot_cry_cnm, plot_cry_cnm_pressure and calculate.cry_track_modes
+    # for the CNM plots. Nothing older is supported.
+    "CRYSTALClear>=0.2.18",
     # The four below all arrive transitively today (pymatgen pulls scipy,
     # matplotlib and spglib; pyvista pulls vtk and Pillow), but CRYSTALLine
     # imports them itself and must say so - viz/renderer.py imports scipy and

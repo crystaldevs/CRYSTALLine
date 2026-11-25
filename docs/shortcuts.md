@@ -81,8 +81,9 @@ On macOS the tabs are stepped through with {kbd}`⌃Tab` and {kbd}`⌃⇧Tab`, a
 Elastic properties ▸ · Elastic properties (2D) ▸ · Equation of state ·
 Simulated XRD pattern… · Electronic bands & DOS… · Phonon bands & DOS… ·
 Vibrational spectra… · VCI states… · Anharmonic scan… · Anharmonic PES… ·
-Crystalline orbitals… · Clear orbital · Electron density & potential… · Clear
-field · Plot font…
+Characterisation of normal modes… · A normal mode along a series… · Crystalline
+orbitals… · Clear orbital · Electron density & potential… · Clear field · Plot
+font…
 
 The entries are enabled when the output contains the corresponding data; see
 [Property plots](plots.md).

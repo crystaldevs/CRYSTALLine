@@ -1036,7 +1036,7 @@ def test_a_third_click_on_a_heading_stops_sorting(qapp):
 def test_a_point_lists_its_coordinates_as_its_value(qapp):
     panel = GeometryPanel(_peroxide())
     _measure(panel, 3)
-    assert _row(panel, 0) == ["H(3)", "(1.750, -0.200, 0.900)"]
+    assert _row(panel, 0)[:2] == ["H(3)", "(1.750, -0.200, 0.900)"]   # and four local columns
 
 
 # ── exporting the table ───────────────────────────────────────────────────
@@ -1149,3 +1149,241 @@ def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
         assert below >= buttons[0].mapTo(panel, QPoint(0, 0)).y() + buttons[0].height()
     assert buttons[0].width() > 100                     # and wider at 640 than at their least
     panel.hide()
+
+
+# ── local modes: a LOCMODES run's force constants beside the measurements ──
+# Which source atom each of _peroxide's atoms is an image of: 0–3, then O2
+# again in the cell along −a, at the far end of the H3···O2 contact LOCMODES lists.
+_PEROXIDE_SOURCE = [0, 1, 2, 3, 1]
+
+
+def _peroxide_modes():
+    """The local modes of ``data/locmodes/h2o2_synthetic.out``, built by hand."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+
+    origin = (0, 0, 0)
+    positions = [[0.0, 0.0, 0.0], [1.45, 0.0, 0.0], [-0.3, 0.9, 0.2], [1.75, -0.2, 0.9]]
+    coordinates = (
+        LocalCoordinate(1, M.DISTANCE, (0, 1), (origin, origin), ("O", "O"),
+                        1.45, 4.2, None, 8.0, 950.0),
+        LocalCoordinate(2, M.DISTANCE, (0, 2), (origin, origin), ("O", "H"),
+                        0.9695, 6.5, None, 0.95, 3400.0),
+        LocalCoordinate(4, M.DISTANCE, (2, 1), (origin, (-1, 0, 0)), ("H", "O"),
+                        3.3782, 0.15, None, 0.98, 500.0),
+        LocalCoordinate(5, M.ANGLE, (2, 0, 1), (origin,) * 3, ("H", "O", "O"),
+                        108.0247, 0.7, 0.6, 1.0, 1300.0),
+    )
+    return LocalModes(positions, np.eye(3) * 5.0, coordinates)
+
+
+def _locmodes_panel():
+    structure, source = _peroxide(), _PEROXIDE_SOURCE
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(_peroxide_modes())
+    panel.set_source_index(source)
+    return panel
+
+
+def test_a_measured_internal_coordinate_has_its_local_mode_beside_it(qapp):
+    """What a LOCMODES run adds: measure a bond, and if it is one of the internal
+    coordinates the run computed, its local force constant, mass and frequency
+    are there beside the value."""
+    panel = _locmodes_panel()
+    bond = _measure(panel, 0, 1)
+    assert [c.number for c in bond.local] == [1]
+    assert _row(panel, 0)[1:] == ["1.450 Å", "4.200", "", "8.000", "950.0"]   # no kᵃ(d) for a bond
+    angle = _measure(panel, 1, 0, 2)                      # O2–O1–H3: the same angle, backwards
+    assert [c.number for c in angle.local] == [5]
+    assert _row(panel, 1)[1:] == ["108.025°", "0.700", "0.600", "1.000", "1300.0"]
+
+
+def test_a_measurement_made_before_the_local_modes_came_has_its_own_when_they_do(qapp):
+    """The window reads a run's local modes after its tab is up: a bond
+    measured in the meantime shows only its length, then its force constant
+    beside it, without being measured again."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    structure, source = _peroxide(), _PEROXIDE_SOURCE
+    panel = GeometryPanel(structure)
+    panel.set_source_index(source)
+    bond = _measure(panel, 0, 1)
+    assert bond.local == () and panel._list.isColumnHidden(_COL_K)
+    panel.set_local_modes(_peroxide_modes())
+    assert not panel._list.isColumnHidden(_COL_K)
+    assert [c.number for c in panel._measurements[0].local] == [1]
+    assert _row(panel, 0)[1:] == ["1.450 Å", "4.200", "", "8.000", "950.0"]
+
+
+def test_a_measurement_that_is_none_of_them_has_nothing_beside_it(qapp):
+    panel = _locmodes_panel()
+    assert _measure(panel, 0, 3).local == ()               # O1···H4: not an internal coordinate
+    assert _row(panel, 0)[2:] == ["", "", "", ""]
+    assert "Not one of the internal coordinates" in panel._items()[0].toolTip(0)
+
+
+def test_the_local_mode_columns_are_centred_too(qapp):
+    """Value and the local modes' columns alike, their headings over them, for
+    any file: right-aligned, a file's lone Value column read as pushed away to
+    the dock's edge. The measured atoms stay on the left, by their tick box."""
+    from crystalline.ui.panels.geometry_panel import _COL_FREQ, _COL_NAME, _COL_VALUE
+
+    def side(alignment):
+        return alignment & (Qt.AlignLeft | Qt.AlignRight | Qt.AlignHCenter)
+
+    def sides(panel, column):
+        heading = panel._list.headerItem().textAlignment(column)
+        return side(panel._items()[0].textAlignment(column)), side(heading)
+
+    centred = (Qt.AlignHCenter, Qt.AlignHCenter)
+    plain = GeometryPanel(_water())
+    _measure(plain, 0, 1)
+    assert sides(plain, _COL_VALUE) == centred
+
+    with_modes = _locmodes_panel()
+    _measure(with_modes, 0, 1)
+    assert sides(with_modes, _COL_VALUE) == centred
+    assert sides(with_modes, _COL_FREQ) == centred
+    with_modes.set_local_modes(None)                       # rows refilled: still centred
+    assert sides(with_modes, _COL_VALUE) == centred
+    assert not side(plain._items()[0].textAlignment(_COL_NAME)) & Qt.AlignHCenter
+
+
+def test_a_contact_into_the_next_cell_is_found_on_the_atom_there(qapp):
+    """LOCMODES names the far atom of H3···O2 by its cell, (-1 0 0): it is the O2
+    drawn a cell along −a, not the one bonded to O1."""
+    panel = _locmodes_panel()
+    assert [c.number for c in _measure(panel, 2, 4).local] == [4]
+    assert _measure(panel, 2, 1).local == ()
+    tip = panel._items()[0].toolTip(0)
+    assert "LOCMODES internal coordinate 4, a bond: H3–O2 (-1 0 0)" in tip
+    assert "CRYSTAL's value 3.3782 Å" in tip
+
+
+def test_the_local_mode_columns_are_there_only_for_a_locmodes_run(qapp):
+    from crystalline.ui.panels.geometry_panel import _LOCAL_COLUMNS
+
+    panel = GeometryPanel(_peroxide())
+    hidden = lambda: [panel._list.isColumnHidden(c) for c in _LOCAL_COLUMNS]  # noqa: E731
+    assert hidden() == [True] * 4
+    panel.set_local_modes(_peroxide_modes())
+    assert hidden() == [False] * 4
+    panel.set_local_modes(None)                            # the next file opened in the tab
+    assert hidden() == [True] * 4
+
+
+def test_a_local_mode_column_sorts_with_the_empty_rows_last(qapp):
+    """The table sorts by whichever heading is clicked, and the measurement behind
+    each row goes with it: Remove takes away the row picked, and nothing else.
+    Rows with nothing in the column stay at the bottom, whichever way it runs."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    panel = _locmodes_panel()
+    _measure(panel, 0, 1)            # O1–O2, kᵃ 4.2
+    _measure(panel, 0, 3)            # O1···H4, none
+    _measure(panel, 0, 2)            # O1–H3, kᵃ 6.5
+    panel._items()[0].setCheckState(0, Qt.Unchecked)       # O1···H4 and O1–H3 drawn, O1–O2 not
+
+    panel._list.header().setSortIndicator(_COL_K, Qt.DescendingOrder)
+    assert [_row(panel, r)[_COL_K] for r in range(3)] == ["6.500", "4.200", ""]
+    assert [round(m.value, 4) for m in panel.measurements()] == [0.9695, 1.45, pytest.approx(2.0, abs=0.1)]
+    assert [m.value for m in panel.shown_annotations()] == [panel.measurements()[0].value,
+                                                            panel.measurements()[2].value]
+    _measure(panel, 2, 4)            # H3···O2(−a), kᵃ 0.15: sorted into place
+    assert [_row(panel, r)[_COL_K] for r in range(4)] == ["6.500", "4.200", "0.150", ""]
+
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._remove_selected_measurements()
+    assert [_row(panel, r)[_COL_K] for r in range(3)] == ["4.200", "0.150", ""]
+    assert [m.local[0].number for m in panel.measurements()[:2]] == [1, 4]
+
+
+def test_atoms_out_of_step_with_their_source_are_not_claimed(qapp):
+    """An edit that adds or removes atoms leaves the index from the last view
+    behind: nothing is matched rather than the wrong thing."""
+    panel = _locmodes_panel()
+    panel.set_source_index([0, 1, 2])                      # three, for five atoms on screen
+    assert _measure(panel, 0, 1).local == ()
+
+
+def test_a_point_has_no_local_mode(qapp):
+    panel = _locmodes_panel()
+    _measure(panel, 3)
+    assert _row(panel, 0)[:2] == ["H(3)", "(1.750, -0.200, 0.900)"]
+    assert _row(panel, 0)[2:] == ["", "", "", ""]
+
+
+def test_a_locmodes_run_exports_each_measurement_with_its_local_mode(qapp, tmp_path):
+    """Every row, in the order on screen, with the numbers in full — and for a
+    LOCMODES run the internal coordinate each measurement is, as CRYSTAL gives it."""
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    panel = _locmodes_panel()
+    _measure(panel, 0, 1)            # O1–O2, kᵃ 4.2
+    _measure(panel, 0, 3)            # O1···H4, none
+    _measure(panel, 2, 4)            # H3···O2(−a), kᵃ 0.15
+    panel._list.header().setSortIndicator(_COL_K, Qt.DescendingOrder)
+
+    target = tmp_path / "peroxide_measurements.csv"
+    panel.export_csv(str(target))
+    header, *rows = _read_csv(target)
+
+    assert header == list(M.EXPORT_COLUMNS) + list(M.EXPORT_LOCAL_COLUMNS)
+    assert [row[1] for row in rows] == ["O(0)–O(1)", "H(2)–O(4)", "O(0)–H(3)"]   # as sorted
+    assert rows[0][:4] == ["distance", "O(0)–O(1)", "1.450000", "Å"]
+    assert rows[0][4:] == ["1", "O1–O2", "1.45", "4.2", "", "8.0", "950.0",     # no K^A(D) for a bond
+                           "as listed"]
+    assert rows[1][4:6] == ["4", "H3–O2 (-1 0 0)"]
+    assert rows[2][4:] == [""] * len(M.EXPORT_LOCAL_COLUMNS)                    # none of them
+
+
+def test_a_near_linear_angle_exports_as_one_row_per_bend(qapp, tmp_path):
+    """LOCMODES gives the two bends of a near-linear angle a force constant each;
+    a spreadsheet wants a number in a cell, so the angle is written twice."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+
+    modes = _peroxide_modes()
+    second = LocalCoordinate(6, M.ANGLE, (2, 0, 1), ((0, 0, 0),) * 3, ("H", "O", "O"),
+                             -171.5, 0.058, 0.230, 1.379, 1005.2)
+    structure, source = _peroxide(), _PEROXIDE_SOURCE
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(LocalModes(modes.positions, modes.lattice,
+                                     modes.coordinates + (second,)))
+    panel.set_source_index(source)
+    _measure(panel, 2, 0, 1)
+    target = tmp_path / "bends.csv"
+    panel.export_csv(str(target))
+    _, *rows = _read_csv(target)
+    assert [(row[4], row[7]) for row in rows] == [("5", "0.7"), ("6", "0.058")]
+    assert rows[0][:4] == rows[1][:4]                       # the same measurement on both
+
+
+def test_a_measurement_found_by_symmetry_is_marked_as_such(qapp, tmp_path):
+    """Its local mode is a listed coordinate's, carried over by an operation of
+    the crystal: in italics in the table, the operation in the tooltip and in
+    the export, so it is never taken for a coordinate the output names."""
+    from crystalline.core.local_modes import LocalCoordinate, LocalModes
+    from crystalline.ui.panels.geometry_panel import _COL_K
+
+    pair = [[0.6, 0.1, 0.2], [1.5, 0.4, 0.5], [-0.6, -0.1, -0.2], [-1.5, -0.4, -0.5]]
+    structure = Structure.empty()
+    for element, position in zip("OHOH", pair):
+        structure.add_atom(element, position)
+    oh = LocalCoordinate(1, M.DISTANCE, (0, 1), ((0, 0, 0),) * 2, ("O", "H"),
+                         0.95, 7.0, None, 0.95, 3500.0)
+    panel = GeometryPanel(structure)
+    panel.set_local_modes(LocalModes(pair, np.eye(3) * 5.0, (oh,), (8, 1, 8, 1), 2))
+    panel.set_source_index([0, 1, 2, 3])
+
+    listed = _measure(panel, 0, 1)
+    mirrored = _measure(panel, 2, 3)                      # the inversion's image, not listed
+    assert [c.symmetry for c in listed.local] == [None]
+    assert [(c.number, c.symmetry) for c in mirrored.local] == [(1, "-a, -b, -c")]
+    rows = panel._items()
+    assert rows[1].text(_COL_K) == rows[0].text(_COL_K) == "7.000"
+    assert rows[1].font(_COL_K).italic() and not rows[0].font(_COL_K).italic()
+    assert "Not listed itself" in rows[1].toolTip(0) and "-a, -b, -c" in rows[1].toolTip(0)
+
+    target = tmp_path / "pair.csv"
+    panel.export_csv(str(target))
+    _, first, second = _read_csv(target)
+    assert (first[-1], second[-1]) == ("as listed", "by symmetry (-a, -b, -c)")

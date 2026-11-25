@@ -229,6 +229,9 @@ def finish(figure) -> None:
 
 #: Where a figure on screen keeps what it had on paper, to give it back.
 _ON_PAPER = "_crystalline_on_paper"
+#: Marks an artist whose colour was chosen against what it is drawn on, not
+#: against the paper (see :func:`keep_as_drawn`).
+_AS_DRAWN = "_crystalline_as_drawn"
 
 _PAPER = "#ffffff"
 _INKS = (INK, "#000000")
@@ -252,6 +255,18 @@ def _screen_colour(colour, swap):
 
     new = swap.get(_hex(colour))
     return None if new is None else to_rgba(new, alpha=to_rgba(colour)[3])
+
+
+def keep_as_drawn(artist):
+    """Leave ``artist``'s colours alone on screen; returns it.
+
+    For a colour picked to read on the data beneath it rather than on the
+    paper: a number printed on a bar in ink or in white, whichever its bar is
+    light or dark enough for. Taken for the paper's own ink or white, the dark
+    theme turned it light on a light bar, or dark on a dark one.
+    """
+    setattr(artist, _AS_DRAWN, True)
+    return artist
 
 
 def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
@@ -318,6 +333,8 @@ def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
                         entry["color"] = new
 
     for artist in figure.findobj():
+        if getattr(artist, _AS_DRAWN, False):
+            continue
         if isinstance(artist, Text):
             change(artist.get_color, artist.set_color)
         elif isinstance(artist, Line2D):
@@ -341,5 +358,5 @@ def to_paper(figure) -> None:
     setattr(figure, _ON_PAPER, None)
 
 
-__all__ = ["CYCLE", "INK", "STYLE", "apply", "finish", "keep_title", "to_paper",
-           "to_screen"]
+__all__ = ["CYCLE", "INK", "STYLE", "apply", "finish", "keep_as_drawn", "keep_title",
+           "to_paper", "to_screen"]

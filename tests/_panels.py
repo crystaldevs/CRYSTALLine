@@ -45,6 +45,34 @@ def pick_and_measure(panel, atoms):
     return panel.measurements()[-1]
 
 
+def atoms_at(positions, source, points, atoms, anchor=None, tolerance=1e-3):
+    """The atoms among ``positions`` at ``points``, all moved by one translation.
+
+    ``source[i]`` is the atom of the primitive cell that ``positions[i]`` is an
+    image of, and ``atoms`` are the source atoms the points are positions of —
+    an internal coordinate's, say: each atom picked is an image of its own. The
+    first is looked for among the indices in ``anchor`` (all of them by
+    default), the rest wherever they are. ``None`` if they are not all there.
+    """
+    positions = np.asarray(positions, dtype=float)
+    source = np.asarray(source)
+    points = np.asarray(points, dtype=float)
+    candidates = np.arange(len(positions)) if anchor is None else np.asarray(anchor)
+    for first in candidates[source[candidates] == atoms[0]]:
+        shift = positions[first] - points[0]
+        picked = [int(first)]
+        for atom, point in zip(atoms[1:], points[1:]):
+            near = np.flatnonzero((source == atom)
+                                  & (np.linalg.norm(positions - (point + shift), axis=1)
+                                     < tolerance))
+            if not len(near):
+                break
+            picked.append(int(near[0]))
+        else:
+            return picked
+    return None
+
+
 def closest_pair(positions):
     """The two closest atoms of ``positions``: a bond to measure on anything."""
     positions = np.asarray(positions, dtype=float)

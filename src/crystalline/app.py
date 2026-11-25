@@ -143,7 +143,9 @@ def _warm_font_cache():
 # (spglib, and pymatgen's analyser, which brings sympy — four hundred modules on
 # its own), and finding its bonds (scipy's k-d tree). Measured, not guessed:
 # imported in advance, these leave a first open within a few per cent of a
-# later one, where without them it cost half a second more.
+# later one, where without them it cost half a second more. And pandas, which
+# CRYSTALClear's get_locmodes needs to read a LOCMODES run's local modes and
+# crystal_io does not import: 0.4 s more on the first such run (2026-10-14).
 _FIRST_FILE_MODULES = (
     "scipy.spatial",
     "CRYSTALClear.crystal_io",
@@ -152,6 +154,7 @@ _FIRST_FILE_MODULES = (
     "pymatgen.io.cif",
     "spglib",
     "ase.io",
+    "pandas",
 )
 
 

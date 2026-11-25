@@ -195,6 +195,20 @@ def describe_point(structure: Structure, point) -> str:
 
 
 # ── operators ─────────────────────────────────────────────────────────────
+def cartesian_operation(rotation, translation, lattice) -> Tuple[np.ndarray, np.ndarray]:
+    """``(R, t)``: a symmetry operation in Cartesian Å, from spglib's fractional form.
+
+    spglib acts on fractional columns, ``f' = W f + w``, in the cell whose
+    lattice vectors are the *rows* of ``lattice``; a Cartesian column is then
+    ``x = Aᵀ f``, so ``x' = Aᵀ W A⁻ᵀ x + Aᵀ w``. The one conversion, for the
+    point-symmetry elements drawn over a crystal and for carrying a measurement
+    onto a listed local mode (:mod:`crystalline.core.local_modes`).
+    """
+    basis = np.asarray(lattice, dtype=float).T
+    rotation = basis @ np.asarray(rotation, dtype=float) @ np.linalg.inv(basis)
+    return rotation, basis @ np.asarray(translation, dtype=float)
+
+
 def _operations(atoms, structure: Structure, symprec: float):
     """``(operations, cell, naming)``: the symmetry operators in **cartesian** Å.
 
@@ -214,12 +228,8 @@ def _operations(atoms, structure: Structure, symprec: float):
             return [], cell, lambda _kept: None
         rotations = np.asarray(_field(dataset, "rotations"), dtype=float)
         translations = np.asarray(_field(dataset, "translations"), dtype=float)
-        # Fractional (column-vector) operator to cartesian: with the lattice
-        # vectors as the *rows* of ``cell``, a cartesian column is Aᵀ·x.
-        basis = cell.T
-        inverse = np.linalg.inv(basis)
         operations = [
-            (basis @ rotation @ inverse, basis @ translation, rotation)
+            (*cartesian_operation(rotation, translation, cell), rotation)
             for rotation, translation in zip(rotations, translations)
         ]
         return [(r, t) for r, t, _ in operations], cell, _crystal_naming(operations)
@@ -875,6 +885,7 @@ __all__ = [
     "PLANE",
     "POINT",
     "analyse",
+    "cartesian_operation",
     "describe_point",
     "segment_in_box",
 ]

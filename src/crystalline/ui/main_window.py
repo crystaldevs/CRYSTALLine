@@ -200,6 +200,9 @@ class MainWindow(QMainWindow):
         # the Info panel's rows, which cost more than the structure and are
         # read after it, once no file is waiting (see _read_next).
         self._pending_details: list = []
+        # LOCMODES runs whose local modes are still to be read, the same way and
+        # for the same reason, just before the details (see _read_next).
+        self._pending_local_modes: list = []
         self._reading = False
         self._reading_path: Optional[str] = None
         self._reader: Optional[Worker] = None
@@ -720,6 +723,7 @@ class MainWindow(QMainWindow):
         self._update_vci_action()
         self._update_anscan_action()
         self._update_pes_action()
+        self._update_cnm_actions()
         self._update_import_action()
         self._update_export_actions()
         if getattr(self, "_edit_tool_actions", None) is not None:
@@ -1935,6 +1939,171 @@ class MainWindow(QMainWindow):
         action = getattr(self, "_pes_action", None)
         if action is not None:
             action.setEnabled(self._capability("pes"))
+
+    # ── characterisation of normal modes (LOCMODES) ─────────────────────
+    def _open_cnm(self) -> None:
+        """Draw how much of each normal mode is each internal coordinate's local mode.
+
+        From the LOCMODES section of the loaded output, which the Measure
+        section reads for the local modes themselves; the decomposition is read
+        here, on first asking, grouped by the crystal's symmetry.
+        """
+        from crystalline.crystalio import cnm
+
+        path = self._output_path
+        if not path or not self._capability("locmodes"):
+            QMessageBox.information(
+                self, "No local modes in this output",
+                "Load a CRYSTAL .out from a frequency calculation run with "
+                "LOCMODES to plot the characterisation of its normal modes.",
+            )
+            return
+        self._read_for_dialog("cnm", (path,), lambda: cnm.cnm_run(path),
+                              "Reading the local modes…", self._show_cnm,
+                              "Local modes failed")
+
+    def _show_cnm(self, run) -> None:
+        """The CNM dialog, and the plot it asks for, on a run already read."""
+        from crystalline.crystalio.cnm import figure_aspect, plot_cnm
+        from crystalline.ui.panels import cnm_options
+        from crystalline.ui.panels.cnm_dialog import CNMDialog
+
+        dialog = CNMDialog(run, self)
+        self._restore_dialog(dialog, "cnm")
+        dialog.fit_selection(self._selected_gamma_mode())
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "cnm")
+        # The plot's own memory of which group it drew in which colour, so that
+        # a group keeps its colour as the window and threshold are moved.
+        colours: dict = {}
+        recipe = self._dialog_recipe(
+            "cnm", lambda: CNMDialog(run, self),
+            lambda **o: plot_cnm(run, colours=colours, **o), dialog,
+            controls=lambda: cnm_options.CNMOptions(run),
+            name=lambda options: cnm_options.title(run, options))
+        # Wider as more modes are ticked, and the legend takes more columns.
+        recipe.aspect = lambda options: figure_aspect(run, options)
+        try:
+            figure, _options = recipe.redrawn()
+        except Exception as exc:  # noqa: BLE001 - surface any plot error
+            QMessageBox.critical(self, "Plot failed", f"Could not create the plot:\n{exc}")
+            return
+
+        def pick(x: float) -> None:
+            # A bar is a mode: clicking it shows the mode moving, as clicking a
+            # peak of a spectrum does.
+            drawn = sorted(recipe.options["modes"])
+            index = int(round(x))
+            if 0 <= index < len(drawn):
+                self._select_mode_near(run.frequency(drawn[index]))
+
+        self.plot_panel.add_figure(figure, recipe.title(recipe.options), on_pick=pick,
+                                   recipe=recipe)
+        self._reveal_plot_dock()
+
+    def _selected_gamma_mode(self) -> Optional[int]:
+        """CRYSTAL's number of the mode selected in the Phonons panel, at Γ only.
+
+        The panel lists a Γ run's modes in CRYSTAL's order, all 3N of them, so
+        the row's mode is its index plus one; away from Γ it is another mode.
+        """
+        if getattr(self, "_qindex", 0) != 0:
+            return None
+        index = self.phonon_panel.current_mode_index()
+        return None if index is None else index + 1
+
+    def _open_cnm_series(self) -> None:
+        """Follow one normal mode along a series of LOCMODES runs.
+
+        The runs open in tabs are offered, in tab order, with their labels
+        drawn from their names; others can be added from disk. They are read on
+        a worker, each kept with the plot, which reads one only when an edit
+        brings in a run it has not got.
+        """
+        from crystalline import crystalio
+        from crystalline.crystalio import cnm
+        from crystalline.ui.panels import cnm_options
+        from crystalline.ui.panels.cnm_dialog import CNMSeriesDialog
+
+        candidates = []
+        for tab in self._tabs:
+            if tab.path and tab.path not in candidates and crystalio.has_local_modes(tab.path):
+                candidates.append(tab.path)
+        dialog = CNMSeriesDialog(candidates, self)
+        self._restore_dialog(dialog, "cnm_series")
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._remember_dialog(dialog, "cnm_series")
+        series = dialog.options()
+        held: dict = {}
+
+        def runs(paths):
+            for path in paths:
+                if path not in held:
+                    held[path] = remembered_read(path)
+            return [held[path] for path in paths]
+
+        def remembered_read(path):
+            from crystalline.crystalio import remembered
+
+            return remembered.read("cnm", (path,), lambda: cnm.cnm_run(path))
+
+        colours: dict = {}
+        # The figure drawn last, for the width its legend takes (see series_aspect).
+        drawn: dict = {"figure": None}
+
+        def draw(paths, labels, axis, mode, threshold, min_overlap, legend,
+                 frequencies=True, group_colours=None):
+            drawn["figure"] = cnm.plot_cnm_series(
+                runs(paths), labels=labels, mode=mode, axis=axis, threshold=threshold,
+                min_overlap=min_overlap, legend=legend, frequencies=frequencies,
+                group_colours=group_colours, colours=colours)
+            return drawn["figure"]
+
+        def ask(options):
+            again = CNMSeriesDialog(candidates, self)
+            self._restore_dialog(again, "cnm_series")
+            again.set_series(options)
+            if again.exec() != QDialog.Accepted:
+                return None
+            self._remember_dialog(again, "cnm_series")
+            return {**options, **again.options()}
+
+        # The mode selected in the Phonons panel, when the first run is the
+        # file on screen; else the run's lowest. Known only once it is read.
+        selected = self._selected_gamma_mode() if series["paths"][0] == self._output_path else None
+
+        def build():
+            first = runs(series["paths"])[0]
+            mode = selected if selected in first.modes else first.modes[0]
+            options = {**series, "mode": mode, "threshold": cnm.DEFAULT_THRESHOLD,
+                       "min_overlap": cnm.DEFAULT_MIN_OVERLAP, "legend": True}
+            recipe = PlotRecipe(
+                draw=draw, edit=ask, title=cnm_options.series_title,
+                controls=lambda: cnm_options.CNMSeriesOptions(first), options=options,
+                aspect=lambda chosen: cnm.series_aspect(len(chosen["paths"]), drawn["figure"]))
+            figure, _options = recipe.redrawn()
+            return recipe, figure
+
+        def show(built) -> None:
+            recipe, figure = built
+            self.plot_panel.add_figure(figure, recipe.title(recipe.options), recipe=recipe)
+            self._reveal_plot_dock()
+
+        count = len(series["paths"])
+        self._run_busy(build, f"Reading the local modes of {count} runs…", show,
+                       "Series failed")
+
+    def _update_cnm_actions(self) -> None:
+        """Enable the CNM entry only for an output with a LOCMODES section.
+
+        The series entry stays on: its runs can be added from disk, whatever
+        the tab on screen holds.
+        """
+        action = getattr(self, "_cnm_action", None)
+        if action is not None:
+            action.setEnabled(self._capability("locmodes"))
 
     # ── plot typography ─────────────────────────────────────────────────
     def _open_orbitals(self) -> None:
@@ -3491,9 +3660,16 @@ class MainWindow(QMainWindow):
         ms against 230 on a 3.5 MB anharmonic run, and more with every MB), and
         the structure is what was asked for. So it is read once nothing else
         is waiting, and arrives in the panel a moment after the structure.
+
+        A LOCMODES run's local modes are read the same way, after the files and
+        before any details: the Measure table's force constants, which a
+        measurement made meanwhile is given when they come. Read with the
+        structure, they held its first frame back by a third of a second on
+        DAFADNP (717 ms against 355, 2026-10-22).
         """
         details = self._details_queue()
-        if not self._pending_reads and not details:
+        local_modes = self._local_modes_queue()
+        if not self._pending_reads and not details and not local_modes:
             self._reading = False
             self._reader = None
             self._reading_path = None
@@ -3513,6 +3689,11 @@ class MainWindow(QMainWindow):
                 self._update_reading_status()
                 QTimer.singleShot(_DETAILS_PAUSE_MS, self._read_next)
                 return
+            if local_modes:
+                # The pause stands for the details that follow: the local modes
+                # change only the Measure table, which has nothing to settle.
+                self._read_local_modes_next(local_modes)
+                return
             self._details_paused = False
             self._read_details_next(details)
             return
@@ -3525,6 +3706,8 @@ class MainWindow(QMainWindow):
             try:
                 tab = self._show_read_file(path, read, front)
                 if tab is not None and getattr(read, "output_path", None):
+                    if getattr(read, "capabilities", {}).get("locmodes"):
+                        self._local_modes_queue().append((read.output_path, tab))
                     self._details_queue().append((read.output_path, tab))
             finally:
                 self._read_next()
@@ -3595,6 +3778,65 @@ class MainWindow(QMainWindow):
         """Show the output's own rows, with the crystallography left as it is."""
         self._output_props = props or {}
         self.info_panel.set_output_props(self._output_props)
+
+    def _local_modes_queue(self) -> list:
+        """The LOCMODES runs whose local modes are still to be read (see :meth:`_read_next`)."""
+        queue = getattr(self, "_pending_local_modes", None)
+        if queue is None:
+            queue = self._pending_local_modes = []
+        return queue
+
+    def _read_local_modes_next(self, queue: list) -> None:
+        """Read the next run's local modes, and hand them to the tab it is in.
+
+        Quietly, as the details are (:meth:`_read_details_next`); a section
+        that will not read is said, by :meth:`_set_local_modes`.
+        """
+        path, tab = queue.pop(0)
+        self._reading_path = None
+        self._update_reading_status()
+
+        def done(result) -> None:
+            try:
+                self._deliver_local_modes(tab, path, *result)
+            finally:
+                self._read_next()
+
+        self._reader = Worker(lambda: _read_local_modes(path))
+        self._reader.finished.connect(done)
+        self._reader.failed.connect(lambda _exc: self._read_next())
+        self._reader.start()
+
+    def _deliver_local_modes(self, tab: FileTab, path: str, modes, note: Optional[str]) -> None:
+        """Put a run's local modes into ``tab``, if it still holds that run.
+
+        As :meth:`_deliver_details`: a tab read in behind keeps them with the
+        rest of what was read, for :meth:`_fill_tab` when it is built; one that
+        has been closed, or has taken another file since, is left alone.
+        """
+        if tab not in self._tabs:
+            return
+        if tab.pending is not None:
+            pending_path, read = tab.pending
+            if pending_path == path:
+                read.local_modes, read.local_modes_note = modes, note
+            return
+        if tab.path != path:
+            return
+        self._routed(tab, self._set_local_modes)(path, modes, note)
+
+    def _set_local_modes(self, path: str, modes, note: Optional[str]) -> None:
+        """Give the Measure section a run's local modes, or say why there are none.
+
+        Its rows are looked up again (:meth:`GeometryPanel.set_local_modes`), so
+        a measurement made before they came has its local mode beside it now.
+        The note names the file: by the time it is said, another tab may be on
+        screen.
+        """
+        self.geometry_panel.set_local_modes(modes)
+        if note:
+            self.statusBar().showMessage(
+                f"Local modes not read from {os.path.basename(path)}: {note}", 8000)
 
     def _update_reading_status(self) -> None:
         """Say in the status bar which file is being read, and how many are to come.
@@ -3695,6 +3937,13 @@ class MainWindow(QMainWindow):
         self._clear_density()
         # Lattice planes outlive a change of view, not a change of crystal.
         self.geometry_panel.clear_lattice_planes()
+        # A LOCMODES run's force constants go beside the measurements that are
+        # its internal coordinates. Usually none yet: they are read after the
+        # tab is shown (see _read_next) and come through _deliver_local_modes;
+        # a tab read in behind may have been handed them while it waited. None
+        # also takes the previous file's away. Run here only as the tab is
+        # shown, so a note about them is seen when it is said.
+        self._set_local_modes(path, read.local_modes, read.local_modes_note)
         self.geometry_panel.set_source_file(path)  # an export is offered beside it
         self._source = result.structure
         self._set_qmodes(result.qpoints if result.has_phonons else [])
@@ -3716,6 +3965,7 @@ class MainWindow(QMainWindow):
         self._update_vci_action()
         self._update_anscan_action()
         self._update_pes_action()
+        self._update_cnm_actions()
         self._update_import_action()  # a structure is now loaded — allow importing
         self._update_tab_labels()  # the tab is named after its file, and the window too
         # A new file starts its own timeline: nothing about the last one is
@@ -4191,6 +4441,10 @@ class MainWindow(QMainWindow):
         self._replace_structure(shown, unit_cell, analysis)
         self._shown_edited = bool(edited)
         self._adp_index = source_index
+        # The same index tells the Measure section which of a LOCMODES run's
+        # atoms a measurement was taken on.
+        if hasattr(self, "geometry_panel"):
+            self.geometry_panel.set_source_index(source_index)
         self._refresh_adp_tensors()
         self._update_adp_controls()
         if modes is not None:
@@ -4293,7 +4547,7 @@ class MainWindow(QMainWindow):
 # may parse, but never touch a widget.
 
 # What an open output is probed for, to enable the menus that need it.
-_PROBES = ("plots", "orbitals", "vci", "anscan", "pes")
+_PROBES = ("plots", "orbitals", "vci", "anscan", "pes", "locmodes")
 
 
 def _probe(key: str, output_path: Optional[str]):
@@ -4316,6 +4570,8 @@ def _probe(key: str, output_path: Optional[str]):
         return crystalio.has_anscan(output_path)
     if key == "pes":
         return crystalio.has_pes(output_path)
+    if key == "locmodes":
+        return crystalio.has_local_modes(output_path)
     raise KeyError(f"no probe {key!r}")
 
 
@@ -4329,6 +4585,12 @@ class _ReadFile:
     output_props: Optional[dict]    # the run's own rows for the Info panel: None
                                     # until _read_details has read them
     capabilities: dict              # probe key → what _probe found
+    # A LOCMODES run's internal coordinates and their local modes, for the
+    # Measure section; and, when the run has them and they would not read, why.
+    # Both None as read: _read_local_modes reads them once the tab is up, and
+    # a tab still waiting behind is handed them here (_deliver_local_modes).
+    local_modes: Optional[object] = None
+    local_modes_note: Optional[str] = None
 
 
 def _read_file(path: str) -> _ReadFile:
@@ -4354,8 +4616,30 @@ def _read_file(path: str) -> _ReadFile:
             capabilities[key] = _probe(key, output_path)
         except Exception:  # noqa: BLE001 - asked again, and reported, by the window
             pass
-    # The run's own rows are not read here: see _read_details.
+    # Neither the run's own rows nor its local modes are read here: see
+    # _read_details and _read_local_modes.
     return _ReadFile(loaded, output_path, adps, None, capabilities)
+
+
+def _read_local_modes(path: str) -> tuple:
+    """A LOCMODES run's local modes, for the Measure section, as (modes, note).
+
+    Read after its structure, not with it (see :meth:`MainWindow._read_next`):
+    0.3 s on DAFADNP, CRYSTALClear parsing the tables and summing the CNM
+    once per internal coordinate, which held the tab's first frame back.
+    Asked only of an output the probe found a LOCMODES section in, so every
+    other output is scanned for one once. ``note`` says why there are none
+    when the section is there and will not read; a failure never breaks the
+    tab, whose structure is already open.
+    """
+    from crystalline.crystalio import LocalModesError, read_local_modes
+
+    try:
+        return read_local_modes(path), None
+    except LocalModesError as exc:
+        return None, str(exc)
+    except Exception as exc:  # noqa: BLE001 - never let this break an open file
+        return None, f"the LOCMODES section could not be read ({exc})"
 
 
 def _read_details(path: str) -> dict:

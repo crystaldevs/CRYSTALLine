@@ -145,6 +145,52 @@ spectrum), and only the widths used by the chosen lineshape are enabled.
 - **Anharmonic PES…**: one- and two-dimensional cuts of the potential energy
   surface, with the wavefunctions and probability densities of a double well.
 
+## Local modes
+
+A frequency calculation run with `LOCMODES` decomposes each normal mode into
+the local modes of its internal coordinates: how much of a mode is an N–O
+stretch, how much a C–N–O bend. The force constants of the local modes are
+shown in the Geometry panel (see [local modes](editing.md#local-modes)); the
+decomposition, its characterisation of the normal modes (CNM), is drawn from
+the **Plot** menu.
+
+- **Characterisation of normal modes…** draws one stacked bar per normal mode
+  of the open output, each split into the contributions of its internal
+  coordinates, in per cent. Coordinates made equivalent by the crystal's
+  symmetry are summed into one group, named after its first coordinate and its
+  atoms (`1 NO`); when the symmetry cannot be checked against the geometry,
+  each coordinate is drawn on its own, and the dialog says why. The modes drawn
+  are ticked in a list of all the run's, by number with their frequencies, at
+  most 40; **Tick span** ticks every mode between two frequencies at once, and
+  single modes can then be ticked or unticked. The list opens with the modes
+  around the one selected in the **Phonons** panel ticked. Contributions under the threshold are
+  summed into the grey residues at the top of each bar, and the panel says how
+  many groups are left above it: raising the threshold shortens the legend.
+  The bars are labelled with their frequencies or their mode numbers, and a
+  click on a bar selects its mode in the **Phonons** panel.
+- **A normal mode along a series…** follows one normal mode along several
+  `LOCMODES` runs of the same crystal, at increasing pressure for example, one
+  bar per run. The runs open in tabs are offered, and others can be added from
+  disk. Each is given a label, the part of its file name that differs to begin
+  with, to be written as the value it stands for; the order of the list is the
+  order of the series. The mode is followed from each run to the next by the
+  overlap of its eigenvector, so every run must print its eigenvectors. When
+  an overlap falls under the chosen least overlap, near a crossing of two
+  modes, that bar and the ones after it are hatched, with the lowest overlap
+  so far printed over them. Groups are matched between the runs by their atoms;
+  one that does not appear in the first run carries the label of the run it
+  first appears in, as `412 CNOH (0.2)`. Under **Bar labels**, beside the plot,
+  the label of each bar can be written again, taken when its field is left, as
+  long as every run keeps a label of its own; **Frequencies under the labels**
+  prints the frequency of the mode in each run under its label, or leaves the
+  label alone and drops the frequency from the axis title.
+
+Each group keeps its colour while the modes and the threshold are changed.
+Under **Colours**, beside either plot, every group drawn has a dropdown of
+colours: the house colours by name, the residues' pale grey, or any other
+through **Other…**. A colour chosen stays with its group as the plot is drawn
+again.
+
 ## Elastic properties
 
 **Plot → Elastic properties** draws the directional elastic properties of an
