@@ -135,9 +135,6 @@ class RotateDialog(QDialog):
         form.addRow("", self.centre_atom)
         self.point = self._vector_boxes(tuple(self._centroid()), "Point, cartesian (Å)")
         form.addRow("", self.point)
-        self._through_note = QLabel("The axis passes through the two atoms.", self)
-        self._through_note.setEnabled(False)
-        form.addRow("", self._through_note)
         self._form = form
 
         for box in (self.axis, self.centre, self.axis_from, self.axis_to, self.centre_atom):
@@ -174,11 +171,11 @@ class RotateDialog(QDialog):
         row = QHBoxLayout(holder)
         row.setContentsMargins(0, 0, 0, 0)
         for name, value in zip(CARTESIAN_AXES, values):
+            row.addWidget(QLabel(name, holder))
             spin = QDoubleSpinBox(holder)
             spin.setRange(-1000.0, 1000.0)
             spin.setDecimals(3)
             spin.setSingleStep(0.1)
-            spin.setPrefix(f"{name} ")
             spin.setValue(float(value))
             row.addWidget(spin, 1)
         return holder
@@ -257,7 +254,6 @@ class RotateDialog(QDialog):
             self.centre: not through,
             self.centre_atom: not through and self.centre.currentData() == ATOM,
             self.point: not through and self.centre.currentData() == CUSTOM,
-            self._through_note: through,
         }
         for widget, visible in shown.items():
             widget.setVisible(visible)

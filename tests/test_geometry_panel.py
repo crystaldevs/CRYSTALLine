@@ -96,7 +96,6 @@ def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
     panel = GeometryPanel(Structure.from_ase(molecule("C6H6")))
     panel.set_selection(range(5))
     assert not panel._measure_btn.isEnabled()
-    assert "Lattice planes" in panel._hint.text()
     assert panel._fit_plane_btn.isEnabled()          # where the plane went
 
 
@@ -588,7 +587,7 @@ def test_hexagonal_planes_are_written_with_four_indices(qapp):
     panel = GeometryPanel(Structure.from_ase(zinc))
     panel.set_miller_cell(zinc.cell[:])
     _type_miller(panel, 1, 0, 0)
-    assert not panel._i_label.isHidden() and panel._i_label.value() == -1
+    assert not panel._i_label.isHidden() and panel._i_label.text() == "-1"
     assert not panel._i_label.isEnabled()          # fixed by h and k, not typed
     panel._add_plane_btn.click()
     assert panel._plane_list.item(0).text().startswith("(1 0 -1 0) · d ")

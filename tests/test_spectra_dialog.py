@@ -482,3 +482,89 @@ def test_the_dialog_remembers_the_colours_too(qapp):
     restore(again, capture(first))
 
     assert again.options()["colours"] == "colourblind"
+
+
+# ── the frequency track ───────────────────────────────────────────────────
+def test_the_track_runs_over_the_spectra_in_hand(qapp):
+    """The track is the spectra's, so the handles reach the overtones of an
+    anharmonic run and spread a soft solid's lines over the whole travel."""
+    dialog = SpectraDialog(_kinds(["IR_VCI_0K"]), bounds=(0.0, 8000.0))
+
+    assert dialog.options_widget._range_slider.bounds() == (0.0, 8000.0)
+    assert dialog.fmax.maximum() == 8000.0
+    assert (dialog.fmin.value(), dialog.fmax.value()) == (0.0, 8000.0)  # all of it, to start
+    dialog.fmax.setValue(7500.0)
+    assert dialog.options()["frequency_range"] == (0.0, 7500.0)
+
+
+def test_the_controls_beside_the_plot_get_the_same_track(qapp):
+    """They are built empty and told what the plot was drawn with: the bounds
+    travel in its options, so the handles can reach what the dialog's could."""
+    from crystalline.ui.panels.spectra_options import SpectraOptions
+
+    controls = SpectraOptions()
+    controls.set_options({"frequency_bounds": (0.0, 8000.0),
+                          "frequency_range": (300.0, 7200.0)})
+
+    assert controls._range_slider.bounds() == (0.0, 8000.0)
+    assert controls.options()["frequency_range"] == (300.0, 7200.0)
+    assert "frequency_bounds" not in controls.options()    # not the plotter's
+
+    # a range past the bounds stretches the track rather than being cut short
+    controls.set_options({"frequency_bounds": (0.0, 2000.0),
+                          "frequency_range": (100.0, 2500.0)})
+    assert controls._range_slider.bounds() == (0.0, 2500.0)
+    assert controls.options()["frequency_range"] == (100.0, 2500.0)
+
+
+def test_the_window_gives_dialog_and_plot_the_output_s_track(qapp, monkeypatch):
+    """From the curves read to the controls beside the plot: one track, over
+    every curve the output holds, and nothing of it reaches the plotter."""
+    pytest.importorskip("CRYSTALClear")
+    import matplotlib
+
+    matplotlib.use("Agg")
+    from PySide6.QtWidgets import QDialog, QMainWindow
+
+    from crystalline.ui.main_window import MainWindow
+    from crystalline.ui.panels import spectra_dialog
+    from crystalline.ui.panels.plot_view import PlotPanel
+
+    class _Window(QMainWindow):
+        # The real window builds a 3D view, which needs a display.
+        _show_spectra = MainWindow._show_spectra
+        _restore_dialog = MainWindow._restore_dialog
+        _remember_dialog = MainWindow._remember_dialog
+
+        def __init__(self):
+            super().__init__()
+            self._plot_dialog_state = {}
+            self.plot_panel = PlotPanel(self)
+
+        def _select_mode_near(self, *_args):
+            pass
+
+        def _reveal_plot_dock(self):
+            pass
+
+    seen = {}
+
+    def accept(dialog):
+        dialog.set_selection_state(["IR_HO_0K"])      # the overtones stay unticked
+        seen["bounds"] = dialog.options_widget._range_slider.bounds()
+        return QDialog.Accepted
+
+    monkeypatch.setattr(spectra_dialog.SpectraDialog, "exec", accept)
+    window = _Window()
+    data = {_parse("IR_HO_0K"): np.array([[400.0, 1.0], [3700.0, 5.0]]),
+            _parse("IR_VCI_0K"): np.array([[3300.0, 0.1], [7250.0, 0.2]])}
+
+    window._show_spectra("water.out", data)
+
+    tab = window.plot_panel.current_tab()
+    assert seen["bounds"] == (0.0, 8000.0)
+    assert tab.controls._range_slider.bounds() == (0.0, 8000.0)
+    assert tab.recipe.options["frequency_bounds"] == (0.0, 8000.0)
+    figure, _options = tab.recipe.redrawn()     # drawn without being handed the bounds
+    assert figure.axes
+    window.plot_panel.clear()

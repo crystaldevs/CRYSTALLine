@@ -207,6 +207,18 @@ def descend(symmetry: Symmetry, keep: Sequence[np.ndarray]) -> Subgroup:
     return _subgroup(symmetry, kept, _dropped_labels(lookup, closed))
 
 
+def no_symmetry(symmetry: Symmetry) -> Subgroup:
+    """P1: the identity alone, every atom of the cell its own site.
+
+    The bottom of every tree, and reachable from any crystal — but not always
+    by giving up operators one at a time: below F222 in a centred cubic crystal
+    the only subgroups left are C2s named in a cell that is not this one, so a
+    descent stops there. Asked for directly, P1 is always writable: it lists
+    every atom of the cell the crystal is held in.
+    """
+    return descend(symmetry, [np.eye(3, dtype=int)])
+
+
 def asymmetric_unit(symmetry: Symmetry, rotations: Sequence[np.ndarray]):
     """``(numbers, fractional coordinates)``: one representative site per orbit.
 

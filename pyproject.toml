@@ -47,7 +47,10 @@ dependencies = [
     # loader.py calls CifParser.parse_structures, which landed in 2023.11.10
     # (it replaced get_structures). Anything older breaks every CIF code path.
     "pymatgen>=2023.11.10",
-    "CRYSTALClear>=0.2.16",
+    # 0.2.19 reads phonons the loader relies on: Gamma in Crystal_output.qpoint,
+    # one shrinking factor per axis, read_eigvt=False, and eigenvector blocks
+    # with other lines written into them.
+    "CRYSTALClear>=0.2.19",
     # The four below all arrive transitively today (pymatgen pulls scipy,
     # matplotlib and spglib; pyvista pulls vtk and Pillow), but CRYSTALLine
     # imports them itself and must say so - viz/renderer.py imports scipy and

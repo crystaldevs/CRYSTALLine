@@ -34,40 +34,6 @@ _FREQ_MARKERS = (
     re.compile(r"MODES\s+EIGV\s+FREQUENCIES\s+IRREP"),
 )
 
-# One sampled q, as a dispersion (SCELPHONO) run heads each block:
-#   DISPERSION K POINT NUMBER     2 COORD:  C(  0  0  1 )    WEIGHT:    1.
-# The letter is R for a q that is its own opposite (real eigenvectors) and C
-# otherwise; the triple is in units of the shrinking factors below.
-_QPOINT_HEADER = re.compile(
-    r"DISPERSION K POINT NUMBER\s+(\d+)\s+COORD:\s*[A-Z]?\(\s*"
-    r"(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*\)"
-)
-# The denominators of that triple, in the two spellings CRYSTAL uses: a
-# supercell run states one factor per axis, a plain dispersion run one for all.
-_SHRINK_FACTORS = re.compile(
-    r"WITH SHRINKING FACTORS:\s*IS1\s*=\s*(\d+)\s+IS2\s*=\s*(\d+)\s+IS3\s*=\s*(\d+)"
-)
-_SHRINK_DENOMINATOR = re.compile(r"EXPRESSED IN UNITS\s+OF DENOMINATOR\s+(\d+)")
-
-# An eigenvector block, as CRYSTAL writes it under each frequency table
-# (reproduced column for column, after the comment marker and one space):
-#
-#  FREQ(CM**-1)     48.10     48.10    188.99
-#
-#  AT.   1 O  X     0.0000    0.0000   -0.0000
-#             Y     0.0000   -0.0010    0.0001
-#             Z     0.0006   -0.0019   -0.0002
-#
-# The first thirteen columns name the atom and the axis and the numbers start at
-# the fourteenth, which is where CRYSTALClear reads them from; a block holds one
-# row per axis per atom, and as many column groups as it takes to cover the modes.
-_EIGENVECTOR_ANNOTATION = 13
-_EIGENVECTOR_HEADER = re.compile(r"^\s*FREQ\(CM\*\*-1\)")
-_EIGENVECTOR_ROW = re.compile(r"^\s*AT\.\s+\d+\s+[A-Za-z]{1,2}\s+X\s*$|^\s+[YZ]\s*$")
-# A number as CRYSTALClear itself picks them out of such a row.
-_EIGENVECTOR_NUMBER = re.compile(r"-*[\d.]+[E\d\-+]*")
-
-
 @dataclass
 class LoadedFile:
     """Result of :func:`load`: a structure and, if present, its phonon modes.
@@ -117,15 +83,10 @@ def load(path: str, initial: bool = False) -> LoadedFile:
     if the output is a frequency calculation, the phonon modes as well.
 
     An output whose frequency section cannot be read still opens, with the
-    geometry and a note saying why the modes are missing. Reading modes is the
-    fragile part: it goes through CRYSTALClear's eigenvector parser, which reads
-    each block to the first line that is not one of its rows.
-    :func:`_repair_eigenvector_blocks` recovers the common reason for that to go
-    wrong — a line in a block that is not one of its rows — and what is left is a
-    section this program cannot read. Losing the geometry as well, over that,
-    would be a poor trade.
+    geometry and a note saying why the modes are missing: losing the geometry
+    as well, over the modes, would be a poor trade.
     """
-    if not _is_gui(path) and not _is_cif(path) and has_phonons(path):
+    if not (_is_gui(path) or _is_cif(path) or _is_atom_list(path)) and has_phonons(path):
         try:
             structure, qmodes = load_dispersion(path)
             return LoadedFile(structure=structure, modes=qmodes[0], qmodes=qmodes)
@@ -184,13 +145,14 @@ def _expanded_cell(path: str, initial: bool) -> Optional[Structure]:
 
 
 def load_structure(path: str, initial: bool = False) -> Structure:
-    """Load a structure from a CRYSTAL ``.out``/``.gui`` file or a ``.cif``.
+    """Load a structure from a CRYSTAL ``.out``/``.gui`` file, a ``.cif``, or an
+    atom list (``.xyz``, ``.pdb``), which is read as a molecule.
 
     Parameters
     ----------
     path:
-        A CRYSTAL ``.out`` output, a ``.gui``/``.f34`` geometry file, or a
-        crystallographic ``.cif``.
+        A CRYSTAL ``.out`` output, a ``.gui``/``.f34`` geometry file, a
+        crystallographic ``.cif``, or an ``.xyz``/``.pdb`` atom list.
     initial:
         For ``.out`` files, read the initial geometry instead of the last one
         (relevant after a geometry optimisation). Ignored for ``.gui``/``.cif``.
@@ -199,7 +161,26 @@ def load_structure(path: str, initial: bool = False) -> Structure:
         return Structure.from_ase(_gui_to_ase(path))
     if _is_cif(path):
         return Structure.from_ase(_cif_to_ase(path))
+    if _is_atom_list(path):
+        return Structure.from_ase(_atom_list_to_ase(path))
     return Structure.from_ase(_out_to_ase(path, initial=initial))
+
+
+def _atom_list_to_ase(path: str) -> Atoms:
+    """An atom list opened as a structure of its own: a molecule.
+
+    Elements and Cartesian coordinates are all a plain ``.xyz`` or ``.pdb``
+    holds. A file that states a complete periodic cell — an extended ``.xyz``
+    with its ``Lattice``, a ``.pdb`` with a ``CRYST1`` record — keeps it; any
+    other is a molecule, with no cell at all.
+    """
+    atoms = read_atoms(path)
+    cell = np.asarray(atoms.cell, dtype=float)
+    if all(atoms.pbc) and abs(np.linalg.det(cell)) > 1e-6:
+        return atoms
+    atoms.set_pbc(False)
+    atoms.set_cell(np.zeros((3, 3)))
+    return atoms
 
 
 def _structure_for_modes(out, natom_modes: int) -> Structure:
@@ -234,69 +215,6 @@ def _structure_for_modes(out, natom_modes: int) -> Structure:
     )
 
 
-def _is_eigenvector_row(line: str, nmode: int) -> bool:
-    """Whether ``line`` is one row of an eigenvector block over ``nmode`` modes.
-
-    Both halves have to hold: the annotation field names an atom and an axis,
-    *and* the rest of the row carries exactly as many numbers as the block's
-    header listed frequencies. A line that satisfies only one of them was
-    written by something other than the eigenvector printer.
-    """
-    head, rest = line[:_EIGENVECTOR_ANNOTATION], line[_EIGENVECTOR_ANNOTATION:]
-    return bool(_EIGENVECTOR_ROW.match(head)) and \
-        len(_EIGENVECTOR_NUMBER.findall(rest)) == nmode
-
-
-def _repair_eigenvector_blocks(data: list) -> int:
-    """Take out of every eigenvector block whatever was written into it.
-
-    CRYSTALClear reads a block row by row from its header to the first blank
-    line, and assumes nothing but rows in between. Anything else there is read as
-    a further row, and since it holds a different count of numbers the whole
-    frequency section fails on the mismatched shape. Real outputs put three kinds
-    of line in that position: CRYSTAL's own ``REDUCED MASS OF MODE`` listing,
-    which some builds print straight after the last row; the runtime notes of the
-    compiler (``IEEE_UNDERFLOW_FLAG``); and the output of a patched build or of a
-    wrapper writing to the same stream. A line glued to the end of a block breaks
-    it; a line landing in the middle of one also cuts the rows after it off the
-    block they belong to.
-
-    Each block is rewritten here, in ``data`` and only there, as its own rows
-    followed by as many empty lines as there were other ones: the rows end up
-    contiguous, the block ends where they end, and the line count the caller's
-    ``eoo`` was computed against is unchanged. A q-point header or a further
-    block is never crossed. Returns how many lines were blanked — zero for an
-    output whose blocks hold nothing but their rows, which is every output none
-    of this applies to.
-
-    A row is recognised by the same 13-column annotation field CRYSTALClear
-    reads the numbers past, so this is exactly as strict as the parser it feeds;
-    and a block left short of rows is caught downstream by
-    :func:`_structure_for_modes`, which refuses modes that span neither cell
-    rather than placing them on the wrong one.
-    """
-    blanked = 0
-    index = 0
-    while index < len(data):
-        if not _EIGENVECTOR_HEADER.match(data[index]):
-            index += 1
-            continue
-        nmode = len(_EIGENVECTOR_NUMBER.findall(data[index][_EIGENVECTOR_ANNOTATION:]))
-        index += 2  # the header, then the blank line CRYSTAL puts under it
-        start = index
-        while (index < len(data) and data[index].strip()
-               and not _EIGENVECTOR_HEADER.match(data[index])
-               and not _QPOINT_HEADER.search(data[index])):
-            index += 1
-        block = data[start:index]
-        rows = [line for line in block if _is_eigenvector_row(line, nmode)]
-        if len(rows) == len(block):
-            continue  # rows and nothing else: this block needs no help
-        data[start:index] = rows + ["\n"] * (len(block) - len(rows))
-        blanked += len(block) - len(rows)
-    return blanked
-
-
 def load_dispersion(
     path: str,
     keep_imaginary: bool = True,
@@ -316,15 +234,7 @@ def load_dispersion(
     from CRYSTALClear.crystal_io import Crystal_output
 
     out = Crystal_output(path)
-    try:
-        out.get_phonon(read_eigvt=True, rm_imaginary=not keep_imaginary)
-    except Exception:
-        # Something other than CRYSTAL may have written into the frequency
-        # section. If so, take it out of the blocks it landed in and read them
-        # again; if not, the failure is a real one and belongs to the caller.
-        if not _repair_eigenvector_blocks(out.data):
-            raise
-        out.get_phonon(read_eigvt=True, rm_imaginary=not keep_imaginary)
+    out.get_phonon(read_eigvt=True, rm_imaginary=not keep_imaginary)
 
     # frequency: (nqpoint, nmode) in THz -> converted to cm^-1 below.
     # eigenvector at a q-point comes back per mode either flattened as
@@ -332,9 +242,13 @@ def load_dispersion(
     # part is zero, away from it it is CRYSTAL's "anti-phase" block.
     freqs = np.atleast_2d(np.asarray(out.frequency))
     eigvecs = np.asarray(out.eigenvector)
-    nq = min(len(freqs), len(eigvecs))
-    if nq == 0:
-        raise ValueError("this output reports no phonon modes")
+    if len(eigvecs) == 0:
+        # A dispersion along a path prints none unless asked with MODES.
+        raise ValueError("this output prints no phonon eigenvectors")
+    if len(eigvecs) != len(freqs):
+        raise ValueError(f"this output has {len(freqs)} sets of frequencies but "
+                         f"{len(eigvecs)} of eigenvectors")
+    nq = len(freqs)
 
     structure = _structure_for_modes(out, int(np.asarray(eigvecs[0][0]).size) // 3)
     natom = len(structure)
@@ -390,53 +304,19 @@ def _modes_at(freqs, eigvecs, natom: int, qpoint, activity: bool, out) -> Phonon
 
 
 def _sampled_qpoints(out, nq: int) -> list:
-    """The q of each mode set, in the order CRYSTALClear returns them.
+    """The q of each mode set, in CRYSTALClear's order.
 
-    Read from the output text rather than from ``Crystal_output.qpoint``, which
-    can't be lined up with the frequencies: it omits the Gamma block that heads
-    a dispersion run (leaving ``nqpoint - 1`` entries for ``nqpoint`` mode sets)
-    and divides all three components by the *first* shrinking factor, which is
-    wrong the moment a SCELPHONO supercell isn't cubic.
-
-    Anything that doesn't line up — no q header at all (a plain FREQCALC), or a
-    QHA run whose "q-point" axis counts volumes rather than points in reciprocal
-    space — falls back to ``None`` (Gamma) for every set. Unlabelled beats
-    mislabelled: a wrong q would put a wrong phase on every image atom.
+    ``Crystal_output.qpoint`` holds one entry per set of frequencies, Gamma
+    first, each in the reciprocal basis of the cell the modes belong to. Where
+    it does not line up with the mode sets read — a QHA run, whose sets are
+    volumes rather than points in reciprocal space — every set is ``None``,
+    taken as Gamma: unlabelled beats mislabelled, since a wrong q would put a
+    wrong phase on every image atom.
     """
-    lines = getattr(out, "data", None)
-    if lines is None:
+    qpoints = [np.asarray(coord, dtype=float) for coord, _weight in getattr(out, "qpoint", [])]
+    if len(qpoints) != nq:
         return [None] * nq
-    end = getattr(out, "eoo", None)
-    parsed = _qpoints_from_lines(lines[:end] if end else lines)
-    if len(parsed) != nq:
-        return [None] * nq
-    return parsed
-
-
-def _qpoints_from_lines(lines) -> list:
-    """Fractional q of every ``DISPERSION K POINT`` header, in file order.
-
-    Empty when the run reports no q headers, or when their denominators (the
-    shrinking factors) never appear — without those the integer triples cannot
-    be turned into coordinates.
-    """
-    shrink = None
-    qpoints = []
-    for line in lines:
-        if shrink is None:
-            factors = _SHRINK_FACTORS.search(line)
-            if factors:
-                shrink = np.array([int(f) for f in factors.groups()], dtype=float)
-            else:
-                single = _SHRINK_DENOMINATOR.search(line)
-                if single:
-                    shrink = np.full(3, float(single.group(1)))
-        header = _QPOINT_HEADER.search(line)
-        if header:
-            qpoints.append(np.array([int(v) for v in header.groups()[1:]], dtype=float))
-    if not qpoints or shrink is None or np.any(shrink <= 0):
-        return []
-    return [q / shrink for q in qpoints]
+    return qpoints
 
 
 def load_adp(path: str) -> Optional[ADPSet]:
@@ -750,6 +630,11 @@ def file_action(path: str) -> Optional[str]:
     if os.path.splitext(path)[1].lower() in _IMPORT_SUFFIXES:
         return "import"
     return None
+
+
+def _is_atom_list(path: str) -> bool:
+    """Whether ``path`` is an atom list: elements and coordinates, nothing more."""
+    return os.path.splitext(path)[1].lower() in _IMPORT_SUFFIXES
 
 
 def _is_gui(path: str) -> bool:

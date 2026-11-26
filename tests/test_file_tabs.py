@@ -82,6 +82,13 @@ def test_atoms_are_imported_only_when_nothing_is_opened():
     assert openable(["x.xyz", "y.xyz"], _action) == ([], ["x.xyz"], ["y.xyz"])
 
 
+def test_with_no_structure_open_atom_lists_open_as_molecules():
+    assert openable(["x.xyz", "y.xyz"], _action, can_import=False) == (
+        ["x.xyz", "y.xyz"], [], [])
+    assert openable(["x.xyz", "a.out"], _action, can_import=False) == (
+        ["x.xyz", "a.out"], [], [])
+
+
 # ── a tab ─────────────────────────────────────────────────────────────────
 def test_a_tab_without_a_file_or_atoms_is_blank():
     tab = FileTab()

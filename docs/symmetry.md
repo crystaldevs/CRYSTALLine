@@ -8,22 +8,23 @@ The symmetry reported depends on the periodicity of the structure:
 | --- | --- |
 | crystal (3D) | space group |
 | slab (2D) | layer group |
-| polymer (1D) | the repeat length only, see below |
+| polymer (1D) | rod group, see below |
 | molecule (0D) | point group |
 
 The panel also reports the point group, the lattice parameters, the cell volume
 or area, the density and the formula. All of them are recomputed when the
 structure is edited.
 
-A polymer's symmetry is a rod group, and no rod group is named here: the
-symmetry library the program uses (spglib) implements the 230 space groups and
-the 80 layer groups, but not the 75 rod groups. A 1D structure is therefore
-reported by its repeat length and its formula, and its symmetry elements are
-listed by the point-symmetry analysis below like those of any other structure.
-A deck written for a polymer uses rod group 1, with every atom listed, which is
-always valid. Reducing the symmetry of a polymer is refused for the same reason.
-One-dimensional systems are not otherwise supported; see
-[Not supported yet](index.md#not-supported-yet).
+A polymer's symmetry is a rod group, reported with CRYSTAL's numbering: the 99
+of Appendix A.3 of the CRYSTAL manual, each a subset of a space group, with the
+chain along *x*. The symmetry library the program uses (spglib) has no rod
+groups, so they are found here: the axis of the chain is where every one of its
+operations leaves it, the orientations tried about it are those of its mirror
+planes and twofold axes, and the largest group the chain satisfies is taken. A
+deck written for a polymer is in that group, with its asymmetric unit, once the
+group has been shown to rebuild the chain; otherwise in rod group 1, with every
+atom listed, which is always valid. Reducing the symmetry of a polymer is not
+supported yet; see [Not supported yet](index.md#not-supported-yet).
 
 ### Which cell is described
 
@@ -79,6 +80,11 @@ Subgroups that cannot be written in a CRYSTAL deck are listed in grey rather
 than omitted. Each candidate is verified by reconstruction: the operators are
 multiplied out and the structure is rebuilt from them, so that a subgroup is
 offered only if it regenerates the crystal.
+
+**No symmetry (P1)** keeps the identity alone, so that every atom of the cell is
+independent. It is always available, also where removing operators one at a
+time cannot reach it: below F222 the subgroups of rock salt are all written in
+another cell, and are listed in grey.
 
 The reduction applies to the structure itself. The Info panel reports it under
 **Treated as**, and the decks written afterwards use it.

@@ -430,84 +430,171 @@ def test_an_output_with_no_primitive_section_still_reports_the_mismatch():
         _structure_for_modes(_FakeOutput(8), 4)
 
 
-# ── which q-points a run sampled ──────────────────────────────────────────
-# A SCELPHONO run reports modes at every q its supercell makes commensurate.
-# Their coordinates are read from the output text rather than from
-# CRYSTALClear's ``qpoint`` list, which omits the Gamma block that heads the
-# run (so it can't be lined up with the frequencies) and divides all three
-# components by the first shrinking factor (wrong for a non-cubic supercell).
-_DISPERSION_HEADERS = """
- * WITH SHRINKING FACTORS: IS1 =     2 IS2 =     1 IS3 =     4                 *
-  DISPERSION K POINT NUMBER     1 COORD:  R(  0  0  0 )    WEIGHT:    1.
-  DISPERSION K POINT NUMBER     2 COORD:  C(  0  0  1 )    WEIGHT:    1.
-  DISPERSION K POINT NUMBER     3 COORD:  R(  1  0  2 )    WEIGHT:    1.
+# ── which q-points a run sampled, as CRYSTALClear reads them ─────────────
+# A SCELPHONO run reports modes at every q its supercell makes commensurate, and
+# a dispersion along a path at every point of the path. The loader takes the
+# q-points from CRYSTALClear's ``qpoint``, one per set of frequencies with Gamma
+# included, so these pin down what it relies on, in the two layouts CRYSTAL
+# prints: a SCELPHONO run, with a banner and IR/Raman columns between Gamma's
+# header and its frequencies, and a path, with Gamma's frequencies straight
+# under its header and no eigenvectors unless asked with MODES.
+_ENERGY_LINES = """
+ ATOM      MODE       ENERGY
+  CENTRAL POINT    -275.5843212045     0.0000    0.0000
 """
+_GAMMA_BANNER = """
+ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+ EIGENVALUES (EIGV) OF THE MASS WEIGHTED HESSIAN MATRIX AND HARMONIC TRANSVERSE
+ OPTICAL (TO) FREQUENCIES.
+
+ CONVERSION FACTORS FOR FREQUENCIES:
+      1 CM**(-1) =   0.4556335E-05 HARTREE
+      1 THZ      =   0.3335641E+02 CM**(-1)
+
+ HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH
+"""
+def _scelphono(extra_rows=""):
+    gamma_modes = """
+    MODES         EIGV          FREQUENCIES     IRREP  IR   INTENS    RAMAN
+             (HARTREE**2)   (CM**-1)     (THZ)             (KM/MOL)
+    1-   1   -0.1000E-20     -0.0000   -0.0000  (A  )   A (     0.00)   A
+    2-   2    0.1000E-20      0.0000    0.0000  (A  )   A (     0.00)   A
+    3-   3    0.1000E-20      0.0000    0.0000  (A  )   A (     0.00)   A
+    4-   4    0.1740E-05    289.5092    8.6793  (A  )   A (     1.50)   A
+    5-   5    0.1740E-05    289.5092    8.6793  (A  )   A (     1.50)   A
+    6-   6    0.2319E-04   1056.8831   31.6846  (A  )   I (     0.00)   A
+"""
+    block = """ FREQ(CM**-1)      0.00      0.00      0.00    289.51    289.51   1056.88
+
+ AT.   1 O  X     0.1570   -0.0010    0.0191    0.0000   -0.0000    0.1937
+            Y    -0.0191   -0.0073    0.1568    0.1443   -0.1292   -0.0000
+            Z     0.0002    0.1580    0.0073   -0.1292   -0.1443   -0.0000
+ AT.   2 MG X     0.1570   -0.0010    0.0191   -0.0000    0.0000   -0.1292
+""" + extra_rows + """            Y    -0.0191   -0.0073    0.1568   -0.0962    0.0862    0.0000
+            Z     0.0002    0.1580    0.0073   -0.0862   -0.0962    0.0000
+
+"""
+    def q(n, kind, coords, anti=True):
+        text = f"\n  DISPERSION K POINT NUMBER     {n} COORD:  {kind}({coords[0]:3d}{coords[1]:3d}{coords[2]:3d} )    WEIGHT:    1.\n\n"
+        text += """    MODES         EIGV          FREQUENCIES     IRREP
+             (HARTREE**2)   (CM**-1)     (THZ)
+    1-   1    0.1000E-07     21.9000    0.6566  (  1)
+    2-   2    0.1000E-07     22.0000    0.6596  (  1)
+    3-   3    0.1000E-07     40.0000    1.1992  (  1)
+    4-   4    0.1740E-05    290.0000    8.6940  (  1)
+    5-   5    0.1740E-05    291.0000    8.7240  (  1)
+    6-   6    0.2319E-04   1050.0000   31.4785  (  1)
+
+ MODES IN PHASE
+
+""" + block
+        if anti:
+            text += " MODES IN ANTI-PHASE\n\n" + block
+        return text
+    return (_ENERGY_LINES + """
+ * WITH SHRINKING FACTORS: IS1 =     2 IS2 =     1 IS3 =     4                 *
+ +++ SYMMETRY ADAPTION OF VIBRATIONAL MODES +++
+
+  DISPERSION K POINT NUMBER     1 COORD:  R(  0  0  0 )    WEIGHT:    1.
+
+""" + _GAMMA_BANNER + gamma_modes + """
+ NORMAL MODES NORMALIZED TO CLASSICAL AMPLITUDES (IN BOHR)
+
+""" + block + q(2, "C", (0, 0, 1)) + q(3, "R", (1, 0, 2), anti=False)
+            + "\n EEEEEEEEEE TERMINATION  DATE 01 01 2026 TIME 00:00:00.0\n")
+
+def _bands():
+    rows = lambda f: "".join(f"    {i}-   {i}    0.1000E-07 {v:11.4f} {v/33.356:9.4f}  (  1)\n" for i, v in enumerate(f, 1))
+    path = _ENERGY_LINES + " +++ SYMMETRY ADAPTION OF VIBRATIONAL MODES +++\n INFORMATION **** INPFREQ **** BANDS: MODES PRINTING DISABLED. USE KEYWORD MODES TO ENABLE.\n"
+    path += "  FROM K  (   0   0   0 ) TO K  (   4   4   0 ) WITH DENOMINATOR   12\n"
+    path += "  FROM K  (   4   4   0 ) TO K  (   0   0   0 ) WITH DENOMINATOR   12\n"
+    path += "  THE POSITION OF THE POINTS IS EXPRESSED IN UNITS OF DENOMINATOR   12\n"
+    for n, (kind, c, f) in enumerate([("R", (0, 0, 0), (-0.29, 0.02, 0.03)), ("C", (4, 4, 0), (-4.23, 1.24, 6.18)),
+                                      ("R", (0, 0, 0), (-0.29, 0.02, 0.03))], 1):
+        path += f"\n  DISPERSION K POINT NUMBER     {n} COORD:  {kind}({c[0]:4d}{c[1]:4d}{c[2]:4d} )    WEIGHT:    1.\n\n"
+        if n == 2:
+            path += "    MODES         EIGV          FREQUENCIES     IRREP\n             (HARTREE**2)   (CM**-1)     (THZ)\n"
+        path += rows(f) + "\n"
+    return path + "\n EEEEEEEEEE TERMINATION  DATE 01 01 2026 TIME 00:00:00.0\n"
 
 
-def test_qpoints_are_read_with_one_denominator_per_axis():
-    from crystalline.crystalio.loader import _qpoints_from_lines
+def _read(tmp_path, text, eigenvectors=True):
+    from CRYSTALClear.crystal_io import Crystal_output
 
-    qpoints = _qpoints_from_lines(_DISPERSION_HEADERS.splitlines())
-
-    assert len(qpoints) == 3  # Gamma included: it is the run's first k point
-    assert np.allclose(qpoints[0], [0.0, 0.0, 0.0])
-    assert np.allclose(qpoints[1], [0.0, 0.0, 0.25])
-    assert np.allclose(qpoints[2], [0.5, 0.0, 0.5])
-
-
-def test_qpoints_also_read_the_single_denominator_spelling():
-    from crystalline.crystalio.loader import _qpoints_from_lines
-
-    lines = [
-        " K POINTS EXPRESSED IN UNITS  OF DENOMINATOR    3",
-        "  DISPERSION K POINT NUMBER     1 COORD:  R(  0  0  0 )    WEIGHT:    1.",
-        "  DISPERSION K POINT NUMBER     2 COORD:  C(  0  1  0 )    WEIGHT:    2.",
-    ]
-
-    qpoints = _qpoints_from_lines(lines)
-
-    assert np.allclose(qpoints[1], [0.0, 1 / 3, 0.0])
+    path = tmp_path / "run.out"
+    path.write_text(text)
+    out = Crystal_output(str(path))
+    out.get_phonon(read_eigvt=eigenvectors, rm_imaginary=False)
+    return out
 
 
-def test_a_plain_frequency_run_reports_no_qpoints():
-    """No dispersion headers, or headers without their denominators, means
-    there is nothing to place in reciprocal space — and Gamma is the answer."""
-    from crystalline.crystalio.loader import _qpoints_from_lines
+@pytest.mark.parametrize("eigenvectors", [True, False])
+def test_qpoints_start_at_gamma_with_one_denominator_per_axis(tmp_path, eigenvectors):
+    """A 2×1×4 supercell: Gamma, (0, 0, 1)/4 and (1, 0, 2)/(2, 1, 4)."""
+    out = _read(tmp_path, _scelphono(), eigenvectors)
 
-    assert _qpoints_from_lines([" MODES         EIGV          FREQUENCIES     IRREP"]) == []
-    assert _qpoints_from_lines(
-        ["  DISPERSION K POINT NUMBER     2 COORD:  C(  0  0  1 )    WEIGHT:    1."]
-    ) == []
+    qpoints = [coord for coord, _weight in out.qpoint]
+    assert len(qpoints) == len(out.frequency) == 3
+    assert np.allclose(qpoints, [[0, 0, 0], [0, 0, 0.25], [0.5, 0, 0.5]])
+    assert len(out.intens) == 6                     # Gamma's IR, read once
+    assert len(out.eigenvector) == (3 if eigenvectors else 0)
 
 
-class _FakeDispersionOutput:
-    """The attributes ``_sampled_qpoints`` reads off a ``Crystal_output``."""
+def test_lines_written_into_an_eigenvector_block_are_not_read_as_rows(tmp_path):
+    """The debug output of a patched CRYSTAL, landing between the rows."""
+    clean = _read(tmp_path, _scelphono())
+    noisy = _read(tmp_path, _scelphono(" xa_g -7.7669E-07  2.5775E-05\n after displ\n"))
 
-    def __init__(self, text):
-        self.data = text.splitlines()
-        self.eoo = len(self.data)
+    assert np.allclose(noisy.eigenvector, clean.eigenvector)
+
+
+@pytest.mark.parametrize("eigenvectors", [True, False])
+def test_a_path_is_read_from_gamma_with_no_eigenvectors(tmp_path, eigenvectors):
+    """Gamma at both ends of the path, its frequencies under its header."""
+    out = _read(tmp_path, _bands(), eigenvectors)
+
+    qpoints = [coord for coord, _weight in out.qpoint]
+    assert np.allclose(qpoints, [[0, 0, 0], [1 / 3, 1 / 3, 0], [0, 0, 0]])
+    assert len(out.frequency) == 3 and len(out.eigenvector) == 0
+
+
+def test_a_path_s_segments_are_read_as_integers_over_their_denominator(tmp_path):
+    """As the output states them, and as a fort.25 writes its corners: (4,4,0)
+    means nothing without its 12."""
+    path = _read(tmp_path, _bands(), eigenvectors=False).qpath
+    assert [(list(start), list(end), shrink) for start, end, shrink in path] == [
+        ([0, 0, 0], [4, 4, 0], 12), ([4, 4, 0], [0, 0, 0], 12)]
+
+    assert _read(tmp_path, _scelphono()).qpath == []        # no path, no segments
+
+
+def test_the_loader_takes_the_qpoints_as_crystalclear_reads_them(tmp_path):
+    from crystalline.crystalio.loader import _sampled_qpoints
+
+    qpoints = _sampled_qpoints(_read(tmp_path, _scelphono()), 3)
+
+    assert np.allclose(qpoints, [[0, 0, 0], [0, 0, 0.25], [0.5, 0, 0.5]])
 
 
 def test_qpoints_that_do_not_line_up_with_the_modes_are_dropped():
-    """A QHA run's "q-point" axis counts volumes, not points in reciprocal
-    space, and any other mismatch would misphase every image atom. Unlabelled
-    (i.e. Gamma) beats mislabelled."""
+    """A QHA run's sets are volumes, not points in reciprocal space, and any
+    other mismatch would misphase every image atom. Unlabelled (i.e. Gamma)
+    beats mislabelled."""
+    from types import SimpleNamespace
+
     from crystalline.crystalio.loader import _sampled_qpoints
 
-    out = _FakeDispersionOutput(_DISPERSION_HEADERS)
+    out = SimpleNamespace(qpoint=[[np.zeros(3), 1.0], [np.array([0, 0, 0.25]), 1.0]])
 
-    assert _sampled_qpoints(out, 3)[1] is not None  # three headers, three sets
-    assert _sampled_qpoints(out, 5) == [None] * 5  # five sets: not this run's q
+    assert _sampled_qpoints(out, 2)[1] is not None
+    assert _sampled_qpoints(out, 5) == [None] * 5
 
 
 def test_an_output_whose_modes_cannot_be_read_still_opens(monkeypatch, tmp_path):
     """The geometry is not lost with the frequencies.
 
-    Reading modes goes through CRYSTALClear's eigenvector parser, which gives
-    up on an output carrying anything it does not expect — the extra output of
-    a patched CRYSTAL, a job script's own listing. That used to take the whole
-    file down: the structure was there to be read, and the window showed an
-    error instead of it.
+    Whatever makes the modes unreadable, the structure is there to be read,
+    and the window shows it rather than an error.
     """
     from ase.build import bulk
 
@@ -534,89 +621,6 @@ def test_an_output_whose_modes_cannot_be_read_still_opens(monkeypatch, tmp_path)
     assert result.qpoints == []
     assert result.note and "could not be read" in result.note
     assert "inhomogeneous" in result.note      # and it says what went wrong
-
-
-# One eigenvector block as CRYSTAL prints it: the frequencies, then a row per
-# axis per atom. The blank line after the last row is what tells a reader the
-# block has ended — the point of the two tests below.
-_EIGENVECTOR_BLOCK = """
- FREQ(CM**-1)     48.10     48.10    188.99
-
- AT.   1 O  X     0.0000    0.0000   -0.0000
-            Y     0.0000   -0.0010    0.0001
-            Z     0.0006   -0.0019   -0.0002
- AT.   2 MG X    -0.0000   -0.0000   -0.0000
-            Y     0.0848    0.0745   -0.1091
-            Z    -0.0746    0.0841    0.0812
-"""
-
-
-def test_a_well_formed_eigenvector_block_is_left_alone():
-    """Nothing is repaired in an output CRYSTAL wrote on its own."""
-    from crystalline.crystalio.loader import _repair_eigenvector_blocks
-
-    data = (_EIGENVECTOR_BLOCK + "\n VIBRATIONAL TEMPERATURES (K)\n").splitlines(True)
-    original = list(data)
-
-    assert _repair_eigenvector_blocks(data) == 0
-    assert data == original
-
-
-def test_lines_glued_to_an_eigenvector_block_are_blanked():
-    """A foreign line touching the last row is read as another row of it.
-
-    Its numbers do not count out to the block's modes, so the whole frequency
-    section fails on the mismatched shape. The lines are blanked instead — and
-    only they: the numbering the caller parses against has to survive, and so
-    do the rows themselves.
-    """
-    from crystalline.crystalio.loader import _repair_eigenvector_blocks
-
-    debug = " *** metroFRA_disp ***\n xa_g -7.7669E-07  2.5775E-05\n"
-    data = (_EIGENVECTOR_BLOCK.rstrip("\n") + "\n" + debug + "\n MORE CRYSTAL OUTPUT\n")
-    data = data.splitlines(True)
-    rows = [line for line in data if " AT. " in line or line[:13].strip() in ("Y", "Z")]
-    length = len(data)
-
-    assert _repair_eigenvector_blocks(data) == 2  # the two foreign lines, no more
-    assert len(data) == length  # blanked, not removed: the numbering has to hold
-    assert [line for line in data if " AT. " in line or line[:13].strip() in ("Y", "Z")] == rows
-    assert data[-1] == " MORE CRYSTAL OUTPUT\n"  # what came after the blank line
-    last_row = max(i for i, line in enumerate(data) if line in rows)
-    assert data[last_row + 1].strip() == ""  # the block ends where its rows end
-
-
-def test_a_qpoint_header_is_never_blanked():
-    """Whatever else a block ran into, the next q-point has to stay readable."""
-    from crystalline.crystalio.loader import _repair_eigenvector_blocks
-
-    header = "  DISPERSION K POINT NUMBER     2 COORD:  C(  1  0  0 )    WEIGHT:    1.\n"
-    data = (_EIGENVECTOR_BLOCK.rstrip("\n") + "\n" + header).splitlines(True)
-
-    assert _repair_eigenvector_blocks(data) == 0
-    assert data[-1] == header
-
-
-def test_lines_landing_inside_a_block_leave_its_rows_together():
-    """Text written into the middle of a block cuts the rows after it adrift.
-
-    The reader stops at the first line that is not a row, so those rows are lost
-    from the block and its eigenvectors come out short — the same failure as
-    text glued to the end, further from its cause. They are gathered back here.
-    """
-    from crystalline.crystalio.loader import _repair_eigenvector_blocks
-
-    block = _EIGENVECTOR_BLOCK.rstrip("\n").splitlines(True)
-    interruption = [" Sono dentro scanpes\n"] * 3
-    data = block[:-2] + interruption + block[-2:] + ["\n"]
-    length = len(data)
-
-    assert _repair_eigenvector_blocks(data) == 3
-    assert len(data) == length
-    rows = [line for line in data if line.strip()][1:]  # past the FREQ header
-    assert len(rows) == 6  # two atoms, three axes: every row of the block
-    assert rows == [line for line in block if " AT. " in line or line[:13].strip() in ("Y", "Z")]
-    assert all(line.strip() == "" for line in data[-4:])  # the block ends after them
 
 
 # ── the vacuum CRYSTAL writes across a slab or a chain ──────────────────
@@ -672,3 +676,45 @@ def test_a_periodic_axis_is_never_unwrapped():
     before = crystal.get_positions().copy()
 
     assert np.array_equal(_unwrap_aperiodic(crystal).get_positions(), before)
+
+
+# ── an atom list opened as a structure of its own ─────────────────────────
+def test_an_xyz_opens_as_a_molecule(tmp_path):
+    from crystalline.crystalio import load
+
+    path = tmp_path / "co2.xyz"
+    path.write_text("3\nCO2\nC 0 0 0\nO 0 0 1.16\nO 0 0 -1.16\n")
+
+    loaded = load(str(path))
+
+    atoms = loaded.structure.to_ase()
+    assert atoms.get_chemical_formula() == "CO2" and loaded.modes is None
+    assert not atoms.pbc.any() and np.allclose(atoms.cell, 0)
+    assert np.allclose(atoms.positions[1], [0, 0, 1.16])
+
+
+def test_a_pdb_opens_as_a_molecule(tmp_path):
+    from crystalline.crystalio import load
+
+    path = tmp_path / "water.pdb"
+    path.write_text(
+        "HETATM    1  O   HOH A   1       0.000   0.000   0.000  1.00  0.00           O\n"
+        "HETATM    2  H1  HOH A   1       0.957   0.000   0.000  1.00  0.00           H\n"
+        "HETATM    3  H2  HOH A   1      -0.240   0.927   0.000  1.00  0.00           H\n"
+        "END\n")
+
+    atoms = load(str(path)).structure.to_ase()
+
+    assert atoms.get_chemical_formula() == "H2O" and not atoms.pbc.any()
+
+
+def test_an_extended_xyz_keeps_the_cell_it_states(tmp_path):
+    from crystalline.crystalio import load
+
+    path = tmp_path / "nacl.xyz"
+    path.write_text('2\nLattice="5.64 0 0 0 5.64 0 0 0 5.64" Properties=species:S:1:pos:R:3 '
+                    'pbc="T T T"\nNa 0 0 0\nCl 2.82 2.82 2.82\n')
+
+    atoms = load(str(path)).structure.to_ase()
+
+    assert atoms.pbc.all() and np.allclose(atoms.cell.cellpar()[:3], 5.64)

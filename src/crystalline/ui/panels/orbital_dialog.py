@@ -110,7 +110,6 @@ class OrbitalDialog(QDialog):
         layout.addLayout(form)
 
         self._note = WrappedLabel()
-        self._note.setStyleSheet("color: palette(mid);")
         layout.addWidget(self._note)
 
         # ── which orbital ───────────────────────────────────────────────
@@ -205,7 +204,6 @@ class OrbitalDialog(QDialog):
         )
         tiling.addWidget(self.tile)
         self._tile_note = QLabel()
-        self._tile_note.setStyleSheet("color: palette(mid);")
         tiling.addWidget(self._tile_note, 1)
         layout.addLayout(tiling)
 

@@ -41,7 +41,12 @@ _LIST_MIN_HEIGHT = 180
 class SpectraDialog(QDialog):
     """Pick spectra and broadening; returns them through :meth:`selection`."""
 
-    def __init__(self, kinds: Sequence[SpectrumKind], parent: Optional[QWidget] = None) -> None:
+    def __init__(self, kinds: Sequence[SpectrumKind], parent: Optional[QWidget] = None,
+                 bounds: Optional[tuple] = None) -> None:
+        """``bounds`` are the ends of the frequency track, in cm^-1: those of
+        the spectra in hand (see :func:`frequency_bounds
+        <crystalline.crystalio.spectra.frequency_bounds>`), the handles at
+        either end until something says otherwise."""
         super().__init__(parent)
         self.setWindowTitle("Vibrational spectra")
         # Tall enough that the list gets the room, not merely its floor: the
@@ -78,6 +83,8 @@ class SpectraDialog(QDialog):
         # The same controls the plot itself carries, so that what is tuned here
         # and what is tuned there cannot drift apart (see SpectraOptions).
         self.options_widget = SpectraOptions(self)
+        if bounds:
+            self.options_widget.set_bounds(bounds)
         layout.addWidget(self.options_widget)
         # Named here as well, because dialog_state remembers a dialog by walking
         # the widgets it holds, and because these names are what the tests and

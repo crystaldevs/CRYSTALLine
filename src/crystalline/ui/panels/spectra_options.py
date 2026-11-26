@@ -34,7 +34,7 @@ from crystalline.crystalio.spectra import (
     DEFAULT_STDEV,
     LINESHAPES,
 )
-from crystalline.ui.panels.controls import Section, range_row, slider_row
+from crystalline.ui.panels.controls import Section, range_row, set_span, slider_row
 
 # Label, and the plot keyword each row is read back into.
 _WIDTHS = (
@@ -141,7 +141,7 @@ class SpectraOptions(QWidget):
         # nothing about each other: the span is the thing being chosen, and this
         # shows how much of the spectrum it covers.
         span = Section(layout, "Frequency range")
-        _slider, self.fmin, self.fmax = range_row(
+        self._range_slider, self.fmin, self.fmax = range_row(
             span, "Range (cm⁻¹)", 0.0, 4000.0, 0.0, 5000.0, decimals=0, step=100.0,
             on_change=lambda _low, _high: self.changed.emit(),
         )
@@ -170,6 +170,24 @@ class SpectraOptions(QWidget):
             "frequency_range": None if low == high else (low, high),
         }
 
+    def set_bounds(self, bounds, span=None) -> None:
+        """Run the range track over ``bounds``, handles on ``span`` or the whole track.
+
+        The track belongs to the spectra in hand (see
+        :func:`~crystalline.crystalio.spectra.frequency_bounds`), not to the
+        control. It stretches to take in a ``span`` that reaches past it, so
+        the range a plot was drawn with is always one the handles can show.
+        Silent, like :meth:`set_options`.
+        """
+        low, high = sorted(float(bound) for bound in bounds)
+        span = sorted(float(edge) for edge in span) if span else [low, high]
+        blocked = self.blockSignals(True)
+        try:
+            set_span((self._range_slider, self.fmin, self.fmax),
+                     min(low, span[0]), max(high, span[1]), *span)
+        finally:
+            self.blockSignals(blocked)
+
     def set_options(self, options: Optional[dict]) -> None:
         """Show ``options`` without announcing them: the caller already has them."""
         if not options:
@@ -188,7 +206,10 @@ class SpectraOptions(QWidget):
             if index >= 0:
                 self.colours.setCurrentIndex(index)
             span = options.get("frequency_range")
-            if span:
+            bounds = options.get("frequency_bounds")
+            if bounds:
+                self.set_bounds(bounds, span)
+            elif span:
                 self.fmin.setValue(float(span[0]))
                 self.fmax.setValue(float(span[1]))
         finally:

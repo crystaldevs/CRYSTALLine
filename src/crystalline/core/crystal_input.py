@@ -35,8 +35,8 @@ Design choices for this first cut (see the module's tests for the exact decks):
   convention (3D fractional; 2D ``x,y`` fractional and ``z`` in Å; 1D ``x``
   fractional and ``y,z`` in Å; 0D all Å) and its own minimal set of lattice
   parameters. A slab is written in its layer group, checked the same way
-  (:mod:`crystalline.core.slab_symmetry`); a polymer in rod group 1 with every
-  atom listed, since spglib has no rod groups. Cells whose periodic directions
+  (:mod:`crystalline.core.slab_symmetry`), a polymer in its rod group, one of
+  CRYSTAL's 99 (:mod:`crystalline.core.rod_groups`). Cells whose periodic directions
   are not already the ones CRYSTAL expects (slab in ``xy``, polymer along
   ``x``) are rotated into place.
 * **Basis sets** are CRYSTAL's internal libraries via ``BASISSET`` (all-electron,
@@ -679,7 +679,7 @@ def _geometry_lines(structure: Structure, opts: GeometryOptions) -> List[str]:
     if ndim == 2:
         return [opts.title, "SLAB"] + _slab_body(structure, opts)
     if ndim == 1:
-        return [opts.title, "POLYMER"] + _polymer_body(structure)
+        return [opts.title, "POLYMER"] + _polymer_body(structure, opts)
     return [opts.title, "MOLECULE"] + _molecule_body(structure)
 
 
@@ -784,13 +784,15 @@ def _p1_slab_body(structure: Structure) -> List[str]:
     return lines
 
 
-def _polymer_body(structure: Structure) -> List[str]:
+def _polymer_body(structure: Structure, opts: GeometryOptions) -> List[str]:
     """Block-1 body for a 1D polymer: rod group, repeat length, atoms.
 
     Coordinates follow the manual's 1D convention — ``x`` fractional along the
-    periodic vector, ``y`` and ``z`` in Ångström across it. Rod group 1 is
-    written with every atom listed, for the same reason as a slab: spglib has no
-    rod groups, so there is no orbit information to reduce with.
+    periodic vector, ``y`` and ``z`` in Ångström across it. The chain is written
+    in its own rod group (:mod:`crystalline.core.rod_groups`), with its axis
+    through the origin of ``y`` and ``z`` and only the asymmetric unit listed;
+    where the group cannot be shown to rebuild the chain, rod group 1 with every
+    atom listed, which is always true.
     """
     pbc = [bool(p) for p in structure.pbc]
     cell, positions, axes = _oriented(structure, [i for i, p in enumerate(pbc) if p], "polymer")
@@ -798,11 +800,39 @@ def _polymer_body(structure: Structure) -> List[str]:
     a = float(np.linalg.norm(va))
     e1, e2, e3 = _polymer_frame(va)
 
+    if opts.use_symmetry and len(positions):
+        body = _rod_group_body(structure.numbers, positions @ np.column_stack([e1, e2, e3]),
+                               a, opts.symprec)
+        if body is not None:
+            return body
     lines = ["1", f"{a:.6f}", str(len(positions))]
     for z_number, r in zip(structure.numbers, positions):
         lines.append(
             _atom_line(int(z_number), (float(r @ e1) / a, float(r @ e2), float(r @ e3)))
         )
+    return lines
+
+
+def _rod_group_body(numbers, positions, a: float, symprec: float):
+    """The chain in its rod group, or ``None`` if that cannot be trusted.
+
+    ``positions`` are Cartesian with ``x`` along the chain. Written only once the
+    group's operations have been shown to rebuild the chain from the atoms
+    listed, as for a slab's layer group.
+    """
+    from crystalline.core import rod_groups
+
+    try:
+        symmetry = rod_groups.analyse(numbers, positions, a, symprec)
+        if symmetry.group.number == 1 or not rod_groups.regenerates(symmetry):
+            return None
+        unit_numbers, unit = rod_groups.asymmetric_unit(symmetry)
+    except Exception:  # noqa: BLE001 - rod group 1 is always a valid answer
+        return None
+    lines = [str(symmetry.group.number), f"{a:.6f}", str(len(unit_numbers))]
+    for z_number, row in zip(unit_numbers, unit):
+        # Rounded first, so that an atom on the axis reads 0, not -0.
+        lines.append(_atom_line(int(z_number), np.round(row, 10) + 0.0))
     return lines
 
 

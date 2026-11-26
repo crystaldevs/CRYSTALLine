@@ -61,6 +61,17 @@ _WHEEL_IDLE_MS = 250
 # rather than a view that stops drawing.
 _UNCONFIRMED_SIZE_MS = 1000
 
+# The workers running a view's background jobs, held here rather than by the
+# view: a view closed mid-job must not take a running thread down with it.
+_RUNNING: set = set()
+
+
+def _alive(widget) -> bool:
+    """Whether ``widget``'s Qt side still exists — a closed tab's has gone."""
+    import shiboken6
+
+    return shiboken6.isValid(widget)
+
 
 def make_interactor(parent: QWidget, **options) -> QtInteractor:
     """A pyvistaqt view inside ``parent``, every widget around it left shown or hidden as it was.
@@ -101,6 +112,9 @@ class Viewport(QWidget):
     camera_busy = Signal(bool)
     delete_requested = Signal()  # Del/Backspace pressed while the 3D view has focus
     nudge_requested = Signal(object)  # arrow key: (dx, dy, dz) world vector to move the selection
+    # What the view is working out in the background, for the status bar; ""
+    # when it has finished.
+    working = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -180,6 +194,10 @@ class Viewport(QWidget):
 
         self.interactor.render = request_render
         self.renderer = StructureRenderer(self.interactor)
+        # The coordination analysis behind the polyhedra runs off the UI thread:
+        # on a cell of a few hundred atoms it takes a second or more, which the
+        # window would otherwise spend frozen.
+        self.renderer.run_in_background = self._run_in_background
         self._structure: Optional[Structure] = None
         self._reference_cell: Optional[np.ndarray] = None  # original cell, for axis views
         self._editing = False  # arrow-key nudging is only live in editing mode
@@ -670,6 +688,34 @@ class Viewport(QWidget):
     def set_selection(self, indices) -> None:
         """Highlight exactly the given atom indices (the shared selection)."""
         self.renderer.highlight(indices)
+
+    # ── background work ─────────────────────────────────────────────────
+    def _run_in_background(self, job, done) -> None:
+        """Run ``job()`` on a worker thread and hand its result to ``done`` here.
+
+        The renderer's hook (see ``StructureRenderer.run_in_background``). A job
+        that fails is answered with no polyhedra, as the inline analysis would
+        draw none, and the status bar says so. A tab closed while its job runs
+        gets no answer: the worker is kept alive until its thread has finished,
+        so the thread is never destroyed while running.
+        """
+        from crystalline.ui.widgets.busy import Worker
+
+        worker = Worker(job)
+        _RUNNING.add(worker)
+
+        def finish(result, message: str = "") -> None:
+            _RUNNING.discard(worker)
+            if not _alive(self):
+                return
+            self.working.emit(message)
+            done(result)
+
+        worker.finished.connect(finish)
+        worker.failed.connect(
+            lambda exc: finish([], f"Could not find the coordination polyhedra: {exc}"))
+        self.working.emit("Finding the coordination polyhedra…")
+        worker.start()
 
     # ── export ──────────────────────────────────────────────────────────
     def export_image(self, path: str, *, scale: int = 1, transparent: bool = False) -> str:

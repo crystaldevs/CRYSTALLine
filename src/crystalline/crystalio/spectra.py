@@ -213,6 +213,34 @@ def available_spectra(path: Optional[str]) -> List[SpectrumKind]:
     return sorted(load_spectra(path), key=lambda k: k.sort_key)
 
 
+# Frequency bounds are whole multiples of this, in cm^-1.
+_BOUND_STEP = 100.0
+# Room above the highest line, as a fraction of it: a broadened peak has tails
+# past its centre, and a line against the end of the track is hard to see.
+_BOUND_HEADROOM = 0.1
+
+
+def frequency_bounds(curves) -> tuple:
+    """``(low, high)`` in cm^-1: the ends of a range slider over ``curves``.
+
+    From the lines themselves, so the slider reaches every one of them: an
+    anharmonic run lists overtones and combination bands well past any
+    fundamental, 2ν(O–H) near 7000 cm^-1 among them. The low end is 0, or below
+    it if a curve has lines at negative frequencies; the high end is 10% past
+    the highest line. Both are rounded outwards to a multiple of 100 cm^-1.
+    ``curves`` are ``(N, 2)`` arrays, frequency first; with no lines at all the
+    bounds are ``(0, 100)``.
+    """
+    frequencies = [np.asarray(curve, dtype=float)[:, 0] for curve in curves if len(curve)]
+    frequencies = np.concatenate(frequencies) if frequencies else np.zeros(1)
+    frequencies = frequencies[np.isfinite(frequencies)]
+    lowest = float(frequencies.min()) if len(frequencies) else 0.0
+    highest = float(frequencies.max()) if len(frequencies) else 0.0
+    low = min(0.0, math.floor(lowest / _BOUND_STEP) * _BOUND_STEP)
+    high = math.ceil(highest * (1.0 + _BOUND_HEADROOM) / _BOUND_STEP) * _BOUND_STEP
+    return low, max(high, low + _BOUND_STEP)
+
+
 def plot_spectra(
     datasets: Sequence[tuple],
     *,
@@ -420,6 +448,7 @@ __all__ = [
     "LINESHAPES",
     "SpectrumKind",
     "available_spectra",
+    "frequency_bounds",
     "load_spectra",
     "plot_spectra",
     "scheme_colours",

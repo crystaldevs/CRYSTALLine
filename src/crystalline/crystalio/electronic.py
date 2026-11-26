@@ -644,6 +644,7 @@ class ElectronicOptions:
     projection_labels: Optional[List[str]] = None        # one per chosen projection
     projection_colours: Optional[List[str]] = None       # likewise
     overlay_projections: bool = True
+    dos_fill: bool = True                                # shade under each DOS curve
     spin_down: str = SPIN_MIRRORED
     band_colour: str = BAND_COLOUR
     beta_colour: str = BETA_COLOUR
@@ -767,12 +768,19 @@ def draw(bands, doss, options: ElectronicOptions, fermi_at: float = 0.0):
             prj=chosen, dos_range=_span(options.dos_range),
             color=colours if overlay else colours[0],
             labels=names if overlay else None,
-            linewidth=options.linewidth, **common))
+            linewidth=options.linewidth, fill=options.dos_fill, **common))
         if not overlay:
+            from matplotlib.collections import PolyCollection
+
             for ax, colour, name in zip(figure.axes, colours, names):
                 for line in ax.get_lines():
                     if len(line.get_xdata()) > 2:
                         line.set_color(colour)
+                # The shading under the curve, in the curve's colour; its
+                # transparency is the artist's own and stays as it is.
+                for shade in ax.collections:
+                    if isinstance(shade, PolyCollection):
+                        shade.set_facecolor(colour)
                 if options.legend:
                     ax.text(0.99, 0.92, name, transform=ax.transAxes,
                             ha="right", va="top", fontsize="small")
@@ -789,7 +797,7 @@ def draw(bands, doss, options: ElectronicOptions, fermi_at: float = 0.0):
             dos_prj=chosen, dos_range=_span(options.dos_range),
             color_band=options.band_colour, color_dos=_colours(options, chosen),
             labels=_labels(options, chosen), linewidth=options.linewidth,
-            legend=options.legend and len(chosen) > 1, **common))
+            legend=options.legend and len(chosen) > 1, fill=options.dos_fill, **common))
         if bands.spin == 2:
             _restyle_beta(figure.axes[0], bands.n_kpoints, options)
         _tidy_k_axis(figure.axes[0])
@@ -850,17 +858,30 @@ def _style_fermi(figure, axis: str, at: float, options: ElectronicOptions) -> No
 def _label_energy(figure, axis: str, options: ElectronicOptions) -> None:
     """Say which energy the axis carries — CRYSTALClear's labels can't know.
 
-    Its combined plot calls the axis plain "Energy" although it is E − E_F,
-    and its standalone band label sets a fixed size that ignores the figure
-    font the app lets people choose.
+    Its combined plot calls the axis plain "Energy" although it is E − E_F.
     """
     unit = options.unit
     text = (rf"$E - E_\mathrm{{F}}$ ({unit})" if options.reference == RELATIVE
             else rf"$E$ ({unit})")
-    if axis == "y":
-        figure.supylabel(text)
-    else:
-        figure.supxlabel(text)
+    relabel(figure, axis, text)
+
+
+def relabel(figure, axis: str, text: str) -> None:
+    """Rename the label CRYSTALClear gave the ``axis`` (``"x"`` or ``"y"``) of ``figure``.
+
+    The label is renamed where CRYSTALClear put it: on the axes of the one
+    panel it belongs to, or on the figure when it is shared by a column or a
+    row of panels. On the axes it also takes matplotlib's size for an axis
+    label, so it follows the plot font chosen in the app rather than the
+    fixed size the band plotters give it.
+    """
+    from matplotlib import rcParams
+
+    for ax in figure.axes:
+        if getattr(ax, f"get_{axis}label")():
+            getattr(ax, f"set_{axis}label")(text, fontsize=rcParams["axes.labelsize"])
+            return
+    (figure.supylabel if axis == "y" else figure.supxlabel)(text)
 
 
 def _spin_legend(ax, options: ElectronicOptions) -> None:

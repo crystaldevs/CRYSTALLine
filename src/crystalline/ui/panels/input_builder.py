@@ -75,7 +75,6 @@ from crystalline.core.crystal_input import (
     TaskOptions,
     TwoComponentOptions,
     build_input,
-    geometry_note,
     suggest_shrink,
     tolinteg_warnings,
     write_input,
@@ -428,10 +427,6 @@ class InputBuilderDialog(QDialog):
             "space-group number whenever it is the International Tables' standard setting."
         )
         form.addRow("Cell", self._cell)
-        self._cell_note = QLabel()
-        self._cell_note.setWordWrap(True)
-        self._cell_note.setStyleSheet("color: palette(mid);")
-        form.addRow(self._cell_note)
 
         form.addRow(_gap())
         self._supercel = _SupercellGroup(title="Supercell (SUPERCEL)")
@@ -1432,10 +1427,6 @@ class InputBuilderDialog(QDialog):
         except CrystalInputError as exc:
             self._preview.setPlainText(f"⚠  {exc}")
             self._save_btn.setEnabled(False)
-            return
-        note = geometry_note(self._structure, spec.geometry)
-        self._cell_note.setText(note)
-        self._cell_note.setVisible(bool(note))
 
     # ── save ────────────────────────────────────────────────────────────
     def _save(self) -> None:

@@ -29,7 +29,6 @@ Qt-free, like the rest of ``crystalio``: the dialog chooses, this draws.
 from __future__ import annotations
 
 import math
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -151,19 +150,14 @@ class OutputPath:
     first_point: Tuple[float, ...] = ()       # cm⁻¹, sorted
 
 
-_SEGMENT = re.compile(
-    r"FROM K\s*\(\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*\)\s*TO K\s*\(\s*(-?\d+)\s+(-?\d+)\s+(-?\d+)"
-    r"\s*\)\s*WITH DENOMINATOR\s+(\d+)")
-_FREQUENCY_ROW = re.compile(r"^\s*(\d+)-\s*(\d+)\s+\S+\s+(-?\d+\.\d+)\s+-?\d+\.\d+")
-
 
 def output_path(path: Optional[str]) -> Optional[OutputPath]:
     """The path of a dispersion run's ``PHONON BANDS``, or ``None``.
 
-    Read from the output, where CRYSTAL states every segment with its
-    denominator, and with the frequencies at the path's first point — what a
-    band file from the same run starts with. Remembered by the version of the
-    file, as the other reads are.
+    As CRYSTALClear reads it from the output, where CRYSTAL states every
+    segment with its denominator, with the frequencies at the path's first
+    point — what a band file from the same run starts with. Remembered by the
+    version of the file, as the other reads are.
     """
     if not path:
         return None
@@ -174,36 +168,19 @@ def output_path(path: Optional[str]) -> Optional[OutputPath]:
 
 
 def _output_path(path: str) -> Optional[OutputPath]:
-    segments: List[Tuple[Tuple[int, ...], Tuple[int, ...], int]] = []
-    first: List[float] = []
-    reading = done = False
+    from CRYSTALClear.crystal_io import Crystal_output
+
     try:
-        with open(path, "r", errors="ignore") as handle:
-            for line in handle:
-                if "WITH DENOMINATOR" in line:
-                    match = _SEGMENT.search(line)
-                    if match:
-                        numbers = [int(g) for g in match.groups()]
-                        segments.append((tuple(numbers[:3]), tuple(numbers[3:6]), numbers[6]))
-                    continue
-                if done or not segments:
-                    continue
-                if not reading:
-                    reading = "DISPERSION K POINT NUMBER" in line
-                    continue
-                row = _FREQUENCY_ROW.match(line)
-                if row:
-                    count = int(row.group(2)) - int(row.group(1)) + 1
-                    first.extend([float(row.group(3))] * count)
-                elif first:
-                    done = True
-    except OSError:
+        out = Crystal_output(path)
+        out.get_phonon(read_eigvt=False, rm_imaginary=False)
+    except Exception:  # noqa: BLE001 - an output that will not read states no path
         return None
-    if not segments:
+    if not out.qpath:
         return None
-    corners = [segments[0][0]] + [segment[1] for segment in segments]
-    return OutputPath(corners=tuple(corners), shrink=segments[0][2],
-                      first_point=tuple(sorted(first)))
+    corners = [tuple(int(v) for v in out.qpath[0][0])]
+    corners += [tuple(int(v) for v in end) for _start, end, _shrink in out.qpath]
+    first = tuple(sorted(float(f) for f in thz_to_cm(np.asarray(out.frequency[0]))))
+    return OutputPath(corners=tuple(corners), shrink=int(out.qpath[0][2]), first_point=first)
 
 
 # ── the path an input deck asked for ──────────────────────────────────────
@@ -386,6 +363,7 @@ class PhononOptions:
     projection_labels: Optional[List[str]] = None
     projection_colours: Optional[List[str]] = None
     overlay_projections: bool = True
+    dos_fill: bool = True                                   # shade under each DOS curve
     band_colour: str = BAND_COLOUR
     linewidth: float = 1.0
     show_zero: bool = True
@@ -438,7 +416,8 @@ def plot_phonons(bands_path: Optional[str] = None, dos_path: Optional[str] = Non
         k_labels=options.k_labels, projections=options.projections,
         projection_labels=options.projection_labels,
         projection_colours=options.projection_colours,
-        overlay_projections=options.overlay_projections, spin_down=el.SPIN_ALONGSIDE,
+        overlay_projections=options.overlay_projections, dos_fill=options.dos_fill,
+        spin_down=el.SPIN_ALONGSIDE,
         band_colour=options.band_colour, linewidth=options.linewidth,
         show_fermi=options.show_zero, fermi_colour=options.zero_colour,
         fermi_style=options.zero_style, fermi_width=options.zero_width,
@@ -451,12 +430,9 @@ def plot_phonons(bands_path: Optional[str] = None, dos_path: Optional[str] = Non
 def _label_axes(figure, axis: str, options: PhononOptions) -> None:
     """Frequency on one axis, and the DOS in states per unit on the other."""
     unit = r"cm$^{-1}$" if options.unit == CM else "THz"
-    frequency = f"Frequency ({unit})"
-    if axis == "y":
-        figure.supylabel(frequency)
-    else:
-        figure.supxlabel(frequency)
-        figure.supylabel(f"DOS (states/{unit})")
+    el.relabel(figure, axis, f"Frequency ({unit})")
+    if axis == "x":
+        el.relabel(figure, "y", f"DOS (states/{unit})")
 
 
 # ── plumbing ──────────────────────────────────────────────────────────────

@@ -147,6 +147,7 @@ def test_what_the_first_file_needs_is_imported_once_the_window_is_up():
     """So that the first file opened does not pay for the imports instead:
     half a second of pymatgen, sympy, spglib and ASE, plus the k-d tree."""
     pytest.importorskip("scipy")
+    import importlib.util
     import inspect
 
     from crystalline import app
@@ -155,6 +156,8 @@ def test_what_the_first_file_needs_is_imported_once_the_window_is_up():
     thread.join(timeout=120)
     assert not thread.is_alive()
     assert "scipy.spatial" in sys.modules
+    if importlib.util.find_spec("pymatgen") is not None:
+        assert "pymatgen.analysis.local_env" in sys.modules  # for Polyhedra
     # ...started after the window is shown, not alongside its import, where
     # the two would only take turns.
     source = inspect.getsource(app)
@@ -168,6 +171,6 @@ def test_the_warm_up_list_names_modules_that_exist():
 
     from crystalline import app
 
-    missing = [name for name in app._FIRST_FILE_MODULES
+    missing = [name for name in app._FIRST_FILE_MODULES + app._POLYHEDRA_MODULES
                if importlib.util.find_spec(name) is None]
     assert missing == []

@@ -246,11 +246,6 @@ class GeometryPanel(QWidget):
         box = QVBoxLayout(group)
         box.setContentsMargins(0, 0, 0, 0)
 
-        self._hint = QLabel(measure_mod.selection_hint(0))
-        self._hint.setWordWrap(True)
-        self._hint.setStyleSheet("color: palette(mid);")
-        box.addWidget(self._hint)
-
         self._measure_btn = QPushButton("Measure selection")
         self._measure_btn.setToolTip(
             "1 atom → position, 2 → distance, 3 → angle, 4 → dihedral, taking the "
@@ -521,10 +516,10 @@ class GeometryPanel(QWidget):
         row = QHBoxLayout()
         self._coord_boxes = []
         for axis in ("x", "y", "z"):
+            row.addWidget(QLabel(axis))
             spin = QDoubleSpinBox()
             spin.setRange(-_COORD_RANGE, _COORD_RANGE)
             spin.setDecimals(4)
-            spin.setPrefix(f"{axis} ")
             # A box wide enough for "-1000.0000" would add ~110px each to the
             # panel's preferred width, and a dock takes its width from that — three
             # of them pushed this dock wider than the 3D view beside it. Ignoring
@@ -694,7 +689,6 @@ class GeometryPanel(QWidget):
         kept = [i for i in self._selection if i in still]
         before = set(kept)
         self._selection = kept + [i for i in given if i not in before]
-        self._hint.setText(measure_mod.selection_hint(len(self._selection)))
         self.sync_position()  # also calls _sync_buttons
 
     def set_editing_enabled(self, enabled: bool) -> None:

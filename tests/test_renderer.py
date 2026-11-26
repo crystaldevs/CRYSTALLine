@@ -254,7 +254,7 @@ def test_the_abc_gizmo_lives_in_screen_space_not_in_the_scene():
     assert renderer._orientation_widget is not None
     # an arrow and a label per periodic direction, plus the invisible prop that
     # widens the bounds so the labels aren't clipped at the viewport edge
-    assert renderer._lattice_marker().GetParts().GetNumberOfItems() == 3 * 2 + 1
+    assert renderer._lattice_marker().assembly.GetParts().GetNumberOfItems() == 3 * 2 + 1
 
 
 def test_the_gizmo_shows_one_arrow_per_periodic_direction():
@@ -270,94 +270,134 @@ def test_the_gizmo_shows_one_arrow_per_periodic_direction():
 
     renderer.set_structure(Structure.from_ase(slab))
 
-    assert renderer._lattice_marker().GetParts().GetNumberOfItems() == 2 * 2 + 1  # a and b only
+    assert renderer._lattice_marker().assembly.GetParts().GetNumberOfItems() == 2 * 2 + 1  # a and b only
 
 
-def test_the_gizmo_labels_are_screen_aligned_captions():
-    """3D text turns edge-on and vanishes exactly when its axis points at the
-    viewer — which is the case in each of the a/b/c alignment views. Captions are
-    drawn in the image plane, so they stay upright and legible from every angle."""
+def _marker_props(marker):
+    parts = marker.assembly.GetParts()
+    parts.InitTraversal()
+    return [parts.GetNextProp() for _ in range(parts.GetNumberOfItems())]
+
+
+def _letter_centres(marker):
+    """Where each letter was put by the last ``face``: its matrix's translation."""
+    return [np.array([actor.GetUserMatrix().GetElement(row, 3) for row in range(3)])
+            for actor, _tip, _w, _h in marker.letters._letters]
+
+
+def _screen(vector, camera):
+    """``vector`` as seen on screen: its part across the line of sight."""
+    forward = np.array(camera.GetDirectionOfProjection())
+    forward /= np.linalg.norm(forward)
+    return vector - (vector @ forward) * forward
+
+
+def test_the_gizmo_letters_are_geometry_not_screen_text():
+    """Screen text is laid out in pixels, and a supersampled export, rendered
+    in tiles, scaled it a second time: the letters came out three times too
+    large beside arrows that kept their size. As meshes in the marker's own
+    space they scale with the arrows, whatever the export does."""
     import vtk
 
     renderer = StructureRenderer(pv.Plotter(off_screen=True))
     renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+    props = _marker_props(renderer._lattice_marker())
 
-    parts = renderer._lattice_marker().GetParts()
-    parts.InitTraversal()
-    captions = [
-        part for part in (parts.GetNextProp() for _ in range(parts.GetNumberOfItems()))
-        if isinstance(part, vtk.vtkCaptionActor2D)
-    ]
+    assert not any(isinstance(p, vtk.vtkActor2D) for p in props)
+    assert all(isinstance(p, vtk.vtkActor) for p in props)
+    assert len(renderer._lattice_marker().letters) == 3
 
-    assert [c.GetCaption() for c in captions] == ["a", "b", "c"]
-    # no border and no leader line: just the letter at the arrow tip
-    assert all(not c.GetBorder() and not c.GetLeader() for c in captions)
+
+@pytest.mark.parametrize("azimuth, elevation", [(35, 25), (-60, 10), (150, -40)])
+def test_each_letter_sits_beyond_its_own_tip_on_screen(azimuth, elevation):
+    """Centred on the line its arrow makes on screen, past the tip: read as
+    the continuation of its own axis, never as a neighbour's. Its letters used
+    to be drawn up and to the right of the tip whichever way the axis pointed,
+    which put them beside, or on, the wrong arrow."""
+    plotter = pv.Plotter(off_screen=True)
+    renderer = StructureRenderer(plotter)
+    renderer.set_structure(Structure.from_ase(bulk("ZnO", "wurtzite", a=3.25, c=5.2)))
+    camera = plotter.camera
+    camera.Azimuth(azimuth)
+    camera.Elevation(elevation)
+    camera.OrthogonalizeViewUp()
+    marker = renderer._lattice_marker()
+
+    marker.letters.face(camera)
+
+    for (_actor, tip, _w, _h), centre in zip(marker.letters._letters, _letter_centres(marker)):
+        along = _screen(tip, camera)
+        if np.linalg.norm(along) < 0.35 * np.linalg.norm(tip):
+            continue    # nearly head-on: eased aside on purpose (see the next test)
+        offset = _screen(centre - tip, camera)
+        unit = along / np.linalg.norm(along)
+        assert offset @ unit > 0                                   # past the tip
+        assert np.linalg.norm(offset - (offset @ unit) * unit) < 1e-6 * np.linalg.norm(offset) + 1e-9
+
+
+def test_a_letter_turns_to_face_the_camera():
+    """Never edge-on, as fixed 3D text would be when its axis points at the viewer."""
+    plotter = pv.Plotter(off_screen=True)
+    renderer = StructureRenderer(plotter)
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+    marker = renderer._lattice_marker()
+    marker.letters.face(plotter.camera)
+
+    forward = np.array(plotter.camera.GetDirectionOfProjection())
+    for actor, _tip, _w, _h in marker.letters._letters:
+        normal = np.array([actor.GetUserMatrix().GetElement(row, 2) for row in range(3)])
+        assert normal @ forward == pytest.approx(-1.0)              # facing the viewer
+
+
+def test_a_head_on_axis_puts_its_letter_where_the_others_are_not():
+    """Looking down a, its arrow is a dot at the origin, where b and c start.
+    Its letter goes to the side they leave empty, not on top of them."""
+    plotter = pv.Plotter(off_screen=True)
+    renderer = StructureRenderer(plotter)
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64, cubic=True)))
+    plotter.view_vector((-1.0, 0.0, 0.0), viewup=(0.0, 0.0, 1.0))   # down a
+    marker = renderer._lattice_marker()
+
+    marker.letters.face(plotter.camera)
+
+    camera = plotter.camera
+    a_letter = _screen(_letter_centres(marker)[0], camera)
+    for _actor, tip, _w, _h in marker.letters._letters[1:]:
+        assert a_letter @ _screen(tip, camera) < 0                 # away from b and from c
 
 
 def test_both_corner_markers_are_drawn_to_one_plan():
     """They share one corner, one at a time: the a/b/c gizmo when there is a
     cell, x/y/z when there is not. The corner used to change its whole
     appearance between the two — pyvista's stock marker is thin line shafts,
-    small cones and black letters — so both are built here now, and only the
+    small cones and black letters — so both are built here, and only the
     letters tell them apart."""
-    import vtk
-
     renderer = StructureRenderer(pv.Plotter(off_screen=True))
     renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
+    lattice, cartesian = renderer._lattice_marker(), renderer._cartesian_marker()
 
-    def pieces(marker):
-        parts = marker.GetParts()
-        parts.InitTraversal()
-        props = [parts.GetNextProp() for _ in range(parts.GetNumberOfItems())]
-        arrows = [p for p in props if isinstance(p, vtk.vtkActor)]
-        captions = [p for p in props if isinstance(p, vtk.vtkCaptionActor2D)]
-        return arrows, captions
-
-    lattice_arrows, lattice_letters = pieces(renderer._lattice_marker())
-    cartesian_arrows, cartesian_letters = pieces(renderer._cartesian_marker())
-
-    # the same arrows: as many, the same size, and each in its axis's colour
-    assert len(lattice_arrows) == len(cartesian_arrows)
-    for ours, theirs in zip(lattice_arrows, cartesian_arrows):
+    arrows = [[p for p in _marker_props(m)[0::2][:3]] for m in (lattice, cartesian)]
+    for ours, theirs in zip(*arrows):
         assert ours.GetProperty().GetColor() == theirs.GetProperty().GetColor()
         assert ours.GetMapper().GetInput().n_points == theirs.GetMapper().GetInput().n_points
         assert ours.GetProperty().GetLighting() == theirs.GetProperty().GetLighting()
-
-    # the same lettering, down to the box a caption scales its text to
-    for ours, theirs in zip(lattice_letters, cartesian_letters):
-        assert (ours.GetWidth(), ours.GetHeight()) == (theirs.GetWidth(), theirs.GetHeight())
-        assert ours.GetPadding() == theirs.GetPadding()
-        mine, yours = ours.GetCaptionTextProperty(), theirs.GetCaptionTextProperty()
-        assert mine.GetFontSize() == yours.GetFontSize()
-        assert (mine.GetBold(), mine.GetItalic()) == (yours.GetBold(), yours.GetItalic())
-        assert mine.GetJustification() == yours.GetJustification()
-        assert mine.GetColor() == yours.GetColor()
-
-    # and the letters are the one thing that differs
-    assert [c.GetCaption() for c in lattice_letters] == ["a", "b", "c"]
-    assert [c.GetCaption() for c in cartesian_letters] == ["X", "Y", "Z"]
+    # Letters drawn at one size: the same font height for each.
+    sizes = [[actor.GetMapper().GetInput().bounds for actor, *_ in m.letters._letters]
+             for m in (lattice, cartesian)]
+    assert all(b[3] - b[2] > 0 for marker in sizes for b in marker)
 
 
 def test_the_gizmo_letters_are_coloured_like_their_own_arrows():
-    """Where the two markers part company, and why: the stock letters are black,
-    which over a blue arrowhead is still a letter. A blue "c" over the blue
-    arrowhead is nothing at all, so a, b and c take their axis's colour — and
-    are anchored clear of the arrow rather than across it."""
-    import vtk
-
-    from crystalline.viz.renderer import _LATTICE_COLORS, _LATTICE_LABEL_OFFSET, _hex_to_rgb
+    """The stock letters are black. Here each takes its axis's colour, which
+    works because it stands clear of the arrow rather than across it."""
+    from crystalline.viz.renderer import _LATTICE_COLORS, _hex_to_rgb
 
     renderer = StructureRenderer(pv.Plotter(off_screen=True))
     renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64)))
-    parts = renderer._lattice_marker().GetParts()
-    parts.InitTraversal()
-    captions = [part for part in (parts.GetNextProp() for _ in range(parts.GetNumberOfItems()))
-                if isinstance(part, vtk.vtkCaptionActor2D)]
 
-    for caption, colour in zip(captions, _LATTICE_COLORS):
-        assert caption.GetCaptionTextProperty().GetColor() == pytest.approx(
+    for (actor, *_), colour in zip(renderer._lattice_marker().letters._letters, _LATTICE_COLORS):
+        assert actor.GetProperty().GetColor() == pytest.approx(
             tuple(c / 255.0 for c in _hex_to_rgb(colour)))
-    assert _LATTICE_LABEL_OFFSET > 1.0      # past the tip, not on it
 
 
 def test_a_non_periodic_structure_has_no_gizmo():
@@ -388,6 +428,80 @@ def test_settings_toggle_bonds_cell_and_polyhedra():
     )
     assert renderer._bond_actor is None and renderer._cell_actor is None
     assert renderer._polyhedra_actor is None
+
+
+class _Held:
+    """A stand-in for a view's background runner: holds each job until released."""
+
+    def __init__(self):
+        self.jobs = []
+
+    def __call__(self, job, done):
+        self.jobs.append((job, done))
+
+    def release(self, index=0):
+        job, done = self.jobs.pop(index)
+        done(job())
+
+
+def _held_renderer():
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    held = _Held()
+    renderer.run_in_background = held
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64, cubic=True)))
+    return renderer, held
+
+
+def test_ticking_polyhedra_does_not_wait_for_the_analysis():
+    """CrystalNN takes a second or more on a few hundred atoms, plus its import
+    the first time: run where the view runs things, the scene is drawn at once
+    and the polyhedra join it when the analysis is done."""
+    renderer, held = _held_renderer()
+
+    renderer.set_settings(RenderSettings(show_polyhedra=True))
+    assert renderer._polyhedra_actor is None          # not yet: the scene did not wait
+    assert renderer._bond_actor is not None           # the rest of it is there
+    assert len(held.jobs) == 1
+
+    held.release()
+    assert renderer._polyhedra_actor is not None      # and now they are
+
+
+def test_an_analysis_is_asked_for_once_and_then_reused():
+    renderer, held = _held_renderer()
+    renderer.set_settings(RenderSettings(show_polyhedra=True))
+    renderer.set_settings(RenderSettings(show_polyhedra=True, polyhedra_opacity=0.5))
+    assert len(held.jobs) == 1                        # the same geometry: one job
+
+    held.release()
+    renderer.set_settings(RenderSettings(show_polyhedra=True, polyhedra_opacity=0.8))
+    assert not held.jobs and renderer._polyhedra_actor is not None   # from the cache
+
+
+def test_polyhedra_turned_off_meanwhile_are_not_drawn_when_ready():
+    renderer, held = _held_renderer()
+    renderer.set_settings(RenderSettings(show_polyhedra=True))
+    renderer.set_settings(RenderSettings(show_polyhedra=False))
+
+    held.release()
+
+    assert renderer._polyhedra_actor is None
+    renderer.set_settings(RenderSettings(show_polyhedra=True))
+    assert renderer._polyhedra_actor is not None and not held.jobs   # but kept for later
+
+
+def test_an_analysis_overtaken_by_an_edit_does_not_draw_the_old_geometry():
+    renderer, held = _held_renderer()
+    renderer.set_settings(RenderSettings(show_polyhedra=True))
+    structure = renderer._structure
+    structure.move_atom(0, structure.positions[0] + [0.3, 0.0, 0.0])
+    renderer.refresh()
+    assert len(held.jobs) == 2                        # one per geometry
+
+    held.release(0)                                   # the old one comes back first
+    assert renderer._polyhedra_actor is None
+    held.release(0)
+    assert renderer._polyhedra_actor is not None
 
 
 def test_polyhedron_outline_shows_real_edges_only():
@@ -662,6 +776,19 @@ def test_scene_settings_and_atom_labels():
     )
     assert renderer._label_actor is not None  # element labels drawn
     assert renderer.plotter.camera.GetParallelProjection() == 1  # orthographic applied
+
+
+def test_every_3d_label_is_in_one_face():
+    """Atom labels used VTK's built-in Arial while the symmetry labels beside
+    them were DejaVu Sans, which has the Greek and Å the others need."""
+    from crystalline.viz.fonts import unicode_font
+
+    renderer = StructureRenderer(pv.Plotter(off_screen=True))
+    renderer.set_structure(Structure.from_ase(bulk("NaCl", "rocksalt", a=5.64, cubic=True)))
+    renderer.set_settings(RenderSettings(show_atom_labels=True))
+
+    text = renderer._label_actor.GetMapper().GetInputAlgorithm().GetTextProperty()
+    assert text.GetFontFile() == unicode_font()
 
 
 def test_default_projection_is_parallel():

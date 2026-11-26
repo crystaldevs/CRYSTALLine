@@ -7,6 +7,7 @@
 | CRYSTAL `.out` | structure and symmetry, the parameters and results of the calculation, vibrational modes, elastic tensor, equation of state and anharmonic data, according to what the run contains |
 | CRYSTAL `.gui` / `.f34` | structure and symmetry |
 | `.cif` | structure |
+| `.xyz` / `.pdb` | a molecule: elements and Cartesian coordinates, with the cell an extended `.xyz` or a `CRYST1` record states |
 
 These files may also be opened by dropping them on the window. Each file opens
 in a tab of its own.
@@ -19,10 +20,9 @@ file dropped on a window which already contains a structure is imported in the
 same way, into the tab on screen, unless it is dropped together with files that
 open tabs of their own, in which case it is left out.
 
-An `.xyz` or a `.pdb` holds coordinates and nothing else, with no cell and no
-calculation behind it, so it is only ever added to a structure and never opened
-as one. With no structure open there is nothing for it to join, and the window
-says so rather than taking it.
+An `.xyz` or a `.pdb` dropped on a window with no structure open, on the
+welcome page for instance, has nothing to join, and opens as a molecule in a
+tab of its own; so does one chosen in **File → Open…**.
 
 ## Data files read for the plots
 

@@ -60,16 +60,21 @@ def _zno():
 
 
 def _output(path, corners=_CORNERS, shrink=12, first=(-0.2914, 0.0203, 0.0203, 93.4181)):
-    """The part of a dispersion output that states the path and its first point."""
-    lines = [" *                              PHONON BANDS                                   *"]
+    """A dispersion output down to what is read from it: the path, stated
+    segment by segment with its denominator, and the frequencies at its first
+    point, printed as CRYSTAL prints them along a path (no MODES header at
+    Gamma). Frequencies are read back from the THz column, to 1e-4 THz."""
+    lines = ["  ATOM      MODE       ENERGY", "  CENTRAL POINT    -275.5843212045     0.0000",
+             " +++ SYMMETRY ADAPTION OF VIBRATIONAL MODES +++",
+             " *                              PHONON BANDS                                   *"]
     for start, end in zip(corners[:-1], corners[1:]):
         lines.append("  FROM K  ({:4d}{:4d}{:4d} ) TO K  ({:4d}{:4d}{:4d} ) WITH DENOMINATOR{:5d}"
                      .format(*start, *end, shrink))
-    lines += ["", "  DISPERSION K POINT NUMBER     1 COORD:  R(   0   0   0 )    WEIGHT:    1.", ""]
+    lines += ["  THE POSITION OF THE POINTS IS EXPRESSED IN UNITS OF DENOMINATOR   12", "",
+              "  DISPERSION K POINT NUMBER     1 COORD:  R(   0   0   0 )    WEIGHT:    1.", ""]
     for index, value in enumerate(first, start=1):
-        lines.append(f"  {index:3d}-{index:4d}    0.1E-11 {value:11.4f} {value / 33.356:9.4f}  (  1)")
-    lines.append("")
-    lines.append("  DISPERSION K POINT NUMBER     2 COORD:  C(   4   4   0 )    WEIGHT:    1.")
+        lines.append(f"  {index:3d}-{index:4d}    0.1E-11 {value:11.4f} {value / 33.35641:9.4f}  (  1)")
+    lines += ["", " EEEEEEEEEE TERMINATION  DATE 01 01 2026 TIME 00:00:00.0"]
     path.write_text("\n".join(lines) + "\n")
     return str(path)
 
@@ -147,7 +152,7 @@ def _info(ticks):
 def test_the_output_states_the_path_with_its_denominator(tmp_path):
     stated = pb.output_path(_output(tmp_path / "zno.out"))
     assert stated.corners == _CORNERS and stated.shrink == 12
-    assert stated.first_point == pytest.approx((-0.2914, 0.0203, 0.0203, 93.4181))
+    assert stated.first_point == pytest.approx((-0.2914, 0.0203, 0.0203, 93.4181), abs=5e-3)
 
 
 def test_fort25_corners_are_named_from_the_path_the_output_states(tmp_path):
@@ -206,8 +211,10 @@ def test_the_bands_are_drawn_in_the_unit_asked_for():
     top_thz = max(np.max(line.get_ydata()) for line in _curves(thz.axes[0]))
     assert top_cm == pytest.approx(top_thz * thz_to_cm(1.0), rel=1e-6)
     assert 550 < top_cm < 650                      # ZnO's highest branch
-    assert cm._supylabel.get_text() == "Frequency (cm$^{-1}$)"
-    assert thz._supylabel.get_text() == "Frequency (THz)"
+    # On the axes, where ax.set_ylabel changes it, not on the figure beside them.
+    assert cm.axes[0].get_ylabel() == "Frequency (cm$^{-1}$)"
+    assert thz.axes[0].get_ylabel() == "Frequency (THz)"
+    assert cm._supylabel is None and thz._supylabel is None
 
 
 @needs_zno
@@ -246,8 +253,37 @@ def test_a_phonon_dos_is_drawn_per_unit_of_frequency(tmp_path):
     where = lambda fig: max(np.max(line.get_xdata()) for line in _curves(fig.axes[0]))  # noqa: E731
     assert peak(thz) == pytest.approx(peak(cm) * thz_to_cm(1.0), rel=1e-6)
     assert where(cm) == pytest.approx(where(thz) * thz_to_cm(1.0), rel=1e-6)
-    assert cm._supylabel.get_text() == "DOS (states/cm$^{-1}$)"
-    assert cm._supxlabel.get_text() == "Frequency (cm$^{-1}$)"
+    assert cm.axes[0].get_ylabel() == "DOS (states/cm$^{-1}$)"
+    assert cm.axes[0].get_xlabel() == "Frequency (cm$^{-1}$)"
+    # Stacked panels share one DOS label, on the figure; the frequency axis
+    # is the bottom panel's.
+    stacked = pb.plot_phonons(None, path, pb.PhononOptions(mode=pb.DOS, unit=pb.THZ,
+                                                           overlay_projections=False))
+    assert stacked._supylabel.get_text() == "DOS (states/THz)"
+    assert stacked.axes[-1].get_xlabel() == "Frequency (THz)"
+    assert stacked._supxlabel is None
+
+
+def test_the_dos_is_shaded_unless_asked_not_to_be(tmp_path):
+    from matplotlib.collections import PolyCollection
+
+    def shades(**options):
+        figure = pb.plot_phonons(None, _pdos(tmp_path / "fort.25"),
+                                 pb.PhononOptions(mode=pb.DOS, **options))
+        return sum(isinstance(c, PolyCollection) for ax in figure.axes for c in ax.collections)
+
+    assert shades() == 2                      # one per projection
+    assert shades(dos_fill=False) == 0
+
+
+def test_an_overlaid_dos_is_scaled_to_its_curves(tmp_path):
+    """The DOS axis fits the curves drawn, not the frequencies beside them in
+    the same array: those run to hundreds of cm⁻¹ and flatten every peak."""
+    figure = pb.plot_phonons(None, _pdos(tmp_path / "fort.25"),
+                             pb.PhononOptions(mode=pb.DOS, overlay_projections=True))
+    ax = figure.axes[0]
+    tallest = max(np.max(line.get_ydata()) for line in _curves(ax))
+    assert tallest < ax.get_ylim()[1] < 1.2 * tallest
 
 
 @needs_zno
@@ -351,7 +387,8 @@ def test_settings_are_remembered_but_files_and_windows_are_not(qapp):
 
     state = capture(_dialog(qapp))
     for remembered in ("mode", "unit", "band_colour", "zero_colour", "zero_style",
-                       "zero_width", "overlay", "dos_auto", "linewidth", "show_zero", "legend"):
+                       "zero_width", "overlay", "fill", "dos_auto", "linewidth", "show_zero",
+                       "legend"):
         assert remembered in state, remembered
     assert "_files" not in state and "_k_edit" not in state and "_title" not in state
 

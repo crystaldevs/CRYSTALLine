@@ -44,7 +44,8 @@ vibrational modes on the right.
 ## Main features
 
 1. **Crystals, slabs, polymers and molecules.** A space group for a crystal, a
-   layer group for a slab, a point group for a molecule, with lattice
+   layer group for a slab, a rod group for a polymer, a point group for a
+   molecule, with lattice
    parameters, volume, density and formula beside it, all recomputed when you
    change anything.
 2. **Structures you edit by hand.** Drag an atom across the view and bonds,
@@ -72,11 +73,8 @@ vibrational modes on the right.
 
 ## Not supported yet
 
-**Symmetry of a polymer (1D).** A polymer is read, drawn, edited and given a
-band path like any other structure, but its symmetry is a rod group, and spglib
-names space groups and layer groups only. A polymer is therefore reported by its
-repeat length, its symmetry cannot be lowered, and its decks are written in rod
-group 1 with every atom listed.
+**Lowering the symmetry of a polymer (1D).** A polymer's rod group is found
+and its decks are written in it, but it cannot be reduced to a subgroup.
 
 **TOPOND.** CRYSTAL's [TOPOND](https://www.crystal.unito.it/topond.html) module
 writes files of its own for the topological analysis of the electron density,
