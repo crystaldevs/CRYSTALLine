@@ -55,6 +55,7 @@ class StandInViewport(QWidget):
     camera_busy = Signal(bool)
     delete_requested = Signal()
     nudge_requested = Signal(object)
+    working = Signal(str)
 
     def __init__(self, parent=None):
         import pyvista as pv

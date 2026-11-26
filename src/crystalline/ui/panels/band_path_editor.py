@@ -36,27 +36,10 @@ from crystalline.core.brillouin import display_label, special_points, zone_latti
 from crystalline.core.properties_input import (
     PropertiesInputError,
     band_path,
-    band_path_kind,
     band_shrink,
 )
 from crystalline.core.structure import Structure
 from crystalline.ui.safety import guard
-
-CONVENTIONAL_NOTE = "the conventional path for this lattice"
-
-# What is offered instead for the seven Bravais lattices whose conventional
-# path cannot be written: it visits points whose coordinates depend on the cell
-# parameters, and CRYSTAL reads a path as whole numbers over a shrinking factor.
-POINTS_NOTE = ("Γ out to each special point CRYSTAL names for this lattice — its "
-               "conventional path visits points that cannot be written as whole "
-               "numbers over a shrinking factor. Edit it, or build your own.")
-
-# What it says before a path exists. It starts empty on purpose: a band
-# structure is a claim about a particular walk through the zone, and the
-# conventional walk is one answer among several — for seven of the fourteen
-# Bravais lattices it is not even writable as a CRYSTAL path.
-EMPTY_NOTE = ("No path yet — build one on the zone with the path builder, add "
-              "segments by hand, or tick the conventional path.")
 
 # The shrinking-factor box shows this instead of a number when it is 0: the
 # smallest ISS that makes every coordinate on the path a whole number.
@@ -153,10 +136,12 @@ class BandPathEditor(QWidget):
         shrink_row.addStretch(1)
         outer.addWidget(_row_widget(shrink_row))
 
-        self.note = QLabel()
-        self.note.setWordWrap(True)
-        self.note.setStyleSheet("color: palette(mid);")
-        outer.addWidget(self.note)
+        # Why the last edit did not go through: a point that could not be read,
+        # a lattice with no conventional path. Shown only then.
+        self.error = QLabel()
+        self.error.setWordWrap(True)
+        self.error.setVisible(False)
+        outer.addWidget(self.error)
 
         # Everything the conventional tick greys out. The shrinking factor is
         # not among them: it rescales whatever path is in force, conventional
@@ -164,8 +149,6 @@ class BandPathEditor(QWidget):
         self._editors = [self._list, self._from, self._to, add, pick] + edit_buttons
         if conventional:
             self.fill_conventional()
-        else:
-            self.note.setText(EMPTY_NOTE)
         self._sync_enabled()
 
     # ── what the builders read ──────────────────────────────────────────
@@ -249,12 +232,16 @@ class BandPathEditor(QWidget):
         try:
             labels, segments = self._conventional()
         except PropertiesInputError as exc:
-            self.note.setText(str(exc))
+            self._show_error(str(exc))
             return
         for pair, segment in zip(labels, segments):
             self._add_row(pair, segment)
-        self.note.setText(CONVENTIONAL_NOTE if band_path_kind(self._structure) == "standard"
-                          else POINTS_NOTE)
+        self._show_error("")
+
+    def _show_error(self, text: str) -> None:
+        """Say why the last edit failed; empty text takes the line away."""
+        self.error.setText(text)
+        self.error.setVisible(bool(text))
 
     def reset(self) -> None:
         self.fill_conventional()
@@ -273,10 +260,10 @@ class BandPathEditor(QWidget):
             start_label, start = read_kpoint(self._from.currentText(), self._points)
             end_label, end = read_kpoint(self._to.currentText(), self._points)
         except ValueError as exc:
-            self.note.setText(str(exc))
+            self._show_error(str(exc))
             return
         self._add_row((start_label, end_label), (start, end))
-        self.note.setText("edited")
+        self._show_error("")
         self.changed.emit()
 
     def remove_segment(self) -> None:
@@ -285,7 +272,7 @@ class BandPathEditor(QWidget):
         row = self._list.currentRow()
         if row >= 0:
             self._list.takeItem(row)
-            self.note.setText("edited")
+            self._show_error("")
             self.changed.emit()
 
     def move_segment(self, delta: int) -> None:
@@ -298,7 +285,7 @@ class BandPathEditor(QWidget):
         item = self._list.takeItem(row)
         self._list.insertItem(target, item)
         self._list.setCurrentRow(target)
-        self.note.setText("edited")
+        self._show_error("")
         self.changed.emit()
 
     @guard()
@@ -314,7 +301,7 @@ class BandPathEditor(QWidget):
         self._list.clear()
         for pair, segment in picked:
             self._add_row(pair, segment)
-        self.note.setText("picked on the zone")
+        self._show_error("")
         self.changed.emit()
 
     @guard()
@@ -400,4 +387,4 @@ def read_kpoint(text: str, points: dict):
     return f"({label})", coords
 
 
-__all__ = ["AUTO_SHRINK", "CONVENTIONAL_NOTE", "BandPathEditor", "read_kpoint"]
+__all__ = ["AUTO_SHRINK", "BandPathEditor", "read_kpoint"]

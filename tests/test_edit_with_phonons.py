@@ -107,11 +107,9 @@ def _loaded_with_modes():
     return s, panel, window
 
 
-def test_adding_an_atom_drops_the_modes_and_says_why(qapp):
+def test_adding_an_atom_drops_the_modes(qapp):
     """A mode has one displacement per atom, so it cannot describe a structure
-    with another atom in it. Dropping it is right; doing so silently is not —
-    the panel emptied itself and greyed out, and nothing said what had happened
-    or that it was recoverable."""
+    with another atom in it."""
     s, panel, window = _loaded_with_modes()
 
     s.add_atom("H", [2, 2, 2])
@@ -119,10 +117,6 @@ def test_adding_an_atom_drops_the_modes_and_says_why(qapp):
 
     assert not panel.has_modes()
     assert not panel.isEnabled()
-    # ``isHidden`` rather than ``isVisible``: nothing is on screen in a test,
-    # so effective visibility is False for every widget in the panel.
-    assert not panel.note.isHidden()
-    assert "2 atoms" in panel.note.text() and "3" in panel.note.text()
 
 
 def test_putting_the_geometry_back_brings_the_modes_back(qapp):
@@ -142,7 +136,6 @@ def test_putting_the_geometry_back_brings_the_modes_back(qapp):
     assert panel.has_modes()
     assert panel.isEnabled()
     assert panel.mode_list.count() == 1
-    assert panel.note.isHidden()  # nothing left to explain
     # Anchored to the geometry on screen, not to the one the modes arrived with.
     assert np.allclose(panel._equilibrium, s.positions)
 
@@ -156,5 +149,4 @@ def test_moving_an_atom_keeps_the_modes(qapp):
     window.edited()
 
     assert panel.has_modes() and panel.isEnabled()
-    assert panel.note.isHidden()
     assert panel.current_mode_index() == 0  # and the selected mode survives

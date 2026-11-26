@@ -37,6 +37,8 @@ class CrystalInfo:
     space_group_number: Optional[int] = None
     layer_group_symbol: Optional[str] = None  # slab (2D) analogue of a space group
     layer_group_number: Optional[int] = None
+    rod_group_symbol: Optional[str] = None  # polymer (1D) analogue, CRYSTAL's numbering
+    rod_group_number: Optional[int] = None
     crystal_system: Optional[str] = None
     point_group: Optional[str] = None
     z: Optional[int] = None
@@ -72,6 +74,9 @@ class CrystalInfo:
         if self.layer_group_symbol is not None:
             rows.append(("Layer group",
                          f"{_pretty(self.layer_group_symbol)} (No. {self.layer_group_number})"))
+        elif self.rod_group_symbol is not None:
+            rows.append(("Rod group",
+                         f"{_pretty(self.rod_group_symbol)} (No. {self.rod_group_number})"))
         elif self.space_group_symbol is not None:
             rows.append(("Space group",
                          f"{_pretty(self.space_group_symbol)} (No. {self.space_group_number})"))
@@ -145,7 +150,7 @@ def analyze(structure: Structure, symprec: float = 1e-2, cell: str = "standard")
     if ndim == 2:
         return _analyze_slab(ase_atoms, formula, n_atoms, dimensionality, symprec)
     if ndim == 1:
-        return _analyze_polymer(ase_atoms, formula, n_atoms, dimensionality)
+        return _analyze_polymer(ase_atoms, formula, n_atoms, dimensionality, symprec)
 
     from pymatgen.io.ase import AseAtomsAdaptor
     from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
@@ -260,18 +265,27 @@ def _analyze_slab(ase_atoms, formula, n_atoms, dimensionality, symprec) -> Cryst
     )
 
 
-def _analyze_polymer(ase_atoms, formula, n_atoms, dimensionality) -> CrystalInfo:
-    """1D polymer: report the one periodic repeat length; the other two axes are
-    CRYSTAL's formal 500 Å placeholders. (spglib has no rod groups, so no group.)"""
+def _analyze_polymer(ase_atoms, formula, n_atoms, dimensionality,
+                     symprec: float = 1e-2) -> CrystalInfo:
+    """1D polymer: its rod group, numbered as CRYSTAL numbers them, and the one
+    periodic repeat length; the other two axes are CRYSTAL's formal 500 Å
+    placeholders."""
     from pymatgen.core import Composition
+
+    from crystalline.core import rod_groups
 
     pbc = [bool(p) for p in ase_atoms.get_pbc()]
     axis = next(i for i, p in enumerate(pbc) if p)
     length = float(np.linalg.norm(np.asarray(ase_atoms.get_cell(), dtype=float)[axis]))
     _, factor = Composition(ase_atoms.get_chemical_formula()).get_reduced_composition_and_factor()
+    try:
+        group = rod_groups.of_atoms(ase_atoms, symprec).group
+        symbol, number = group.symbol, group.number
+    except Exception:  # noqa: BLE001 - the repeat length is still worth reporting
+        symbol = number = None
     return CrystalInfo(
         formula=formula, n_atoms=n_atoms, periodic=True, dimensionality=dimensionality, ndim=1,
-        z=int(round(factor)), a=length,
+        rod_group_symbol=symbol, rod_group_number=number, z=int(round(factor)), a=length,
     )
 
 

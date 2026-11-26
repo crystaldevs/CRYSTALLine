@@ -403,3 +403,39 @@ def test_sticks_keep_to_the_frequency_window():
 
     assert frequencies.max() <= 1200.0
     assert intensities.max() == 2.0                            # the 3800 stick is not there
+
+
+# ── the ends of the frequency track ───────────────────────────────────────
+def test_the_track_reaches_every_line_however_high():
+    """No fixed track suits every output: the overtones and combination bands
+    of an anharmonic run, 2ν(O-H) near 7000 cm-1 among them, lie past any
+    fundamental."""
+    from crystalline.crystalio.spectra import frequency_bounds
+
+    fundamentals = np.array([[400.0, 1.0], [1650.0, 2.0], [3700.0, 5.0]])
+    overtones = np.array([[3300.0, 0.1], [7250.0, 0.2]])
+
+    assert frequency_bounds([fundamentals]) == (0.0, 4100.0)       # 3700 + 10%, rounded up
+    assert frequency_bounds([fundamentals, overtones]) == (0.0, 8000.0)
+
+
+def test_the_track_is_as_short_as_the_spectrum():
+    """A soft solid's lines all sit below a few hundred cm-1, and a track
+    thousands of cm-1 long would put them all in the first few pixels."""
+    from crystalline.crystalio.spectra import frequency_bounds
+
+    assert frequency_bounds([np.array([[80.0, 1.0], [310.0, 2.0]])]) == (0.0, 400.0)
+
+
+def test_the_track_takes_in_negative_frequencies():
+    """An imaginary mode is listed at a negative frequency."""
+    from crystalline.crystalio.spectra import frequency_bounds
+
+    assert frequency_bounds([np.array([[-150.0, 1.0], [900.0, 2.0]])]) == (-200.0, 1000.0)
+
+
+def test_no_lines_still_give_a_track():
+    from crystalline.crystalio.spectra import frequency_bounds
+
+    assert frequency_bounds([]) == (0.0, 100.0)
+    assert frequency_bounds([np.zeros((0, 2))]) == (0.0, 100.0)

@@ -163,14 +163,6 @@ class ZonePickerDialog(QDialog):
         self._resolve_lattice()
 
         outer = QVBoxLayout(self)
-        if not self._points:
-            # Not a description of the dialog but a warning about this lattice:
-            # without labelled points there is nothing to click.
-            note = QLabel("This lattice could not be classified, so it has no labelled "
-                          "points — the zone is drawn, but the path has to be typed.")
-            note.setWordWrap(True)
-            note.setStyleSheet("color: palette(mid);")
-            outer.addWidget(note)
 
         # Which cell's zone. Two different pictures of the same crystal, and
         # picking one of them wrong is the classic way to draw a Brillouin zone
@@ -215,7 +207,6 @@ class ZonePickerDialog(QDialog):
         body.addWidget(self._view, 1)
         self._list = QListWidget()
         self._total = QLabel()
-        self._total.setStyleSheet("color: palette(mid);")
         if picking:
             side = QVBoxLayout()
             side.addWidget(QLabel("Path"))
@@ -394,7 +385,8 @@ class ZonePickerDialog(QDialog):
         try:
             vertices, faces = brillouin_zone(self._lattice)
         except Exception as exc:  # noqa: BLE001 - a lattice we cannot build
-            plotter.add_text(f"No Brillouin zone: {exc}", font_size=9)
+            plotter.add_text(f"No Brillouin zone: {exc}", font_size=9,
+                             font_file=unicode_font())
             return
         self._extent = float(np.linalg.norm(vertices, axis=1).max()) or 1.0
         self._flat_normal = _plane_normal(vertices) if len(faces) == 1 else None

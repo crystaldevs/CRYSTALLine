@@ -157,6 +157,12 @@ _FIRST_FILE_MODULES = (
     "pandas",
 )
 
+# What ticking Polyhedra needs: pymatgen's CrystalNN, a second and a half to
+# import. The analysis already runs off the UI thread, but the polyhedra wait
+# for this import before it can start. Imported after the first file's modules,
+# so it never delays them.
+_POLYHEDRA_MODULES = ("pymatgen.analysis.local_env",)
+
 
 def _warm_for_the_first_file():
     """Import what the first file opened will need, on a background thread.
@@ -167,13 +173,13 @@ def _warm_for_the_first_file():
     half a second (the rest). Started once the window is on screen, it is
     usually done before a file has even been chosen; a file opened sooner waits
     for what it needs on the modules' import locks, as it would have without
-    this.
+    this. CrystalNN's module follows, for the first tick of Polyhedra.
     """
     import importlib
     import threading
 
     def build() -> None:
-        for name in _FIRST_FILE_MODULES:
+        for name in _FIRST_FILE_MODULES + _POLYHEDRA_MODULES:
             try:
                 importlib.import_module(name)
             except Exception:  # noqa: BLE001 - imported again when needed, and reported then

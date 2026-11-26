@@ -1,9 +1,9 @@
 """Collect the sample CRYSTAL files the test suite reads into ``tests/data``.
 
-The suite used to read these from the author's own machine, so 87 of its tests
-ran nowhere else. They are small — the parsers want the data files a PROPERTIES
-run writes, not the wavefunctions or the grids beside them — so they are kept in
-the repository instead, and this script is how they got there.
+The suite reads these from the repository, not from anyone's own machine, so
+that its tests run anywhere. They are small — the parsers want the data files a
+PROPERTIES run writes, not the wavefunctions or the grids beside them — and this
+script is how they get there.
 
 Run it to refresh them from a local copy of the source material:
 

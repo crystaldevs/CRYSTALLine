@@ -18,6 +18,7 @@ Design notes
 
 from __future__ import annotations
 
+import functools
 import itertools
 import weakref
 from functools import lru_cache
@@ -29,7 +30,6 @@ import pyvista as pv
 # (163 modules against the 57 PyVista needs) and costs about 0.6 s of every
 # start. These four are in modules PyVista has already loaded by this point.
 from vtkmodules.vtkCommonCore import VTK_FONT_FILE
-from vtkmodules.vtkRenderingAnnotation import vtkCaptionActor2D
 from vtkmodules.vtkRenderingCore import vtkActor, vtkPolyDataMapper, vtkPropAssembly
 from ase.data import chemical_symbols
 
@@ -141,29 +141,19 @@ _CARTESIAN_LABELS = ("X", "Y", "Z")
 # the same size regardless of the lattice parameters (editing a/b/c must not
 # grow or shrink it). Comparable to a bond length, so it reads well beside atoms.
 _LATTICE_ARROW_LENGTH = 2.0
-# Where a label is anchored, as a multiple of the arrow length: just past the
-# tip, with the glyph drawn up and to the right of that — see _axis_label_actor.
-# The xyz marker anchors its letters at the foot of each cone and lets them fall
-# across it, which it can afford because they are black; a, b and c are drawn in
-# their axis's own colour, and a blue "c" over the blue arrowhead is not there
-# at all. So they are placed clear of the arrow instead.
-_LATTICE_LABEL_OFFSET = 1.12
+# The letters, in arrow lengths: how tall the font is drawn, and how much clear
+# space there is between an arrow's tip and the nearest edge of its letter. A
+# letter is geometry in the marker's own space, like the arrows (see
+# _AxisLetters), so these hold at any window size and in any export.
+_LATTICE_LABEL_SIZE = 0.5
+_LATTICE_LABEL_GAP = 0.1
 # Corner of the render window the gizmo occupies, as (xmin, ymin, xmax, ymax)
-# in normalised viewport coordinates: the lower left, a fifth of each side.
-_GIZMO_VIEWPORT = (0.0, 0.0, 0.24, 0.24)
-# The lettering, taken from vtkAxesActor — the stock marker this one replaces.
-# A caption scales its text to its own normalised box, and that actor gives its
-# letters a wide, short one, which is what makes them larger and better placed
-# than a small square box would. The font size, the italic,
-# the justification and the padding are its too.
-_LATTICE_LABEL_BOX = (0.25, 0.1)
-_LATTICE_LABEL_FONT_SIZE = 12
-_LATTICE_LABEL_PADDING = 3
-# The widget frames the marker's 3D bounds, and a 2D caption contributes none —
-# so a label anchored at an arrow tip lands on the very edge of the viewport and
-# gets clipped. An invisible sphere this many arrow-lengths across pads the
-# bounds so the letters have room.
-_GIZMO_BOUNDS_PADDING = 1.3
+# in normalised viewport coordinates: the lower left, about a quarter of each side.
+_GIZMO_VIEWPORT = (0.0, 0.0, 0.27, 0.27)
+# The widget frames the marker by its bounds, which the letters move about in
+# as the view turns. An invisible sphere this many arrow lengths across holds
+# the frame still and wide enough for a letter on any side of any tip.
+_GIZMO_BOUNDS_PADDING = 1.55
 
 # An atom whose displacement is below this fraction of the mode's largest gets
 # no arrow. Arrows are drawn at a uniform length, so without this cut-off an
@@ -341,6 +331,16 @@ class StructureRenderer:
         # doesn't re-run it. Keyed on the analysed geometry + min-coordination.
         self._poly_cache_key = None
         self._poly_cache_found: Optional[list] = None
+        # The analysis is the one slow step of a redraw (CrystalNN, and the first
+        # time, importing it): a second or more on a cell of a few hundred atoms.
+        # A view that can run work off its UI thread sets ``run_in_background``
+        # to ``f(job, done)``: ``job()`` is called on another thread, and
+        # ``done(result)`` back on this one. The rest of the scene is drawn at
+        # once and the polyhedra join it when they are ready. Unset (an
+        # off-screen render, an export), the analysis runs inline as before.
+        self.run_in_background = None
+        self._poly_wanted = None    # the key of the analysis the scene is waiting for
+        self._poly_pending = None   # the key of the analysis under way, if any
         self._highlight_actors: dict[int, object] = {}  # atom index -> halo actor
         # If set, the cell wireframe outlines this cell (the original unit cell)
         # instead of the structure's own cell — used when a supercell is shown.
@@ -348,6 +348,7 @@ class StructureRenderer:
         # Screen-space a/b/c gizmo. Outlives plotter.clear(), unlike an actor,
         # so it is created once and its marker swapped on each rebuild.
         self._orientation_widget = None
+        self._marker_letters = None   # the shown marker's letters, turned each frame
         # Crystalline-orbital isosurface: one actor per sign, kept so they can be
         # cleared without disturbing the rest of the scene.
         self._orbital_actors: list = []
@@ -1063,6 +1064,7 @@ class StructureRenderer:
             render=False,
         )
         self._label_actor.SetPickable(False)  # text must never intercept picks
+        use_unicode_font(self._label_actor)   # the one face of every 3D label
 
     def _label_colour(self) -> str:
         """The labels' colour: the one chosen, or whichever reads on the background."""
@@ -1195,6 +1197,8 @@ class StructureRenderer:
                 shape_opacity=0.6, always_visible=True, pickable=False, render=False,
             )
             actor.SetPickable(False)
+            # The face of every 3D label, and "Å" and "°" drawn from a font that has them.
+            use_unicode_font(actor)
             self._annotation_actors.append(actor)
 
     def _add_annotation_actor(
@@ -2042,6 +2046,10 @@ class StructureRenderer:
         analysed geometry and ``min_vertices`` — not on colours, opacity, camera or
         any other display setting. So we key a one-entry cache on the geometry and
         reuse the result whenever only presentation changed.
+
+        ``None`` while the analysis is running in the background (see
+        ``run_in_background``): the scene is drawn without polyhedra, and
+        :meth:`_polyhedra_found` adds them when it is done.
         """
         positions = np.asarray(analysis.positions, dtype=float)
         numbers = np.asarray(analysis.numbers, dtype=int)
@@ -2056,18 +2064,42 @@ class StructureRenderer:
             int(min_vertices),
             round(float(self._settings.bond_tolerance), 4),
         )
+        self._poly_wanted = key
         if key == self._poly_cache_key:
             return self._poly_cache_found
 
-        conn = connectivity(analysis, min_vertices)
-        found = list(conn.polyhedra) if conn is not None else []
-        if not found:  # periodic distance search on the clean cell (CrystalNN missing/empty)
-            found = _fallback_polyhedra(
-                analysis.to_ase(), self._settings.bond_tolerance, min_vertices
-            )
-        self._poly_cache_key = key
-        self._poly_cache_found = found
-        return found
+        # Everything the job reads is copied here, on this thread: it must not
+        # touch the renderer, which may have moved on by the time it finishes.
+        job = functools.partial(_find_polyhedra, Structure.from_ase(analysis.to_ase()),
+                                int(min_vertices),
+                                float(self._settings.bond_tolerance), connectivity)
+        if self.run_in_background is None:
+            found = job()
+            self._poly_cache_key, self._poly_cache_found = key, found
+            return found
+        if self._poly_pending != key:
+            self._poly_pending = key
+            self.run_in_background(job, lambda found, key=key: self._polyhedra_found(key, found))
+        return None   # not yet: drawn by _polyhedra_found when the analysis is done
+
+    def _polyhedra_found(self, key, found: list) -> None:
+        """An analysis run in the background has finished: keep it, and draw it if still wanted.
+
+        Kept whatever happened in the meantime — it is right for the geometry
+        it was run on, and coming back to that geometry (an undo) finds it
+        ready. Drawn only if that is still the geometry on screen and the
+        polyhedra are still asked for; a newer analysis may be under way, and
+        its own result will draw itself.
+        """
+        if self._poly_pending == key:
+            self._poly_pending = None
+        self._poly_cache_key, self._poly_cache_found = key, found
+        if key != self._poly_wanted or self._polyhedra_actor is not None:
+            return
+        if not (self._settings.show_polyhedra and self._adp_actor is None):
+            return
+        self._draw_polyhedra()
+        self.plotter.render()
 
     def _polyhedra_mesh(self) -> Optional["pv.PolyData"]:
         """Build the polyhedra mesh: CrystalNN on the clean cell, else a fallback.
@@ -2091,7 +2123,7 @@ class StructureRenderer:
 
         analysis = _one_cell(analysis, self._reference_cell)
         found = self._coordination_polyhedra(analysis, min_vertices, connectivity)
-        if not found:
+        if not found:   # none, or still being worked out
             return None
 
         shown = replicate_polyhedra(found, analysis.cell, self._positions, self._numbers)
@@ -2405,8 +2437,9 @@ class StructureRenderer:
             in zip(np.eye(3), _CARTESIAN_LABELS, _LATTICE_COLORS)
         ])
 
-    def _set_orientation_widget(self, marker) -> None:
+    def _set_orientation_widget(self, marker: Optional[_Marker]) -> None:
         """Show ``marker`` in the viewport corner (``None`` empties the corner)."""
+        self._marker_letters = marker.letters if marker is not None else None
         if marker is None:
             if self._orientation_widget is not None:
                 self._orientation_widget.SetEnabled(0)
@@ -2414,19 +2447,29 @@ class StructureRenderer:
         if self._orientation_widget is None:
             try:
                 self._orientation_widget = self.plotter.add_orientation_widget(
-                    marker, viewport=_GIZMO_VIEWPORT
+                    marker.assembly, viewport=_GIZMO_VIEWPORT
                 )
             except Exception:  # noqa: BLE001 - no interactor (bare off-screen plotter)
                 self._orientation_widget = None
+                return
+            # The letters are turned to the camera as each frame starts, before
+            # anything is drawn — the main renderer's start, which every render
+            # of the window passes through, the tiles of an export included.
+            self.plotter.renderer.AddObserver("StartEvent", self._face_marker_letters)
             return
         widget = self._orientation_widget
-        widget.SetOrientationMarker(marker)
+        widget.SetOrientationMarker(marker.assembly)
         # The viewport is re-asserted on every swap rather than set once at
         # creation: it is the only thing that says how big the corner is, and a
         # widget that has been through anything that resizes it (see
         # _update_orientation_marker) would otherwise come back invisible.
         widget.SetViewport(*_GIZMO_VIEWPORT)
         widget.SetEnabled(1)
+
+    def _face_marker_letters(self, *_event) -> None:
+        letters = getattr(self, "_marker_letters", None)
+        if letters is not None:
+            letters.face(self.plotter.renderer.GetActiveCamera())
 
 
 # ── free helpers ─────────────────────────────────────────────────────────
@@ -2445,7 +2488,17 @@ def _sample_nearest(values: np.ndarray, field, points: np.ndarray) -> np.ndarray
     return values[index[:, 0], index[:, 1], index[:, 2]]
 
 
-def _axes_marker(axes):
+class _Marker:
+    """A corner marker: the props to show, and the letters to turn before each frame."""
+
+    __slots__ = ("assembly", "letters")
+
+    def __init__(self, assembly, letters: "_AxisLetters") -> None:
+        self.assembly = assembly
+        self.letters = letters
+
+
+def _axes_marker(axes) -> Optional[_Marker]:
     """A corner marker: one labelled arrow per ``(direction, label, colour)``.
 
     Both markers are built here — the a/b/c gizmo from the cell's own vectors,
@@ -2457,23 +2510,19 @@ def _axes_marker(axes):
     shrink it).
     """
     # vtkPropAssembly, not vtkAssembly: the latter pokes its own matrix into
-    # every child, which overrides anything a child computes for itself. A prop
-    # assembly just groups props and lets each render on its own terms, which is
-    # what the 2D labels need.
+    # every child, which would override the one each letter is turned with.
     assembly = vtkPropAssembly()
-    drawn = 0
+    letters = _AxisLetters()
     for direction, label, colour in axes:
         direction = np.asarray(direction, dtype=float)
         arrow = pv.Arrow(start=(0.0, 0.0, 0.0), direction=direction,
                          scale=_LATTICE_ARROW_LENGTH)
         assembly.AddPart(_unlit_actor(arrow, colour))
-        assembly.AddPart(_axis_label_actor(
-            label, direction * _LATTICE_ARROW_LENGTH * _LATTICE_LABEL_OFFSET, colour))
-        drawn += 1
-    if not drawn:
+        assembly.AddPart(letters.add(label, direction * _LATTICE_ARROW_LENGTH, colour))
+    if not letters:
         return None
     assembly.AddPart(_bounds_padding_actor(_LATTICE_ARROW_LENGTH * _GIZMO_BOUNDS_PADDING))
-    return assembly
+    return _Marker(assembly, letters)
 
 
 def _unlit_actor(mesh, color: str):
@@ -2499,45 +2548,115 @@ def _bounds_padding_actor(radius: float):
     return actor
 
 
-def _axis_label_actor(text: str, position: np.ndarray, color: str):
-    """A screen-aligned "a"/"b"/"c" pinned to the 3D point ``position``.
+class _AxisLetters:
+    """A marker's letters: flat glyphs, turned to face the camera before each frame.
 
-    A ``vtkCaptionActor2D``: the glyph is drawn in the image plane but anchored
-    to a world point, so it tracks its arrow tip while staying upright and the
-    same size. This is what ``vtkAxesActor`` does for its own labels.
+    Each letter sits on the line its arrow makes on screen, centred, a fixed
+    gap past the tip — on whichever side of the marker that tip points — so it
+    reads as the continuation of its own axis and never as a neighbour's.
 
-    3D text does not work here. Rendered as geometry it turns edge-on and
-    vanishes whenever the axis it labels points at the viewer — precisely the
-    situation in each of the a/b/c alignment views — and a ``vtkFollower``,
-    which would normally swivel to face the camera, cannot fix it inside an
-    assembly whose matrix is imposed on its children.
+    Geometry rather than screen text, so a letter keeps its size against the
+    arrows whatever the window or export does: 2D text is laid out in pixels,
+    and a supersampled export, which VTK renders in tiles, scaled the letters a
+    second time and drew them three times too large beside arrows that had kept
+    their size. Turned towards the camera on every frame rather than fixed in
+    space, so a letter never goes edge-on — as it would in each of the a/b/c
+    alignment views, where an axis points straight at the viewer.
     """
-    caption = vtkCaptionActor2D()
-    caption.SetCaption(text)
-    caption.SetAttachmentPoint(*np.asarray(position, dtype=float))
-    caption.BorderOff()
-    caption.LeaderOff()
-    caption.ThreeDimensionalLeaderOff()
-    caption.SetPadding(_LATTICE_LABEL_PADDING)
-    # A caption sizes its text to its own box, so the box is what sets the glyph
-    # size. This one is vtkAxesActor's: wide and short, which gives a bigger
-    # letter than a small square does, and justified to its lower left corner so
-    # the glyph is drawn up and to the right of the point it is tied to — clear
-    # of the arrow rather than sitting on its tip.
-    caption.SetWidth(_LATTICE_LABEL_BOX[0])
-    caption.SetHeight(_LATTICE_LABEL_BOX[1])
 
-    text_property = caption.GetCaptionTextProperty()
-    text_property.SetColor(*(c / 255.0 for c in _hex_to_rgb(color)))
-    text_property.SetFontSize(_LATTICE_LABEL_FONT_SIZE)
-    text_property.BoldOn()
-    # Italic, as the xyz marker has it — and as a, b and c are set in print.
-    text_property.ItalicOn()
-    text_property.ShadowOff()
-    text_property.SetJustificationToLeft()
-    text_property.SetVerticalJustificationToBottom()
-    caption.SetPickable(False)
-    return caption
+    def __init__(self) -> None:
+        self._letters = []   # (actor, tip, half width, half height)
+
+    def __len__(self) -> int:
+        return len(self._letters)
+
+    def add(self, text: str, tip: np.ndarray, colour: str):
+        """Make the letter for the arrow ending at ``tip``; returns its actor."""
+        mesh, half_width, half_height = _glyph(text, _LATTICE_LABEL_SIZE * _LATTICE_ARROW_LENGTH)
+        actor = _unlit_actor(mesh, colour)
+        self._letters.append((actor, np.asarray(tip, dtype=float), half_width, half_height))
+        return actor
+
+    def face(self, camera) -> None:
+        """Turn every letter to ``camera`` and put it beyond its tip on screen."""
+        from vtkmodules.vtkCommonMath import vtkMatrix4x4
+
+        forward = _unit(np.array(camera.GetDirectionOfProjection(), dtype=float))
+        up = np.array(camera.GetViewUp(), dtype=float)
+        right = _unit(np.cross(forward, up))
+        up = np.cross(right, forward)
+        gap = _LATTICE_LABEL_GAP * _LATTICE_ARROW_LENGTH
+        # Each tip's direction as seen on screen, as a fraction of its length.
+        seen = [(tip - (tip @ forward) * forward) / np.linalg.norm(tip)
+                for _actor, tip, _w, _h in self._letters]
+        for index, (actor, tip, half_width, half_height) in enumerate(self._letters):
+            # As an axis turns towards the viewer its direction on screen
+            # shrinks to nothing, and the letter is eased over to the side the
+            # other arrows leave empty — gradually, so it never jumps as the
+            # view turns, and never on top of the arrows meeting at the origin.
+            others = -sum((s for i, s in enumerate(seen) if i != index), np.zeros(3))
+            clear = _unit(others) if np.linalg.norm(others) > 1e-3 else _unit(right + up)
+            ease = max(0.0, 0.35 - float(np.linalg.norm(seen[index]))) / 0.35
+            away = _unit(seen[index] + ease * clear)
+            # Far enough along that direction that the glyph's box clears the tip
+            # — and, head-on, the bases of the other arrows, which meet there.
+            reach = abs(away @ right) * half_width + abs(away @ up) * half_height
+            centre = tip + away * (gap * (1.0 + 1.5 * ease) + reach)
+            matrix = vtkMatrix4x4()
+            for row in range(3):
+                matrix.SetElement(row, 0, right[row])
+                matrix.SetElement(row, 1, up[row])
+                matrix.SetElement(row, 2, -forward[row])
+                matrix.SetElement(row, 3, centre[row])
+            actor.SetUserMatrix(matrix)
+
+
+def _unit(vector: np.ndarray) -> np.ndarray:
+    norm = float(np.linalg.norm(vector))
+    return vector / norm if norm > 1e-12 else vector
+
+
+@lru_cache(maxsize=None)
+def _glyph_outline(text: str):
+    """``text`` as filled triangles in DejaVu Sans Bold, 1 unit tall, at the origin.
+
+    Upright, like every other label in the 3D view; bold, so a letter a few
+    pixels high still has some body. DejaVu ships with matplotlib, so every
+    machine draws the same letters, and it is the face the 3D view's other
+    labels use.
+    """
+    import os
+
+    import matplotlib
+    from matplotlib.font_manager import FontProperties
+    from matplotlib.textpath import TextPath
+    from vtkmodules.vtkFiltersGeneral import vtkContourTriangulator
+
+    face = os.path.join(matplotlib.get_data_path(), "fonts", "ttf", "DejaVuSans-Bold.ttf")
+    path = TextPath((0.0, 0.0), text, size=1.0, prop=FontProperties(fname=face))
+    points, lines, count = [], [], 0
+    # Every outline and every hole as its own closed loop; the triangulator
+    # tells holes from outlines by which way they wind.
+    for loop in path.to_polygons(closed_only=True):
+        loop = np.asarray(loop, dtype=float)[:-1]
+        points.append(np.column_stack([loop, np.zeros(len(loop))]))
+        ids = list(range(count, count + len(loop)))
+        lines += [len(ids) + 1] + ids + [ids[0]]
+        count += len(loop)
+    contour = pv.PolyData(np.vstack(points), lines=np.array(lines))
+    triangulator = vtkContourTriangulator()
+    triangulator.SetInputData(contour)
+    triangulator.Update()
+    return pv.wrap(triangulator.GetOutput())
+
+
+def _glyph(text: str, size: float):
+    """``(mesh, half width, half height)``: ``text`` ``size`` tall, centred on the origin."""
+    mesh = _glyph_outline(text).copy()
+    x0, x1, y0, y1, _, _ = mesh.bounds
+    mesh.translate((-(x0 + x1) / 2.0, -(y0 + y1) / 2.0, 0.0), inplace=True)
+    mesh.scale(size, inplace=True)
+    return mesh, (x1 - x0) * size / 2.0, (y1 - y0) * size / 2.0
 
 
 def _structured_grid(field):
@@ -3371,6 +3490,20 @@ def _one_cell(analysis, unit_cell):
     if len(folded) * cells != len(analysis):
         return analysis
     return folded
+
+
+def _find_polyhedra(analysis, min_vertices: int, tolerance: float, connectivity) -> list:
+    """The coordination polyhedra of ``analysis``: CrystalNN, else the distance search.
+
+    Free of the renderer, so it can run on another thread: everything it reads
+    is passed in. The distance search runs whenever CrystalNN is unavailable,
+    declines the structure, *or* finds no polyhedra.
+    """
+    conn = connectivity(analysis, min_vertices)
+    found = list(conn.polyhedra) if conn is not None else []
+    if not found:
+        found = _fallback_polyhedra(analysis.to_ase(), tolerance, min_vertices)
+    return found
 
 
 def _fallback_polyhedra(atoms, tolerance: float, min_vertices: int) -> list:

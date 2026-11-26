@@ -22,6 +22,7 @@ here means {kbd}`⌘O`.
 | | |
 | --- | --- |
 | Open… | {kbd}`Ctrl+O`, each file in a tab of its own |
+| New structure… | {kbd}`Ctrl+N`: periodicity, lattice, space group and atoms |
 | Open recent | |
 | Close tab | {kbd}`Ctrl+W` |
 | Import atoms into structure… | |
@@ -39,6 +40,7 @@ here means {kbd}`⌘O`.
 | Crystallographic cell / Primitive cell | which cell is shown |
 | Lattice parameters… | |
 | Supercell… | |
+| Make supercell the unit cell | for defects |
 | Complete coordination at cell boundary | toggle |
 | Point symmetry analysis | elements, and **Reduce symmetry…** |
 | Brillouin zone… | the zone, read-only |

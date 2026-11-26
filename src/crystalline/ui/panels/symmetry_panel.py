@@ -129,12 +129,10 @@ class SymmetryPanel(QWidget):
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        self._status.setStyleSheet("color: palette(mid);")
         layout.addWidget(self._status)
 
         self._reduced_note = QLabel()
         self._reduced_note.setWordWrap(True)
-        self._reduced_note.setStyleSheet("color: palette(mid);")
         layout.addWidget(self._reduced_note)
 
         self._tree = QTreeWidget()

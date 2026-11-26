@@ -48,22 +48,25 @@ class Palette:
     scene: str         # the 3D viewport's ground
 
 
+# Neutral greys with no cast of their own, so the one colour in the frame is
+# the accent. A step darker than a single-pane app would need: the white panels
+# sit side by side, and the ground between them is what tells them apart.
 LIGHT = Palette(
-    window="#eef0f4",
+    window="#f6f6f6",
     surface="#ffffff",
     raised="#ffffff",
-    border="#d8dbe2",
-    border_strong="#aeb4bf",
-    text="#1b1e24",
-    text_muted="#69707c",
+    border="#e0e0e0",
+    border_strong="#bebebe",
+    text="#1a1a1a",
+    text_muted="#666666",
     # CRYSTAL's cyan (the logo's #28ABCA, hue 193°) taken a step deeper: the
     # accent is a fill under white text — selected rows, menus, ticks — and
     # the logo's own shade gives white 2.6:1 there. This one gives 4.6:1.
     accent="#127f9c",
-    accent_soft="#dcf0f5",
+    accent_soft="#c9e5ee",
     link="#0b6f88",
-    track="#e0e3e9",
-    chrome="#e6e9ef",
+    track="#e6e6e6",
+    chrome="#f0f0f0",
     scene="#ffffff",
 )
 
@@ -623,7 +626,6 @@ def stylesheet(palette: Palette) -> str:
     QToolButton[role="plotTool"]:hover {{ background: {p.track}; }}
     QToolButton[role="plotTool"]:pressed {{ background: {p.border}; }}
     QToolButton[role="plotTool"]:checked {{ background: {p.accent_soft}; }}
-    QLabel[role="plotCoords"] {{ color: {p.text_muted}; }}
 
     QToolBar QToolButton[chip="toggle"] {{
         background: transparent;

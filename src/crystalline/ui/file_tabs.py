@@ -197,19 +197,18 @@ def openable(paths: Iterable[str], action_of, can_import: bool = True) -> tuple:
     Every file that is a structure of its own opens, each in its own tab.
     Atoms to import (an .xyz, a .pdb) go into the structure on screen — but
     only when nothing is being opened alongside them, since the structure on
-    screen is then about to be another one; and only the first, as before.
+    screen is then about to be another one; and only the first.
 
-    ``can_import`` is whether there is a structure to add them to. An atom list
-    is not a structure: it has no cell and no calculation behind it, only
-    coordinates, so with nothing open there is nothing for it to join and it is
-    left out rather than becoming the structure itself.
+    ``can_import`` is whether there is a structure to add them to. With none
+    open, an atom list has nothing to join and opens as a molecule of its own,
+    in a tab like any other file.
     """
     to_open, to_import, ignored = [], [], []
     for path in paths:
         action = action_of(path)
-        if action == "open":
+        if action == "open" or (action == "import" and not can_import):
             to_open.append(path)
-        elif action == "import" and can_import:
+        elif action == "import":
             to_import.append(path)
         else:
             ignored.append(path)

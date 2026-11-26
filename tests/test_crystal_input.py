@@ -181,12 +181,14 @@ def test_slab_with_another_vacuum_axis_is_rotated_into_the_xy_plane():
         assert _lines(build_input(_slab(pbc)))[1:] == reference
 
 
-def test_polymer_uses_rod_group_1_and_one_lattice_parameter():
+def test_polymer_is_written_in_its_rod_group_with_one_lattice_parameter():
+    """The CH2 chain has a twofold axis along it and two mirrors through it:
+    P2mm, CRYSTAL's rod group 20, which leaves the carbon and one hydrogen."""
     lines = _lines(build_input(_polymer()))
     assert lines[1] == "POLYMER"
-    assert lines[2] == "1"  # rod group p1
+    assert lines[2] == "20"  # rod group P2mm
     assert lines[3] == "2.500000"  # the repeat length only
-    assert lines[4] == "3"
+    assert lines[4] == "2"
 
 
 def test_polymer_coordinates_are_fractional_along_x_only():

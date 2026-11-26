@@ -17,7 +17,7 @@ import os
 from typing import Iterable, List
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QKeySequence, QPainter
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (QGridLayout, QHBoxLayout, QLabel, QPushButton,
                                QSizePolicy, QVBoxLayout, QWidget)
 
@@ -81,6 +81,8 @@ class WelcomeOverlay(ParentOverlay):
 
     #: Open… was pressed.
     open_requested = Signal()
+    #: New structure… was pressed.
+    build_requested = Signal()
     #: A recent file was chosen.
     path_chosen = Signal(str)
     #: "Clear" under the recent files.
@@ -135,11 +137,14 @@ class WelcomeOverlay(ParentOverlay):
         font.setWeight(font.Weight.DemiBold)
         first.setFont(font)
         inside.addWidget(first)
-        shortcut = QKeySequence(QKeySequence.Open).toString(QKeySequence.NativeText)
-        inside.addWidget(_label(f"or drop it here · {shortcut}", "welcomeMuted"))
         inside.addStretch(1)
         self.open_button.setMinimumHeight(150)
         grid.addWidget(self.open_button, 1, 0, Qt.AlignTop)
+        self.build_button = QPushButton("Build a new structure…", body)
+        self.build_button.setProperty("role", "welcomeLink")
+        self.build_button.setCursor(Qt.PointingHandCursor)
+        self.build_button.clicked.connect(self.build_requested)
+        grid.addWidget(self.build_button, 2, 0, Qt.AlignLeft | Qt.AlignTop)
 
         self.recent_heading = _label("RECENT", "welcomeHeading", body)
         grid.addWidget(self.recent_heading, 0, 1)
@@ -221,7 +226,7 @@ class WelcomeOverlay(ParentOverlay):
         # by the edge of the row, with nothing to say there was more.
         name.setText(name.fontMetrics().elidedText(os.path.basename(path), Qt.ElideMiddle, 380))
         lines.addWidget(name)
-        folder = _label("", "welcomeMuted")
+        folder = _label("")
         metrics = folder.fontMetrics()
         folder.setText(metrics.elidedText(folder_label(path), Qt.ElideMiddle, 380))
         lines.addWidget(folder)

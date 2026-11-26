@@ -101,6 +101,42 @@ def test_what_the_tracks_were_is_not_handed_to_the_plotter(qapp):
     assert isinstance(options, el.ElectronicOptions)
 
 
+def _shades(options) -> int:
+    """How many filled areas the plot drawn with ``options`` has."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PolyCollection
+
+    from crystalline.crystalio import plot_electronic
+
+    figure = plot_electronic(*ec.plot_arguments(options))
+    count = sum(isinstance(c, PolyCollection) for ax in figure.axes for c in ax.collections)
+    plt.close(figure)
+    return count
+
+
+@pytest.mark.parametrize("mode", [el.DOS, el.BANDS_AND_DOS])
+def test_the_shading_under_a_dos_is_switched_beside_the_plot(qapp, mode):
+    answer = _answer(_dialog(qapp, mode))
+    knobs, moves = _knobs(answer)
+    assert knobs.fill.isChecked() and knobs.fill.isVisibleTo(knobs)
+    assert _shades(answer) > 0
+
+    knobs.fill.setChecked(False)
+
+    assert moves[-1]["dos_fill"] is False
+    assert _shades({**answer, **moves[-1]}) == 0
+
+
+def test_the_dialog_hands_the_shading_on(qapp):
+    dialog = _dialog(qapp, el.DOS)
+    assert dialog.request()[2].dos_fill is True
+    dialog.fill.setChecked(False)
+    assert dialog.request()[2].dos_fill is False
+
+
 @pytest.mark.parametrize("mode, dos, overlay", [
     (el.BANDS, False, False),            # a band structure has no DOS axis
     (el.DOS, True, True),                # a DOS alone can split into panels

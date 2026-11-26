@@ -215,6 +215,12 @@ def _build_file_menu(window) -> None:
     open_action.triggered.connect(window._open_file)
     file_menu.addAction(open_action)
 
+    # A structure of one's own, from a periodicity, a lattice and atoms.
+    new_action = QAction("New structure…", window)
+    new_action.setShortcut("Ctrl+N")
+    new_action.triggered.connect(window._build_structure)
+    file_menu.addAction(new_action)
+
     # The same list the welcome page shows, filled each time it is opened so
     # it is never staler than the files on disk.
     recent_menu = file_menu.addMenu("Open recent")
@@ -294,6 +300,16 @@ def _build_cell_menu(window) -> None:
     window._supercell_action = QAction("Supercell…", window)
     window._supercell_action.triggered.connect(window._open_supercell_dialog)
     cell_menu.addAction(window._supercell_action)
+
+    # A defect needs the supercell to be the crystal, not a drawing of it.
+    window._supercell_to_cell_action = QAction("Make supercell the unit cell", window)
+    window._supercell_to_cell_action.setToolTip(
+        "Take the supercell on screen, edits included, as the structure's cell — "
+        "so that a vacancy or a substitution in it is a defect of the crystal"
+    )
+    window._supercell_to_cell_action.setEnabled(False)
+    window._supercell_to_cell_action.triggered.connect(window._supercell_to_cell)
+    cell_menu.addAction(window._supercell_to_cell_action)
 
     # Show whole molecules/atoms that only partially belong to the cell
     # (their periodic images poke in) — the "packed" view, on by default.

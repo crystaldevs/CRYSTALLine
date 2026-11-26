@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from PySide6.QtCore import QEvent, QObject, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -84,6 +84,16 @@ class PlotRecipe:
     # structure beside its DOS is two panels in one figure, and at 4:3 the
     # corners of the path ran into each other along the bottom.
     aspect: Optional[Callable[[Dict[str, Any]], float]] = None
+    # The options that choose what the axes span: a frequency window, which
+    # curves are drawn. A redraw that changes one of them shows the new figure
+    # as it comes; any other redraw keeps the part of the plot the user zoomed
+    # or panned to (see _PlotTab.set_figure), since a broadening or a colour
+    # changes the curves, not where in them the user is looking.
+    view_keys: Tuple[str, ...] = ()
+
+    def keeps_view(self, before: Dict[str, Any], after: Dict[str, Any]) -> bool:
+        """Whether a redraw from ``before`` to ``after`` keeps the user's view."""
+        return all(_same(before.get(key), after.get(key)) for key in self.view_keys)
 
     def redrawn(self, options: Optional[Dict[str, Any]] = None):
         """``(figure, options)`` for ``options``, or for the ones in hand.
@@ -202,9 +212,10 @@ class LiveRedraws(QObject):
             plt.close(figure)    # closed meanwhile, or an edit has been made since
         else:
             recipe = tab.recipe
+            keep_view = recipe.keeps_view(recipe.options, chosen)
             recipe.options = chosen
             title = recipe.title(chosen) if recipe.title is not None else None
-            panel.replace_figure(index, figure, title)
+            panel.replace_figure(index, figure, title, keep_view=keep_view)
         self._finish()
 
     def _failed(self, exc) -> None:
@@ -308,6 +319,44 @@ def _on_screen(figure) -> None:
         pass
 
 
+def _same(a, b) -> bool:
+    """``a == b`` for option values, arrays among them; unsure counts as changed."""
+    try:
+        return bool(a == b)
+    except Exception:  # noqa: BLE001 - an array compared elementwise, say
+        return False
+
+
+def _pannable(figure) -> list:
+    """The axes pan and zoom move: flat ones, colour bars left out."""
+    return [ax for ax in figure.axes if ax.get_navigate() and ax.name == "rectilinear"]
+
+
+def _view(figure) -> list:
+    """Each pannable axes' ``(xlim, ylim)``, in the order the figure lists them."""
+    return [(tuple(ax.get_xlim()), tuple(ax.get_ylim())) for ax in _pannable(figure)]
+
+
+def _carry(limits, before, after, axis):
+    """``limits`` on ``axis`` as drawn ``before``, moved to the same place in ``after``.
+
+    The same fraction of the axis, measured in its own scale (logarithmic or
+    not). Where the axis spans what it did, that is the same limits; where a
+    redraw rescaled it — narrower peaks standing taller — it is the same part
+    of the curves, rather than a window that has slid off them.
+    """
+    import numpy as np
+
+    scale = axis.get_transform()
+    (a0, a1), (b0, b1), (l0, l1) = (scale.transform(np.asarray(pair, dtype=float))
+                                    for pair in (before, after, limits))
+    if not np.all(np.isfinite([a0, a1, b0, b1, l0, l1])) or a1 == a0:
+        return after
+    stretch = (b1 - b0) / (a1 - a0)
+    moved = np.array([b0 + (l0 - a0) * stretch, b0 + (l1 - a0) * stretch])
+    return tuple(float(edge) for edge in scale.inverted().transform(moved))
+
+
 def _release_minimum(window) -> None:
     if _alive(window):
         window.setMinimumWidth(0)
@@ -389,6 +438,9 @@ class _PlotTab(QWidget):
         # Route matplotlib's coordinate string (built from format_coord) to our
         # own readout label instead of the hidden toolbar's message widget.
         self._nav.set_message = self._set_coords
+        # Where the axes stand as drawn, before any pan or zoom: what a redraw
+        # measures the user's view against (see set_figure).
+        self._drawn = _view(figure)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -469,14 +521,20 @@ class _PlotTab(QWidget):
         row.setContentsMargins(_PAPER_INSET - 3, 4, _PAPER_INSET - 3, 4)
         row.setSpacing(2)
 
+        # Through the tab, not bound to the toolbar: a redraw replaces the
+        # toolbar with the canvas (see set_figure), and a button bound to the
+        # one it was built with would drive a canvas no longer on screen.
         self._btn_reset = self._tool_button(
-            "plot-home.svg", "Reset", "Reset the view", self._nav.home
+            "plot-home.svg", "Reset", "Reset the view",
+            lambda _checked=False: self._nav.home(),
         )
         self._btn_back = self._tool_button(
-            "plot-back.svg", "Back", "Back to previous view", self._nav.back
+            "plot-back.svg", "Back", "Back to previous view",
+            lambda _checked=False: self._nav.back(),
         )
         self._btn_forward = self._tool_button(
-            "plot-forward.svg", "Forward", "Forward to next view", self._nav.forward
+            "plot-forward.svg", "Forward", "Forward to next view",
+            lambda _checked=False: self._nav.forward(),
         )
         # Pan and zoom toggle matplotlib's interaction mode, so they're checkable
         # and mutually exclusive (the mode itself lives in the matplotlib toolbar).
@@ -497,7 +555,6 @@ class _PlotTab(QWidget):
         # Live coordinate readout of the point under the cursor.
         self._coords = QLabel("", bar)
         self._coords.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._coords.setProperty("role", "plotCoords")
         row.addWidget(self._coords)
 
         row.addWidget(self._separator())
@@ -828,7 +885,8 @@ class _PlotTab(QWidget):
         if mode and self._on_pick is not None:
             self.canvas.unsetCursor()
 
-    def set_figure(self, figure, title: Optional[str] = None) -> None:
+    def set_figure(self, figure, title: Optional[str] = None,
+                   keep_view: bool = False) -> None:
         """Show ``figure`` here instead, and let the old one go.
 
         A canvas belongs to one figure, so a changed plot means a new canvas in
@@ -838,6 +896,12 @@ class _PlotTab(QWidget):
         hidden navigation toolbar that performs pan and zoom, the coordinate
         readout it reports through, and the click handler that ties a peak back
         to its mode.
+
+        With ``keep_view``, a zoom or pan on the old figure is carried to the
+        new one, axes by axes, when the two have the same axes: turning a knob
+        beside a zoomed plot changes the curves under the zoom rather than
+        throwing it away. Reset goes to the new figure as drawn, and Back from
+        the carried view goes there too.
         """
         from matplotlib.backends.backend_qtagg import (
             FigureCanvasQTAgg,
@@ -847,6 +911,8 @@ class _PlotTab(QWidget):
         old_canvas, old_figure, old_nav = self.canvas, self.figure, self._nav
         _finish(figure)
         _on_screen(figure)
+        drawn = _view(figure)
+        carried = self._carried_view(figure, drawn) if keep_view else None
         self.figure = figure
         if title is not None:
             self._title = title
@@ -861,6 +927,14 @@ class _PlotTab(QWidget):
         self._nav = NavigationToolbar2QT(self.canvas, self)
         self._nav.hide()
         self._nav.set_message = self._set_coords
+        self._drawn = drawn
+        if carried is not None:
+            # The figure as drawn first, so that Reset and Back go to it.
+            self._nav.push_current()
+            for ax, (xlim, ylim) in zip(_pannable(figure), carried):
+                ax.set_xlim(xlim)
+                ax.set_ylim(ylim)
+            self._nav.push_current()
         if self._on_pick is not None:
             self.canvas.mpl_connect("button_press_event", self._on_canvas_click)
             self.canvas.mpl_connect("motion_notify_event", self._on_canvas_motion)
@@ -890,6 +964,26 @@ class _PlotTab(QWidget):
         hook = getattr(self.controls, "figure_drawn", None)
         if callable(hook):
             hook(figure)
+
+    def _carried_view(self, figure, drawn) -> Optional[list]:
+        """The user's view of the figure on screen, moved onto ``figure``.
+
+        ``None`` when there is nothing to carry: no pan or zoom since the
+        figure was drawn, or axes that do not pair off one for one, as when a
+        DOS panel comes or goes — a view of one panel is no view of another.
+        """
+        old_axes, new_axes = _pannable(self.figure), _pannable(figure)
+        now = _view(self.figure)
+        if (now == self._drawn or len(old_axes) != len(new_axes)
+                or len(self._drawn) != len(old_axes)
+                or any(old.get_xscale() != new.get_xscale()
+                       or old.get_yscale() != new.get_yscale()
+                       for old, new in zip(old_axes, new_axes))):
+            return None
+        return [(_carry(xlim, x_before, x_after, ax.xaxis),
+                 _carry(ylim, y_before, y_after, ax.yaxis))
+                for ax, (xlim, ylim), (x_before, y_before), (x_after, y_after)
+                in zip(new_axes, now, self._drawn, drawn)]
 
     @staticmethod
     def _release(canvas, figure) -> None:
@@ -1013,17 +1107,19 @@ class PlotPanel(QWidget):
         """What the tab at ``index`` is called."""
         return self._tabs.tabText(index)
 
-    def replace_figure(self, index: int, figure, title: Optional[str] = None) -> None:
+    def replace_figure(self, index: int, figure, title: Optional[str] = None,
+                       keep_view: bool = False) -> None:
         """Put ``figure`` in the tab at ``index``, in place of the one there.
 
         What makes a plot changeable rather than merely re-buildable: the tab
         keeps its place in the bar, and the figure in front of the user becomes
-        the new one.
+        the new one. ``keep_view`` carries the user's zoom across (see
+        :meth:`_PlotTab.set_figure`).
         """
         tab = self._tabs.widget(index)
         if tab is None:
             return
-        tab.set_figure(figure, title)
+        tab.set_figure(figure, title, keep_view=keep_view)
         if title is not None:
             self._tabs.setTabText(index, title)
 

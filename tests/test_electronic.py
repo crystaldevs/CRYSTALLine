@@ -377,8 +377,25 @@ def test_the_axis_says_which_energy_it_carries():
         mode=el.BANDS_AND_DOS))
     absolute = el.plot_electronic(_SI_BAND, _SI_DOS, el.ElectronicOptions(
         mode=el.BANDS_AND_DOS, reference=el.ABSOLUTE))
-    assert any("E_" in text.get_text() for text in relative.texts)
-    assert not any("E_" in text.get_text() for text in absolute.texts)
+    assert relative.axes[0].get_ylabel() == r"$E - E_\mathrm{F}$ (eV)"
+    assert absolute.axes[0].get_ylabel() == "$E$ (eV)"
+    assert relative._supylabel is None      # renamed where it is, not covered
+
+
+@needs_silicon
+def test_the_energy_label_is_the_axes_own_in_every_layout():
+    """One label per axis, on the panel it belongs to, at the size of an
+    axis label: the band plotter's fixed size would ignore the plot font."""
+    from matplotlib import font_manager, rcParams
+
+    size = font_manager.FontProperties(size=rcParams["axes.labelsize"]).get_size_in_points()
+    bands = el.plot_electronic(_SI_BAND, None, el.ElectronicOptions(mode=el.BANDS))
+    dos = el.plot_electronic(None, _SI_DOS, el.ElectronicOptions(
+        mode=el.DOS, overlay_projections=True))
+    assert bands.axes[0].get_ylabel().startswith("$E - E_")
+    assert bands.axes[0].yaxis.label.get_fontsize() == pytest.approx(size)
+    assert dos.axes[0].get_xlabel().startswith("$E - E_")
+    assert bands._supylabel is None and dos._supxlabel is None
 
 
 @needs_silicon
@@ -469,6 +486,22 @@ def test_projections_can_be_drawn_one_panel_each():
     names = [[text.get_text() for text in ax.texts] for ax in figure.axes]
     assert names == [["Projection 1"], ["Projection 3"]]
     assert [to_hex(_curves(ax)[0].get_color()) for ax in figure.axes] == ["#aa0000", "#0000aa"]
+    # The shading under each curve follows it into its panel's colour.
+    assert [{to_hex(shade.get_facecolor()[0], keep_alpha=False) for shade in ax.collections}
+            for ax in figure.axes] == [{"#aa0000"}, {"#0000aa"}]
+
+
+@needs_silicon
+def test_the_area_under_a_dos_is_shaded_in_its_colour():
+    from matplotlib.colors import to_hex
+
+    figure = el.plot_electronic(None, _SI_DOS, el.ElectronicOptions(
+        mode=el.DOS, projections=[2, 3], projection_colours=["#aa0000", "#0000aa"]))
+    ax = figure.axes[0]
+    shades = sorted(to_hex(shade.get_facecolor()[0], keep_alpha=False)
+                    for shade in ax.collections)
+    assert shades == ["#0000aa", "#aa0000"]
+    assert all(0 < shade.get_alpha() < 1 for shade in ax.collections)
 
 
 @needs_silicon
@@ -832,7 +865,7 @@ def test_settings_are_remembered_but_files_and_windows_are_not(qapp):
     state = capture(_dialog(qapp))
     for remembered in ("mode", "unit", "reference", "band_colour", "beta_colour",
                        "beta_style", "fermi_colour", "fermi_style", "fermi_width",
-                       "overlay", "spin_down", "dos_auto", "linewidth",
+                       "overlay", "fill", "spin_down", "dos_auto", "linewidth",
                        "show_fermi", "legend"):
         assert remembered in state, remembered
     assert state["band_colour"] == ("colour", el.BAND_COLOUR)

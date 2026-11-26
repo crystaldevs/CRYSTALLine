@@ -102,6 +102,11 @@ class BandsControls(QWidget):
         # Split into panels, a spin-polarised DOS gains an α/β legend.
         self.overlay.toggled.connect(lambda _on: self._sync_legend())
         dos.add_wide(self.overlay)
+        self.fill = QCheckBox("Shade under the curves")
+        self.fill.setChecked(True)
+        self.fill.setToolTip("Fill the area between each curve and zero, in the curve's colour.")
+        self.fill.toggled.connect(self._announce)
+        dos.add_wide(self.fill)
         self._dos_section = dos
 
         # Folded until wanted: what is looked for beside a plot is the window
@@ -152,6 +157,7 @@ class BandsControls(QWidget):
             "dos_range": None if self.dos_auto.isChecked() or dlow == dhigh else (dlow, dhigh),
             "dos_handles": (dlow, dhigh),
             "overlay_projections": self.overlay.isChecked(),
+            "dos_fill": self.fill.isChecked(),
             "linewidth": self.linewidth.value(),
             show: self.show_line.isChecked(),
             "band_colour": self.band_colour.colour(),
@@ -178,6 +184,7 @@ class BandsControls(QWidget):
             self.dos_auto.setChecked(options.get("dos_range") is None)
             show, colour = self.LINE_KEYS
             for widget, key in ((self.overlay, "overlay_projections"),
+                                (self.fill, "dos_fill"),
                                 (self.show_line, show), (self.legend, "legend")):
                 if options.get(key) is not None:
                     widget.setChecked(bool(options[key]))

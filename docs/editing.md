@@ -14,6 +14,26 @@ cell. The other way, an edit that treats differently atoms the centring makes
 copies of (one of two centred chains turned) leaves no smaller primitive cell to
 show it in, and you are asked before it is dropped, which is undoable.
 
+## Building a structure
+
+**File → New structure…** ({kbd}`Ctrl+N`, or **Build a new structure…** on the
+welcome page) builds a structure from nothing, in a tab of its own, which opens
+in editing mode.
+
+- **Periodicity**: a crystal, a slab, a polymer or a molecule. A slab is
+  periodic in the *xy* plane and a polymer along *x*, with CRYSTAL's formal
+  500 Å along the other directions.
+- **Lattice**: the lattice system, which decides which of *a*, *b*, *c*, α, β
+  and γ are set and which follow from them (*b* = *a* and γ = 120° for a
+  hexagonal cell).
+- **Space group**, for a crystal: the atoms listed are then its asymmetric
+  unit, and the group generates the rest. Choosing a group sets the lattice
+  system it is written in.
+- **Atoms**: fractional coordinates along the periodic directions and Å along
+  the others, as in a CRYSTAL deck; Cartesian Å for a molecule.
+
+More atoms are added, and the ones there moved, in the editor.
+
 ## Selection
 
 An atom is selected by clicking it and added to the selection with
@@ -69,6 +89,13 @@ The **Cell** menu acts on the lattice rather than on the atoms:
   one cell of a supercell only — an atom removed from one of them — is carried
   into a supercell that is a whole multiple of it; for any other size you are
   asked whether to start again from the structure as read.
+- **Make supercell the unit cell** takes the supercell on screen, edits
+  included, as the cell of the structure. A vacancy or a substitution made in
+  one cell of a supercell is then a defect of the crystal, at the concentration
+  the supercell sets, and the deck written for CRYSTAL contains it; **Restore
+  geometry** returns to this cell from then on. The phonon
+  modes and the thermal ellipsoids belong to the original cell and are not
+  carried over; an undo restores the original cell, with them.
 - **Complete coordination at cell boundary** draws what the cell holds with its
   coordination complete. A molecule is drawn whole wherever it touches the
   cell. A framework (silicon, rock salt) is drawn with the atoms on the faces,

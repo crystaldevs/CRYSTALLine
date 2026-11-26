@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -198,13 +198,6 @@ class PropertiesBuilderDialog(QDialog):
         form.addRow("Extent", self._extent_mode)
         form.addRow("Scale", self._extent_scale)
         form.addRow("Range (bohr)", _bohr_range_row(self._extent_low, self._extent_high))
-        note = _muted()
-        note.setText(
-            "A slab, a polymer or a molecule has directions the cell does not "
-            "bound, and ECH3 and POT3 need to be told how far to sample along "
-            "each of them."
-        )
-        form.addRow(note)
 
         def _sync() -> None:
             explicit = self._extent_mode.currentData() == "range"
@@ -361,7 +354,8 @@ class PropertiesBuilderDialog(QDialog):
         layout.addWidget(QLabel("Preview"))
         self._preview = QPlainTextEdit()
         self._preview.setReadOnly(True)
-        self._preview.setFont(QFont("Menlo", 11))
+        # The system's own monospace, as the input builder's preview has it.
+        self._preview.setFont(QFontDatabase.systemFont(QFontDatabase.FixedFont))
         self._preview.setLineWrapMode(QPlainTextEdit.NoWrap)
         layout.addWidget(self._preview, 1)
         return holder
@@ -490,13 +484,6 @@ def _checkable(title: str, checked: bool = False) -> QGroupBox:
     box.setCheckable(True)
     box.setChecked(checked)
     return box
-
-
-def _muted() -> QLabel:
-    label = QLabel()
-    label.setWordWrap(True)
-    label.setStyleSheet("color: palette(mid);")
-    return label
 
 
 def _bohr_range_row(low: QDoubleSpinBox, high: QDoubleSpinBox) -> QWidget:

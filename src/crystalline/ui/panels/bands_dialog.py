@@ -182,7 +182,6 @@ class BandsDialog(QDialog):
             data.add(caption, row)
 
         self._summary = WrappedLabel()
-        self._summary.setStyleSheet("color: palette(mid);")
         data.add_wide(self._summary)
 
     def _build_bands(self, column) -> None:
@@ -215,6 +214,10 @@ class BandsDialog(QDialog):
             "On one axis with a legend, or one panel each. The band+DOS view "
             "always draws them together.")
         dos.add_wide(self.overlay)
+        self.fill = QCheckBox("Shade under the curves", self)
+        self.fill.setChecked(True)
+        self.fill.setToolTip("Fill the area between each curve and zero, in the curve's colour.")
+        dos.add_wide(self.fill)
         self._build_dos_extras(dos)
         self.dos_auto = QCheckBox("Fit the DOS axis to what is drawn", self)
         self.dos_auto.setChecked(True)
@@ -535,6 +538,7 @@ class BandsDialog(QDialog):
                     if place < len(colours):
                         self._projection_colours[index].setColour(colours[place])
         self.overlay.setChecked(options.overlay_projections)
+        self.fill.setChecked(options.dos_fill)
         self.dos_auto.setChecked(options.dos_range is None)
         self.band_colour.setColour(options.band_colour)
         self.linewidth.setValue(options.linewidth)

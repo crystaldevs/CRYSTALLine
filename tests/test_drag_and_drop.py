@@ -64,7 +64,7 @@ def _window(atoms: int = 3):
     """A stand-in carrying the window's drag-and-drop handlers and nothing else.
 
     ``atoms`` is how many the structure on screen has: atoms are imported into
-    a structure, so with none open there is nothing for an .xyz to join.
+    a structure, and with none open an .xyz opens as a molecule instead.
     """
 
     class _Stub:
@@ -75,7 +75,6 @@ def _window(atoms: int = 3):
         _load_paths = MainWindow._load_paths
         _dropped_files = MainWindow._dropped_files
         _dropped_paths = staticmethod(MainWindow._dropped_paths)
-        _say_if_only_atoms = MainWindow._say_if_only_atoms
 
         def __init__(self):
             self.structure = [None] * atoms   # only its length is asked for
@@ -360,23 +359,21 @@ def test_the_drop_hint_covers_the_view_and_not_the_tabs(qapp):
     tabs.hide()
 
 
-# ── an atom list is not a structure ───────────────────────────────────────
-def test_an_xyz_dropped_with_nothing_open_is_not_made_the_structure(qapp):
-    """An .xyz carries coordinates and nothing else: no cell, no calculation.
-    It is added to a structure, so with none open there is nothing for it to
-    join, and it must not quietly become the structure itself."""
+# ── an atom list: added to a structure, or a molecule of its own ──────────
+def test_an_xyz_dropped_with_nothing_open_opens_as_a_molecule(qapp):
+    """On the welcome page there is no structure to add the atoms to, so the
+    file becomes the structure: a molecule, in a tab of its own."""
     window = _window(atoms=0)
 
     event = _enter(["/tmp/co2.xyz"])
     window.dragEnterEvent(event)
 
-    assert not event.isAccepted()                  # the cursor says so too
-    assert window._drop_hint.shown is None         # and nothing is promised
-    assert "no structure open" in window.messages[-1]
+    assert event.isAccepted()
+    assert window._drop_hint.shown == ("Open co2.xyz", "as a molecule, in a new tab")
 
     window.dropEvent(_drop(["/tmp/co2.xyz"]))
     qapp.processEvents()                           # the drop is acted on a turn later
-    assert window.imported == []
+    assert window.opened == ["/tmp/co2.xyz"] and window.imported == []
 
 
 def test_an_xyz_is_still_imported_when_a_structure_is_open(qapp):
@@ -388,17 +385,13 @@ def test_an_xyz_is_still_imported_when_a_structure_is_open(qapp):
     qapp.processEvents()
 
     assert event.isAccepted()
-    assert window.imported == ["/tmp/co2.xyz"]
+    assert window.imported == ["/tmp/co2.xyz"] and window.opened == []
 
 
-def test_an_xyz_chosen_in_the_open_dialog_is_not_read_as_a_structure(qapp):
-    """File ▸ Open offers "All files", so one can be picked there. The reader's
-    own complaint about an .xyz is "EXITING: a .out file needs to be
-    specified", which says nothing about what to do instead."""
+def test_an_xyz_chosen_in_the_open_dialog_opens_as_a_molecule(qapp):
+    """Chosen to be opened, an atom list is opened, whatever is on screen."""
     window = _window(atoms=3)
 
     opened = window._load_paths(["/tmp/co2.xyz", "/tmp/run.out"])
 
-    assert opened == ["/tmp/run.out"]              # only the structure
-    assert window.opened == ["/tmp/run.out"]
-    assert "Import atoms into structure" in window.messages[-1]
+    assert opened == window.opened == ["/tmp/co2.xyz", "/tmp/run.out"]

@@ -581,3 +581,34 @@ def test_cancelling_the_reduction_asks_for_nothing():
         dialog_module.SymmetryReductionDialog = original
 
     assert asked == []
+
+
+# ── P1, whatever the crystal ──────────────────────────────────────────────
+def test_p1_is_writable_even_where_the_descent_stops():
+    """Below F222 a centred cubic crystal has only C2 subgroups named in another
+    cell, so giving up operators one at a time never reaches P1. Asked for
+    directly, it is the identity alone, and every atom of the cell a site."""
+    symmetry = reduction.analyse(_mgo())
+    f222 = reduction.descend(symmetry, [np.diag((-1, -1, 1)), np.diag((1, -1, -1))])
+    without = reduction.subgroups_without(symmetry, [np.diag((-1, -1, 1))],
+                                          within=f222.rotations)
+    assert without and not any(option.writable for option in without)
+
+    p1 = reduction.no_symmetry(symmetry)
+    assert (p1.number, p1.order, p1.sites) == (1, 1, 8) and p1.writable
+
+
+def test_the_dialog_takes_any_crystal_to_p1_and_back():
+    pytest.importorskip("PySide6")
+    from PySide6.QtWidgets import QApplication
+
+    from crystalline.ui.panels.symmetry_reduction import SymmetryReductionDialog
+
+    QApplication.instance() or QApplication([])
+    dialog = SymmetryReductionDialog(_mgo())
+    assert dialog._p1.isEnabled()
+    dialog._to_p1()
+    assert dialog.chosen() == (tuple(map(tuple, np.eye(3, dtype=int))),)
+    assert not dialog._p1.isEnabled()                      # already there
+    dialog._restore()
+    assert dialog.chosen() == () and dialog._p1.isEnabled()
