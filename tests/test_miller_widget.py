@@ -7,7 +7,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from crystalline.ui.widgets.miller import MILLER_RANGE, MillerIndices  # noqa: E402
 
@@ -22,7 +22,9 @@ def qapp():
 def test_three_boxes_that_say_which_index_is_which(qapp):
     widget = MillerIndices((1, 0, 2))
     assert widget.indices() == (1, 0, 2)
-    assert [box.prefix() for box in widget.boxes] == ["h ", "k ", "l "]
+    assert [box.prefix() for box in widget.boxes] == ["", "", ""]
+    shown = [label.text() for label in widget.findChildren(QLabel) if not label.isHidden()]
+    assert sorted(shown) == ["h", "k", "l"]
     assert all(box.minimum() == -MILLER_RANGE and box.maximum() == MILLER_RANGE
                for box in widget.boxes)
 
@@ -32,11 +34,12 @@ def test_hexagonal_axes_show_the_fourth_index(qapp):
     assert widget.i_label.isHidden()
     widget.set_cell(_HEXAGONAL)
     assert widget.hexagonal and not widget.i_label.isHidden()
-    assert widget.i_label.text() == "i -1"
+    assert not widget.i_name.isHidden() and widget.i_name.text() == "i"
+    assert widget.i_label.text() == "-1"
     widget.boxes[1].setValue(1)
-    assert widget.i_label.text() == "i -2"
+    assert widget.i_label.text() == "-2"
     widget.set_cell(4.0 * np.eye(3))
-    assert widget.i_label.isHidden()
+    assert widget.i_label.isHidden() and widget.i_name.isHidden()
 
 
 def test_any_edit_is_announced_once(qapp):

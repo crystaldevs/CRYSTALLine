@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QSizePolicy, QSpinBox, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QSizePolicy, QSpinBox, QWidget
 
 from crystalline.core import lattice_planes as lp
 
@@ -40,26 +40,32 @@ class MillerIndices(QWidget):
                 # A box like the others, so the four indices read as one set —
                 # but greyed and untypeable, because this one is not a choice:
                 # it is fixed by h and k. As a bare label among spin boxes it
-                # looked like a stray piece of text.
-                self.i_label = QSpinBox()
-                self.i_label.setRange(-2 * MILLER_RANGE, 2 * MILLER_RANGE)
-                self.i_label.setPrefix("i ")
-                self.i_label.setButtonSymbols(QSpinBox.NoButtons)
+                # looked like a stray piece of text. A line edit rather than a
+                # spin box without arrows: under the theme's style sheet such a
+                # spin box draws its text field 1 px wide, and the value is lost.
+                self.i_name = QLabel("i")
+                self.i_label = QLineEdit()
                 self.i_label.setReadOnly(True)
                 self.i_label.setEnabled(False)
                 self.i_label.setFocusPolicy(Qt.NoFocus)
                 self.i_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
                 self.i_label.setMinimumWidth(_BOX_MIN_WIDTH)
+                self.i_label.setFixedHeight(self.boxes[0].sizeHint().height())
                 self.i_label.setToolTip(
                     "i = −(h + k). Hexagonal axes are indexed (h k i l), and this "
                     "index is fixed by the other two rather than chosen."
                 )
+                self.i_name.setToolTip(self.i_label.toolTip())
+                self.i_name.hide()
                 self.i_label.hide()
+                row.addWidget(self.i_name)
                 row.addWidget(self.i_label, 1)
+            # The index named beside its box, not inside it, so the box holds
+            # only the number.
+            row.addWidget(QLabel(name))
             box = QSpinBox(self)
             box.setRange(-MILLER_RANGE, MILLER_RANGE)
             box.setValue(int(value))
-            box.setPrefix(f"{name} ")
             box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
             box.setMinimumWidth(_BOX_MIN_WIDTH)
             box.valueChanged.connect(self._edited)
@@ -81,10 +87,11 @@ class MillerIndices(QWidget):
         self.changed.emit()
 
     def _show_i(self) -> None:
+        self.i_name.setVisible(self.hexagonal)
         self.i_label.setVisible(self.hexagonal)
         if self.hexagonal:
             h, k, _l = self.indices()
-            self.i_label.setValue(-(h + k))
+            self.i_label.setText(str(-(h + k)))
 
 
 __all__ = ["MILLER_RANGE", "MillerIndices"]

@@ -468,10 +468,10 @@ class GeometryPanel(QWidget):
         row = QHBoxLayout()
         self._coord_boxes = []
         for axis in ("x", "y", "z"):
+            row.addWidget(QLabel(axis))
             spin = QDoubleSpinBox()
             spin.setRange(-_COORD_RANGE, _COORD_RANGE)
             spin.setDecimals(4)
-            spin.setPrefix(f"{axis} ")
             # A box wide enough for "-1000.0000" would add ~110px each to the
             # panel's preferred width, and a dock takes its width from that — three
             # of them pushed this dock wider than the 3D view beside it. Ignoring

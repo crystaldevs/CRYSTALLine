@@ -152,9 +152,6 @@ class DisplayPanel(QWidget):
         self._elem_grid = atoms.grid
         self._elem_section = atoms
         self._elem_first_row = atoms._row
-        self._elem_hint = QLabel("Load a structure to recolour its elements.")
-        self._elem_hint.setEnabled(False)
-        atoms.append(self._elem_hint)
         reset_btn = QPushButton("Reset element colours")
         reset_btn.clicked.connect(self._reset_element_colors)
         atoms.append(_left(reset_btn))
@@ -628,8 +625,7 @@ class DisplayPanel(QWidget):
             widget.deleteLater()
         self._elem_widgets = []
         self._elem_buttons = {}
-        self._elem_hint.setVisible(not zs)
-        # Appended below the hint and the reset button, which keep their rows.
+        # Rows of the grid, so they stay above the reset button.
         row = self._elem_first_row
         for z in zs:
             button = QPushButton()
