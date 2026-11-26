@@ -122,6 +122,18 @@ def test_the_font_cache_is_warmed_on_a_thread_that_finishes():
     assert "matplotlib.font_manager" in sys.modules
 
 
+def test_nothing_imported_off_the_main_thread_brings_qt_or_matplotlib():
+    """Those belong to the main thread: matplotlib picks its GUI backend on
+    import, and Qt's objects live on the thread that made them."""
+    loaded = _modules_after(
+        "import importlib\n"
+        "        from crystalline.app import _FIRST_FILE_MODULES\n"
+        "        for name in _FIRST_FILE_MODULES:\n"
+        "            importlib.import_module(name)")
+
+    assert not [m for m in loaded if m.startswith(("PySide6", "shiboken6", "matplotlib"))]
+
+
 def test_the_window_opens_without_scipy_s_spatial_index():
     """A quarter of a second of every start, for a window that opens with
     nothing in it. The 3D view imports it when it first finds bonds."""

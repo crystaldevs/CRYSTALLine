@@ -423,6 +423,12 @@ def test_turning_a_knob_asks_for_a_redraw_once_it_comes_to_rest(panel, qapp):
     panel.redraw_requested.connect(lambda tab, options: asked.append(options))
     panel.add_figure(_figure(), "IR", recipe=PlotRecipe(
         draw=lambda **o: _figure(), options={"hwhm": 5.0}, controls=lambda: knobs))
+    # The plot drawn before the hand moves, as it is on screen: its first draw
+    # can include matplotlib's one-off mathtext set-up (220 ms), which in a run
+    # where no test before had drawn any was longer than the rest this asks of
+    # the drag below.
+    qapp.processEvents()
+    panel.widget_at(0).canvas.draw()
 
     for width in (6.0, 7.0, 8.0):          # a drag across three values
         knobs.turn(hwhm=width)

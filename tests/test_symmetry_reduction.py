@@ -470,7 +470,7 @@ def test_the_info_panel_reports_both_the_real_group_and_the_declared_one():
     """They are different facts: the space group is the symmetry these atoms
     have, and the reduction is the one they are being given."""
     pytest.importorskip("PySide6")
-    from PySide6.QtWidgets import QApplication, QFormLayout
+    from PySide6.QtWidgets import QApplication
 
     from crystalline.ui.panels.info_panel import InfoPanel
 
@@ -483,12 +483,12 @@ def test_the_info_panel_reports_both_the_real_group_and_the_declared_one():
 
     panel = InfoPanel()
     panel.show_structure(structure)
-    before = _rows(panel, QFormLayout)
+    before = _rows(panel)
     assert "Treated as:" not in before, "nothing to say when nothing is reduced"
 
     structure.set_reduced_symmetry([tuple(map(tuple, r)) for r in p222.rotations])
     panel.show_structure(structure)
-    after = _rows(panel, QFormLayout)
+    after = _rows(panel)
     assert after["Space group:"].startswith("Pm3̄m"), "the real symmetry still shows"
     assert after["Treated as:"] == "P222 (No. 16)"
     assert after["Independent sites:"] == "5 (was 3)"
@@ -501,15 +501,10 @@ def test_the_info_panel_reports_both_the_real_group_and_the_declared_one():
     assert labels.index("Independent sites:") == labels.index("Treated as:") + 1
 
 
-def _rows(panel, form_layout):
-    form = panel._crystal_form
-    rows = {}
-    for index in range(form.rowCount()):
-        label = form.itemAt(index, form_layout.LabelRole)
-        field = form.itemAt(index, form_layout.FieldRole)
-        if label and field:
-            rows[label.widget().text()] = field.widget().text()
-    return rows
+def _rows(panel):
+    from _panels import form_rows
+
+    return dict(form_rows(panel._crystal_form))
 
 
 def test_opening_the_reduction_from_the_panel_actually_runs():

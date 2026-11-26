@@ -159,6 +159,36 @@ def _label(symbols: Sequence[str], indices: Sequence[int], joiner: str) -> str:
     return f"{text} +{extra} more" if extra > 0 else text
 
 
+# The table's columns, written out: what was measured.
+EXPORT_COLUMNS = ("Kind", "Atoms", "Value", "Unit")
+EXPORT_POSITION_COLUMNS = ("x (Å)", "y (Å)", "z (Å)")
+
+
+def export_rows(measurements: Sequence[Measurement]) -> Tuple[list, list]:
+    """``(header, rows)`` for writing ``measurements`` out as a table.
+
+    One row per measurement, in the order given — the order on screen — with
+    the measured value in full rather than to the three places the table
+    shows. A point's position goes in three columns of its own, there only
+    when the table has a point.
+    """
+    points = any(m.kind == POINT for m in measurements)
+    header = list(EXPORT_COLUMNS)
+    if points:
+        header += EXPORT_POSITION_COLUMNS
+    rows = []
+    for m in measurements:
+        if m.kind == POINT:
+            measured = [m.kind, m.label.partition("  ")[0], "", ""]
+        else:
+            measured = [m.kind, m.label, f"{m.value:.6f}", m.unit]
+        if points:
+            measured += ([f"{v:.6f}" for v in np.asarray(m.points, dtype=float)[0]]
+                         if m.kind == POINT else ["", "", ""])
+        rows.append(measured)
+    return header, rows
+
+
 __all__ = [
     "DEFAULT_THICKNESS",
     "Measurement",
@@ -172,4 +202,7 @@ __all__ = [
     "dihedral",
     "measure",
     "measure_point",
+    "EXPORT_COLUMNS",
+    "EXPORT_POSITION_COLUMNS",
+    "export_rows",
 ]

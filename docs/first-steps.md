@@ -15,6 +15,11 @@ If the output contains a vibrational calculation, phonon modes are read with it.
 If it does not, the geometry alone is shown and the remaining functions are
 unaffected.
 
+The tab comes up as soon as the structure is read. The Info panel's
+**CRYSTAL output** rows (code, task, functional, energy and the like) are read
+after it, once every file being opened is on screen, and appear a moment later:
+on a large output this saves about half a second before the structure is shown.
+
 ## Working in the calculation's folder
 
 CRYSTAL writes more than the output file. Several external units might be 
