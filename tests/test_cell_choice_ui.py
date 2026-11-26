@@ -15,14 +15,9 @@ from crystalline.core.structure import Structure  # noqa: E402
 
 
 def _rows(panel):
-    form = panel._crystal_form
-    rows = {}
-    for row in range(form.rowCount()):
-        label = form.itemAt(row, form.ItemRole.LabelRole)
-        field = form.itemAt(row, form.ItemRole.FieldRole)
-        if label is not None and field is not None:
-            rows[label.widget().text().rstrip(":")] = field.widget().text()
-    return rows
+    from _panels import form_rows
+
+    return {label.rstrip(":"): value for label, value in form_rows(panel._crystal_form)}
 
 
 def test_the_info_panel_switches_between_the_two_cells(qapp):

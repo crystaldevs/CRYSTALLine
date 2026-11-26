@@ -51,6 +51,7 @@ def test_measuring_two_atoms_lists_a_distance(qapp):
     assert result.value == pytest.approx(0.9572, abs=1e-4)
     # new measurements are shown in 3D straight away
     assert emitted and len(emitted[-1]) == 1
+    assert panel._items()[0].checkState(0) == Qt.Checked
 
 
 def test_measuring_three_atoms_gives_an_angle(qapp):
@@ -60,6 +61,33 @@ def test_measuring_three_atoms_gives_an_angle(qapp):
     panel._measure_selection()
     assert panel.measurements()[-1].kind == M.ANGLE
     assert panel.measurements()[-1].value == pytest.approx(104.5, abs=0.05)
+
+
+def test_an_angle_is_measured_at_the_atom_picked_second(qapp):
+    """The selection arrives sorted by index, a click at a time: H1, then O0,
+    then H2 comes as [1], [0, 1], [0, 1, 2]. Taken as it came, the angle was
+    O–H–H (37.7°) at the H in the middle of the list, not H–O–H at the O
+    picked second."""
+    def _measured(panel):
+        panel._measure_selection()
+        return panel.measurements()[-1]
+
+    panel = GeometryPanel(_water())
+    for selection in ([1], [0, 1], [0, 1, 2]):
+        panel.set_selection(selection)
+    angle = _measured(panel)
+    assert angle.indices == (1, 0, 2) and angle.value == pytest.approx(104.5, abs=0.05)
+
+    panel.set_selection([1, 2])                      # O0 unpicked, then picked again:
+    panel.set_selection([0, 1, 2])                   # it goes last now
+    assert _measured(panel).indices == (1, 2, 0)
+    panel.set_selection([2])                          # a fresh pick starts a fresh order
+    panel.set_selection([0, 2])
+    assert _measured(panel).indices == (2, 0)
+    panel.set_selection([0, 1, 2])                    # all at once: in index order, as before
+    panel.set_selection([])
+    panel.set_selection([0, 1, 2])
+    assert _measured(panel).indices == (0, 1, 2)
 
 
 def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
@@ -72,6 +100,20 @@ def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
     assert panel._fit_plane_btn.isEnabled()          # where the plane went
 
 
+def test_a_new_measurement_is_listed_ticked_and_drawn(qapp):
+    """A measurement is taken to be seen: it comes ticked, in the table's first
+    column, and drawn; unticked, it is hidden and stays listed."""
+    panel = GeometryPanel(_water())
+    shown = []
+    panel.annotations_changed.connect(lambda anns: shown.append(list(anns)))
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    assert panel._items()[0].checkState(0) == Qt.Checked     # the tick is the first column's
+    assert len(panel.shown_annotations()) == 1 and len(shown[-1]) == 1
+    panel._items()[0].setCheckState(0, Qt.Unchecked)
+    assert panel.shown_annotations() == [] and len(panel.measurements()) == 1
+
+
 def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
     panel = GeometryPanel(_water())
     shown = []
@@ -80,7 +122,7 @@ def test_unticking_a_measurement_hides_it_without_deleting_it(qapp):
     panel._measure_selection()
     assert len(panel.shown_annotations()) == 1
 
-    panel._items()[0].setCheckState(Qt.Unchecked)
+    panel._items()[0].setCheckState(0, Qt.Unchecked)
     assert panel.shown_annotations() == []       # nothing drawn
     assert len(panel.measurements()) == 1        # but still listed
     assert shown[-1] == []                       # and the viewport was told
@@ -94,7 +136,7 @@ def test_clearing_and_removing_measurements(qapp):
     panel._measure_selection()
     assert len(panel.measurements()) == 2
 
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     panel._remove_selected_measurements()
     assert len(panel.measurements()) == 1
     assert panel.measurements()[0].kind == M.ANGLE  # the right one went
@@ -189,8 +231,8 @@ def test_setting_a_per_item_colour(qapp, monkeypatch):
 
     # Recolour just the distance (row 0); the colour dialog is stubbed.
     monkeypatch.setattr(QColorDialog, "getColor", staticmethod(lambda *a, **k: QColor("#123456")))
-    panel._list.item(0).setSelected(True)
-    panel._list.item(1).setSelected(False)
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(False)
     panel._set_measurement_colour()
 
     assert panel.measurements()[0].color == "#123456"  # the distance is recoloured
@@ -205,7 +247,7 @@ def test_colour_button_needs_a_selected_measurement(qapp):
     panel._list.clearSelection()
     panel._sync_buttons()
     assert not panel._color_btn.isEnabled()  # nothing selected → nothing to recolour
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._color_btn.isEnabled()
 
 
@@ -227,12 +269,12 @@ def test_the_thickness_slider_sets_every_line_or_the_selected_ones(qapp):
     assert panel._thickness.box.value() == pytest.approx(0.2)      # the box follows
 
     # one selected: only that one, and picking another shows its value
-    panel._list.item(1).setSelected(True)
+    panel._list.topLevelItem(1).setSelected(True)
     panel._thickness.box.setValue(0.35)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
     assert panel._thickness.slider.value() == round((0.35 - 0.02) / 0.48 * 1000)
     panel._list.clearSelection()
-    panel._list.item(0).setSelected(True)
+    panel._list.topLevelItem(0).setSelected(True)
     assert panel._thickness.box.value() == pytest.approx(0.2)
     assert [m.thickness for m in panel.measurements()] == pytest.approx([0.2, 0.35])
 
@@ -386,8 +428,11 @@ def test_the_position_boxes_do_not_widen_the_dock(qapp):
     from PySide6.QtWidgets import QScrollArea
 
     panel = GeometryPanel(_nacl())
-    # the panel's own width before the boxes existed, plus the scroll bar the
-    # panel now keeps room for
+    # the panel's own width without the boxes, plus the scroll bar the panel
+    # keeps room for. That width is Lattice planes' Through origin / Through
+    # selected atom row: 323 px with the macOS style, 362 here, where the
+    # offscreen style makes every button at least 80 px wide. (With Export
+    # beside Clear all, Measure's row set it: 357, and 384 here.)
     scroll_bar = panel.findChild(QScrollArea).verticalScrollBar().sizeHint().width()
     assert panel.sizeHint().width() <= 360 + scroll_bar
 
@@ -903,3 +948,204 @@ def test_moving_a_plane_does_not_move_its_track(qapp):
 
     assert _track(panel) == (0.0, 3.0)
     assert panel._planes[0].offset == pytest.approx(2.5)
+
+
+# ── the measurement table: sorting, a point's value ─────────────────────
+def _peroxide():
+    """H2O2 as on screen: its four atoms, and O2 again in the cell along −a."""
+    s = Structure.empty()
+    for element, position in (("O", [0.0, 0.0, 0.0]), ("O", [1.45, 0.0, 0.0]),
+                              ("H", [-0.3, 0.9, 0.2]), ("H", [1.75, -0.2, 0.9]),
+                              ("O", [1.45 - 5.0, 0.0, 0.0])):
+        s.add_atom(element, position)
+    return s
+
+
+def _measure(panel, *atoms):
+    """Pick ``atoms`` one at a time, as in the 3D view, then measure them."""
+    from _panels import pick_and_measure
+
+    return pick_and_measure(panel, atoms)
+
+
+def _row(panel, row):
+    from crystalline.ui.panels.geometry_panel import _HEADERS
+
+    item = panel._items()[row]
+    return [item.text(column) for column in range(len(_HEADERS))]
+
+
+def test_the_numbers_are_centred_in_their_columns(qapp):
+    """The values and their heading over them: right-aligned, the Value column
+    read as pushed away to the dock's edge. The measured atoms stay on the
+    left, by their tick box."""
+    from crystalline.ui.panels.geometry_panel import _COL_NAME, _COL_VALUE
+
+    def side(alignment):
+        return alignment & (Qt.AlignLeft | Qt.AlignRight | Qt.AlignHCenter)
+
+    panel = GeometryPanel(_water())
+    _measure(panel, 0, 1)
+    heading = panel._list.headerItem().textAlignment(_COL_VALUE)
+    assert side(panel._items()[0].textAlignment(_COL_VALUE)) == Qt.AlignHCenter
+    assert side(heading) == Qt.AlignHCenter
+    assert not side(panel._items()[0].textAlignment(_COL_NAME)) & Qt.AlignHCenter
+
+
+def test_sorting_moves_each_measurement_with_its_row(qapp):
+    """The table sorts by whichever heading is clicked, and the measurement behind
+    each row goes with it: Remove takes away the row picked, and nothing else.
+    Rows with nothing in the column stay at the bottom, whichever way it runs."""
+    from crystalline.ui.panels.geometry_panel import _COL_VALUE
+
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 0, 1)            # O1–O2, 1.450 Å
+    _measure(panel, 3)               # H4, a point: no single value
+    _measure(panel, 0, 2)            # O1–H3, 0.970 Å
+    _measure(panel, 0, 3)            # O1···H4, 1.978 Å
+    for row in (0, 3):                                    # H4 and O1–H3 drawn, the rest not
+        panel._items()[row].setCheckState(0, Qt.Unchecked)
+
+    panel._list.header().setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
+    assert [_row(panel, r)[_COL_VALUE] for r in range(4)] == [
+        "1.978 Å", "1.450 Å", "0.970 Å", "(1.750, -0.200, 0.900)"]
+    assert [m.label for m in panel.shown_annotations()] == [
+        "O(0)–H(2)", "H(3)  (1.750, -0.200, 0.900)"]
+    _measure(panel, 2, 4)            # H3···O2(−a), 3.378 Å: sorted into place
+    assert [_row(panel, r)[_COL_VALUE] for r in range(4)] == [
+        "3.378 Å", "1.978 Å", "1.450 Å", "0.970 Å"]
+
+    panel._list.topLevelItem(0).setSelected(True)
+    panel._remove_selected_measurements()
+    assert [round(m.value, 3) for m in panel.measurements()[:3]] == [1.978, 1.45, 0.970]
+
+
+def test_a_third_click_on_a_heading_stops_sorting(qapp):
+    from crystalline.ui.panels.geometry_panel import _COL_VALUE
+
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 0, 1)
+    _measure(panel, 0, 2)
+    header = panel._list.header()
+    header.setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
+    header.setSortIndicator(-1, Qt.AscendingOrder)         # cleared: left as it stands
+    _measure(panel, 2, 4)
+    assert [_row(panel, r)[_COL_VALUE] for r in range(3)] == ["1.450 Å", "0.970 Å", "3.378 Å"]
+
+
+def test_a_point_lists_its_coordinates_as_its_value(qapp):
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 3)
+    assert _row(panel, 0) == ["H(3)", "(1.750, -0.200, 0.900)"]
+
+
+# ── exporting the table ───────────────────────────────────────────────────
+def _read_csv(path):
+    import csv
+
+    with open(path, newline="", encoding="utf-8-sig") as handle:
+        return list(csv.reader(handle))
+
+
+def test_the_table_is_exported_as_it_is_shown(qapp, tmp_path):
+    """Every row, in the order on screen, with the numbers in full."""
+    from crystalline.ui.panels.geometry_panel import _COL_VALUE
+
+    panel = GeometryPanel(_peroxide())
+    _measure(panel, 0, 1)            # O1–O2, 1.450 Å
+    _measure(panel, 0, 3)            # O1···H4, 1.978 Å
+    _measure(panel, 2, 0, 1)         # H3–O1–O2
+    panel._list.header().setSortIndicator(_COL_VALUE, Qt.DescendingOrder)
+
+    target = tmp_path / "peroxide_measurements.csv"
+    panel.export_csv(str(target))
+    header, *rows = _read_csv(target)
+
+    assert header == list(M.EXPORT_COLUMNS)
+    # As sorted: by kind, then by value, so the bonds' lengths and the angle's
+    # degrees do not mix.
+    assert [row[1] for row in rows] == ["H(2)–O(0)–O(1)", "O(0)–H(3)", "O(0)–O(1)"]
+    assert rows[0][0] == "angle" and rows[0][3] == "°"
+    assert rows[2] == ["distance", "O(0)–O(1)", "1.450000", "Å"]
+
+
+def test_a_point_is_exported_with_its_position_in_columns_of_its_own(qapp, tmp_path):
+    """What was measured, and a point's position in three more columns."""
+    panel = GeometryPanel(_water())
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    panel.set_selection([2])
+    panel._measure_selection()
+    target = tmp_path / "water.csv"
+    panel.export_csv(str(target))
+    header, distance, point = _read_csv(target)
+    assert header == list(M.EXPORT_COLUMNS) + list(M.EXPORT_POSITION_COLUMNS)
+    assert distance == ["distance", "O(0)–H(1)", "0.957200", "Å", "", "", ""]
+    assert point == ["point", "H(2)", "", "", "-0.240000", "0.926600", "0.000000"]
+    assert target.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+def test_the_export_button_follows_the_table(qapp):
+    """And Clear all with it: both stayed greyed out after the first measurement
+    until the selection next changed."""
+    panel = GeometryPanel(_water())
+    assert not panel._export_btn.isEnabled()
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    assert panel._export_btn.isEnabled() and panel._clear_btn.isEnabled()
+    panel.clear_measurements()
+    assert not panel._export_btn.isEnabled() and not panel._clear_btn.isEnabled()
+
+
+def test_the_export_is_offered_beside_the_run_and_named_after_it(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QFileDialog
+
+    panel = GeometryPanel(_water())
+    panel.set_source_file("/runs/coesite/coesite_ela.out")
+    panel.set_selection([0, 1])
+    panel._measure_selection()
+    offered = []
+    chosen = tmp_path / "picked"                           # typed without the extension
+
+    def ask(_parent, _title, suggested, _filter):
+        offered.append(suggested)
+        return str(chosen), "CSV files (*.csv)"
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", staticmethod(ask))
+    panel._export_btn.click()
+    assert offered == ["/runs/coesite/coesite_ela_measurements.csv"]
+    assert (tmp_path / "picked.csv").is_file()
+
+
+def test_the_measurement_buttons_span_the_table_however_wide_the_dock(qapp):
+    """Colour, Remove and Clear all share the table's width: the first starts
+    where the table starts, the last ends where it ends, and they grow together
+    as the dock is widened — as the planes' row does. Export to CSV has the line
+    under them to itself, as wide as the table."""
+    from PySide6.QtCore import QPoint
+
+    panel = GeometryPanel(_water())
+    # Unfolded: every section starts folded, and folded the buttons are never
+    # laid out — all at Qt's default geometry, so the edges below compared
+    # nothing with nothing (since accc7aa, until the Export line was checked).
+    panel._sections["measure"].header.setChecked(True)
+    buttons = (panel._color_btn, panel._remove_btn, panel._clear_btn)
+
+    def edges(widget):
+        left = widget.mapTo(panel, QPoint(0, 0)).x()
+        return left, left + widget.width()
+
+    for width in (420, 640):
+        panel.resize(width, 700)
+        panel.show()
+        qapp.processEvents()
+        table = edges(panel._list)
+        assert edges(buttons[0])[0] == table[0]
+        assert edges(buttons[-1])[1] == table[1]
+        widths = [b.width() for b in buttons]
+        assert max(widths) - min(widths) <= 2           # shared out evenly
+        assert edges(panel._export_btn) == table        # a line of its own
+        below = panel._export_btn.mapTo(panel, QPoint(0, 0)).y()
+        assert below >= buttons[0].mapTo(panel, QPoint(0, 0)).y() + buttons[0].height()
+    assert buttons[0].width() > 100                     # and wider at 640 than at their least
+    panel.hide()
