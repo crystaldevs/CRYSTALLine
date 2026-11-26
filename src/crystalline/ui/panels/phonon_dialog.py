@@ -191,6 +191,7 @@ class PhononDialog(BandsDialog):
             k_labels=self.k_labels() if need_bands else None,
             **self._projection_choice(),
             overlay_projections=self.overlay.isChecked(),
+            dos_fill=self.fill.isChecked(),
             band_colour=self.band_colour.colour(),
             linewidth=self.linewidth.value(),
             show_zero=self.show_zero.isChecked(),

@@ -88,6 +88,10 @@ class SymmetryReductionDialog(QDialog):
         take = QPushButton("Use this symmetry")
         take.clicked.connect(lambda: self._take_choice())
         right.addWidget(take)
+        self._p1 = QPushButton("No symmetry (P1)")
+        self._p1.setToolTip("Every atom of the cell independent: the identity alone.")
+        self._p1.clicked.connect(lambda: self._to_p1())
+        right.addWidget(self._p1)
         restore = QPushButton("Restore full symmetry")
         restore.clicked.connect(lambda: self._restore())
         right.addWidget(restore)
@@ -107,6 +111,7 @@ class SymmetryReductionDialog(QDialog):
             self._header.setText(_nothing_to_reduce(self._structure))
             self._operators.setEnabled(False)
             self._choices.setEnabled(False)
+            self._p1.setEnabled(False)
             return
         kept = self._structure.reduced_symmetry
         self._current = (reduction.descend(self._symmetry, [np.asarray(r, dtype=int)
@@ -117,6 +122,7 @@ class SymmetryReductionDialog(QDialog):
 
     def _refresh_header(self) -> None:
         current, full = self._current, self._symmetry.full()
+        self._p1.setEnabled(current.order > 1)
         if current.order == full.order:
             self._header.setText(
                 f"{full.symbol} (No. {full.number}) — the crystal's own symmetry: "
@@ -193,6 +199,9 @@ class SymmetryReductionDialog(QDialog):
                     if option.writable]
         if writable:
             self._choices.setCurrentRow(writable[0])
+        else:
+            self._choices.addItem("None of these can be written in this cell; "
+                                  "“No symmetry (P1)” always can.")
 
     @guard()
     def _take_choice(self) -> None:
@@ -203,6 +212,14 @@ class SymmetryReductionDialog(QDialog):
         if not option.writable:
             return
         self._current = option
+        self._options = []
+        self._choices.clear()
+        self._fill_operators()
+        self._refresh_header()
+
+    @guard()
+    def _to_p1(self) -> None:
+        self._current = reduction.no_symmetry(self._symmetry)
         self._options = []
         self._choices.clear()
         self._fill_operators()

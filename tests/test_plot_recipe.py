@@ -95,6 +95,118 @@ def test_the_pick_handler_survives_a_redraw(panel):
     assert tab.canvas.toolTip() != ""             # still says a peak can be clicked
 
 
+def test_back_forward_and_reset_drive_the_figure_on_screen_after_a_redraw(panel, qapp):
+    """A redraw brings a new canvas and a new navigation toolbar with it; the
+    buttons go to whichever toolbar the tab has now."""
+    panel.add_figure(_figure(), "IR")
+    tab = panel.widget_at(0)
+    panel.replace_figure(0, _figure("second"))
+    axes = tab.figure.axes[0]
+    tab.canvas.draw()
+
+    home = axes.get_xlim()
+    tab._nav.push_current()
+    axes.set_xlim(0.2, 0.4)
+    tab._nav.push_current()
+
+    tab._btn_back.click()
+    assert axes.get_xlim() == pytest.approx(home)
+    tab._btn_forward.click()
+    assert axes.get_xlim() == pytest.approx((0.2, 0.4))
+    tab._btn_reset.click()
+    assert axes.get_xlim() == pytest.approx(home)
+
+
+def _peak(height=1.0, label="first"):
+    """A curve whose height a "broadening" sets, on an autoscaled y axis."""
+    from matplotlib.figure import Figure
+
+    figure = Figure()
+    figure.add_subplot(111).plot([0, 50, 100], [0, height, 0], label=label)
+    return figure
+
+
+def _zoomed(tab, xlim, ylim):
+    axes = tab.figure.axes[0]
+    tab._nav.push_current()
+    axes.set_xlim(*xlim)
+    axes.set_ylim(*ylim)
+    tab._nav.push_current()
+
+
+def _redrawn_live(panel, qapp, options):
+    window = _editing_window(panel)
+    window._redraw_plot(panel.widget_at(0), options)
+    _drained(window, qapp)
+    return panel.widget_at(0).figure.axes[0]
+
+
+def _peak_recipe():
+    return PlotRecipe(draw=lambda height=1.0, window=None: _peak(height),
+                      options={"height": 1.0, "window": None}, view_keys=("window",))
+
+
+def test_a_redraw_from_the_controls_keeps_the_zoom(panel, qapp):
+    """A zoom into part of a spectrum survives a change of broadening: the
+    frequencies stay where they were, and the heights follow the peaks, which
+    stand twice as tall at half the width."""
+    panel.add_figure(_peak(), "IR", recipe=_peak_recipe())
+    tab = panel.widget_at(0)
+    home_y = tab.figure.axes[0].get_ylim()
+    _zoomed(tab, (20, 40), (home_y[0], home_y[0] + 0.5 * (home_y[1] - home_y[0])))
+
+    axes = _redrawn_live(panel, qapp, {"height": 2.0})
+
+    assert axes.get_xlim() == pytest.approx((20, 40))
+    low, high = axes.get_ylim()
+    new_home = _peak(2.0).axes[0].get_ylim()
+    assert (high - low) == pytest.approx(0.5 * (new_home[1] - new_home[0]))
+
+    tab._btn_reset.click()                    # Reset is the new figure as drawn
+    assert axes.get_xlim() == pytest.approx(_peak(2.0).axes[0].get_xlim())
+    assert axes.get_ylim() == pytest.approx(new_home)
+
+
+def test_an_unzoomed_plot_takes_the_new_figure_as_drawn(panel, qapp):
+    panel.add_figure(_peak(), "IR", recipe=_peak_recipe())
+
+    axes = _redrawn_live(panel, qapp, {"height": 2.0})
+
+    assert axes.get_ylim() == pytest.approx(_peak(2.0).axes[0].get_ylim())
+    assert panel.widget_at(0)._nav._nav_stack() is None   # nothing pushed
+
+
+def test_changing_what_the_axes_span_drops_the_zoom(panel, qapp):
+    """A new frequency window is a request for that window: keeping the zoom
+    over it would make the slider look as if it did nothing."""
+    panel.add_figure(_peak(), "IR", recipe=_peak_recipe())
+    tab = panel.widget_at(0)
+    _zoomed(tab, (20, 40), (0, 0.5))
+
+    axes = _redrawn_live(panel, qapp, {"window": (0, 80)})
+
+    assert axes.get_xlim() == pytest.approx(_peak().axes[0].get_xlim())
+
+
+def test_a_zoom_is_not_carried_onto_other_axes(panel, qapp):
+    """A view of one panel is no view of two: a DOS beside the bands, say."""
+    from matplotlib.figure import Figure
+
+    def draw(panels=1):
+        figure = Figure()
+        for index in range(panels):
+            figure.add_subplot(1, panels, index + 1).plot([0, 100], [0, 1])
+        return figure
+
+    panel.add_figure(draw(), "Bands", recipe=PlotRecipe(draw=draw, options={"panels": 1}))
+    tab = panel.widget_at(0)
+    _zoomed(tab, (20, 40), (0, 0.5))
+
+    axes = _redrawn_live(panel, qapp, {"panels": 2})
+
+    assert axes.get_xlim() == pytest.approx(draw(2).axes[0].get_xlim())
+
+
 def test_a_tab_keeps_the_recipe_it_was_given(panel):
     recipe = PlotRecipe(draw=lambda **o: _figure(), options={"hwhm": 5.0})
 

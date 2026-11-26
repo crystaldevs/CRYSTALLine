@@ -24,7 +24,6 @@ from crystalline.core.properties_input import (
     build_properties_input,
 )
 from crystalline.core.structure import Structure
-from crystalline.ui.panels.band_path_editor import CONVENTIONAL_NOTE
 
 
 def _mgo() -> Structure:
@@ -488,7 +487,7 @@ def test_the_path_starts_as_the_conventional_walk():
     dialog = _builder()
     assert dialog._path_editor.conventional.isChecked()
     assert dialog._path_editor._list.count() > 1
-    assert dialog._path_editor.note.text() == CONVENTIONAL_NOTE
+    assert dialog._path_editor.error.isHidden()       # nothing went wrong
 
 
 def test_an_emptied_path_is_refused_rather_than_quietly_refilled():
@@ -544,7 +543,11 @@ def test_an_unreadable_endpoint_is_refused_with_a_reason():
     dialog._path_editor._to.setEditText("G")
     dialog._path_editor.add_typed_segment()
     assert dialog._path_editor._list.count() == before
-    assert "not a point on this lattice" in dialog._path_editor.note.text()
+    assert "not a point on this lattice" in dialog._path_editor.error.text()
+    assert not dialog._path_editor.error.isHidden()
+    dialog._path_editor._from.setEditText("G")
+    dialog._path_editor.add_typed_segment()
+    assert dialog._path_editor.error.isHidden()      # gone once an edit goes through
 
 
 def test_segments_can_be_reordered():

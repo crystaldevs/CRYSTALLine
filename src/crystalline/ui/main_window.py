@@ -57,7 +57,7 @@ from crystalline.core.cells import (
 )
 from crystalline.core.adp import ADPSet
 from crystalline.core.phonons import PhononModes
-from crystalline.core.structure import Structure
+from crystalline.core.structure import REDUCED_SYMMETRY_KEY, Structure
 from crystalline.core.undo import UndoHistory
 
 # Orbital energies are stored in Hartree and shown in the unit bands are quoted in.
@@ -282,17 +282,17 @@ class MainWindow(QMainWindow):
         # Bottom-right status indicators. Order matters: permanent widgets stack
         # left-to-right in call order, so counts sit left of the editing badge.
         self._count_status = QLabel()
-        self._count_status.setStyleSheet("color: palette(mid); padding: 0 8px;")
+        self._count_status.setStyleSheet("padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._count_status)
 
         self._cell_status = QLabel()
-        self._cell_status.setStyleSheet("color: palette(mid); padding: 0 8px;")
+        self._cell_status.setStyleSheet("padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._cell_status)
 
         # Which file is being read, shown only while one is — where a loading
         # screen would have stood between the user and the tab already open.
         self._reading_status = QLabel()
-        self._reading_status.setStyleSheet("color: palette(mid); padding: 0 8px;")
+        self._reading_status.setStyleSheet("padding: 0 8px;")
         self.statusBar().addPermanentWidget(self._reading_status)
         self._reading_status.hide()
 
@@ -329,6 +329,7 @@ class MainWindow(QMainWindow):
 
         self._welcome = WelcomeOverlay(self._file_tabs.findChild(QStackedWidget))
         self._welcome.open_requested.connect(self._open_file)
+        self._welcome.build_requested.connect(self._build_structure)
         self._welcome.path_chosen.connect(lambda path: self._load_paths([path]))
         self._welcome.clear_requested.connect(self._forget_recent_files)
 
@@ -973,6 +974,24 @@ class MainWindow(QMainWindow):
         if redo is not None:
             redo.setEnabled(self._history.can_redo())
 
+    def _show_view_work(self, text: str) -> None:
+        """Say in the status bar what a view is working out, and stop saying it when done.
+
+        A job under way is shown until it ends; a failure for a few seconds.
+        Cleared only if the bar still shows the job's own message, so whatever
+        else has been said since is left alone.
+        """
+        bar = self.statusBar()
+        if text.endswith("…"):
+            bar.showMessage(text)
+            self._view_work_message = text
+            return
+        if bar.currentMessage() == getattr(self, "_view_work_message", None):
+            bar.clearMessage()
+        self._view_work_message = None
+        if text:
+            bar.showMessage(text, 6000)
+
     def _connect_tab_signals(self, tab: FileTab) -> None:
         """Wire one tab's view and panels: to each other, and to the window.
 
@@ -999,6 +1018,8 @@ class MainWindow(QMainWindow):
         # moving the camera -> suspend the animation for the duration, so the
         # drag gets the whole event loop and the view keeps up with the pointer
         viewport.camera_busy.connect(phonons.hold)
+        # what the view is working out off the UI thread -> the status bar
+        viewport.working.connect(self._show_view_work)
         # the panel owns the selection -> highlight it + refresh the Edit menu
         selection.selection_changed.connect(on(self._on_selection_changed))
         # a phonon mode was (de)selected -> refresh the animation-export action
@@ -1393,6 +1414,7 @@ class MainWindow(QMainWindow):
     def _show_spectra(self, path: str, data: dict) -> None:
         """The spectra dialog, and the plot it asks for, on curves already read."""
         from crystalline.crystalio import plot_spectra
+        from crystalline.crystalio.spectra import frequency_bounds
         from crystalline.ui.panels.spectra_dialog import SpectraDialog
 
         kinds = sorted(data, key=lambda kind: kind.sort_key)
@@ -1405,7 +1427,10 @@ class MainWindow(QMainWindow):
             )
             return
 
-        dialog = SpectraDialog(kinds, self)
+        # Over every curve the output holds, ticked or not, so that ticking one
+        # does not move the track under the handles.
+        bounds = frequency_bounds(data.values())
+        dialog = SpectraDialog(kinds, self, bounds=bounds)
         self._restore_dialog(dialog, "spectra")
         if dialog.exec() != QDialog.Accepted:
             return
@@ -1415,8 +1440,10 @@ class MainWindow(QMainWindow):
         # The data is read once and drawn from thereafter: broadening a
         # spectrum again is arithmetic on curves already in hand, which is what
         # makes this the plot worth being able to change in place.
-        def draw(*, curves, **options):
-            # No title, even over one curve: the tab names it.
+        def draw(*, curves, frequency_bounds=None, **options):
+            # frequency_bounds are the ends of the controls' track, which the
+            # plotter has no use for. No title, even over one curve: the tab
+            # names it.
             return plot_spectra([(kind.label, data[kind]) for kind in curves], **options)
 
         def name(options) -> str:
@@ -1436,7 +1463,7 @@ class MainWindow(QMainWindow):
         mine = {"state": capture_dialog(dialog)}
 
         def ask(options):
-            again = SpectraDialog(kinds, self)
+            again = SpectraDialog(kinds, self, bounds=bounds)
             self._restore_dialog(again, "spectra", state=mine["state"])
             # From what is drawn, which is the authority on what this tab is.
             again.set_selection_state([kind.attribute for kind in options["curves"]])
@@ -1444,7 +1471,8 @@ class MainWindow(QMainWindow):
                 return None
             mine["state"] = capture_dialog(again)
             self._remember_dialog(again, "spectra")  # the next new plot, too
-            return {"curves": again.selected_kinds(), **again.options()}
+            return {"curves": again.selected_kinds(), "frequency_bounds": bounds,
+                    **again.options()}
 
         # The broadening and the range go beside the plot, where a width can be
         # judged against the peaks it merges. Which curves are drawn stays in
@@ -1453,7 +1481,9 @@ class MainWindow(QMainWindow):
         from crystalline.ui.panels.spectra_options import SpectraOptions
 
         recipe = PlotRecipe(draw=draw, edit=ask, title=name, controls=SpectraOptions,
-                            options={"curves": chosen, **dialog.options()})
+                            options={"curves": chosen, "frequency_bounds": bounds,
+                                     **dialog.options()},
+                            view_keys=("curves", "frequency_range"))
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any read/plot error
@@ -1499,9 +1529,10 @@ class MainWindow(QMainWindow):
             # What the dialog set outranks a redraw from the controls that
             # was still under way, or waiting, when it was opened.
             live.withdraw(tab)
+            keep_view = recipe.keeps_view(recipe.options, chosen)
             recipe.options = chosen
             title = recipe.title(chosen) if recipe.title is not None else None
-            self.plot_panel.replace_figure(index, figure, title)
+            self.plot_panel.replace_figure(index, figure, title, keep_view=keep_view)
             self._widen_plot_window(tab)  # an edit can ask for another shape
             # The knobs beside the plot describe the plot, so they follow what
             # the dialog just changed; otherwise they sit there asserting the
@@ -1513,7 +1544,7 @@ class MainWindow(QMainWindow):
         self._run_busy(build, "Drawing the plot again…", show, "Plot failed")
 
     def _dialog_recipe(self, key: str, make_dialog, draw, accepted,
-                       controls=None, name=None) -> PlotRecipe:
+                       controls=None, name=None, view_keys=()) -> PlotRecipe:
         """A recipe for a plot whose options come from one of the plot dialogs.
 
         They are all the same shape — build the dialog, restore it, ask,
@@ -1543,7 +1574,7 @@ class MainWindow(QMainWindow):
             self._remember_dialog(again, key)
             return again.options()
 
-        return PlotRecipe(draw=draw, edit=ask, controls=controls,
+        return PlotRecipe(draw=draw, edit=ask, controls=controls, view_keys=view_keys,
                           options=dict(accepted.options()),
                           title=name or (lambda _options: mine["title"]))
 
@@ -1641,7 +1672,8 @@ class MainWindow(QMainWindow):
         recipe = PlotRecipe(
             draw=lambda **options: plot_electronic(*controls.plot_arguments(options)),
             edit=ask, title=controls.title, controls=controls.ElectronicControls,
-            aspect=controls.aspect, options=answer(dialog))
+            aspect=controls.aspect, options=answer(dialog),
+            view_keys=(controls.ElectronicControls.WINDOW_KEY, "dos_range"))
 
         def show(drawn) -> None:
             figure, _options = drawn
@@ -1706,7 +1738,8 @@ class MainWindow(QMainWindow):
         recipe = PlotRecipe(
             draw=lambda **options: plot_phonons(*controls.plot_arguments(options)),
             edit=ask, title=controls.title, controls=controls.PhononControls,
-            aspect=controls.aspect, options=answer(dialog))
+            aspect=controls.aspect, options=answer(dialog),
+            view_keys=(controls.PhononControls.WINDOW_KEY, "dos_range"))
 
         def show(drawn) -> None:
             figure, _options = drawn
@@ -1771,7 +1804,8 @@ class MainWindow(QMainWindow):
         recipe = self._dialog_recipe(
             "vci", lambda: VCIDialog(run, self), lambda **o: plot_vci(out, **o), dialog,
             controls=lambda: vci_options.VCIOptions(run),
-            name=lambda options: vci_options.title(run, options))
+            name=lambda options: vci_options.title(run, options),
+            view_keys=("representation", "frange"))
         try:
             figure, _options = recipe.redrawn()
         except Exception as exc:  # noqa: BLE001 - surface any plot error
@@ -2962,19 +2996,17 @@ class MainWindow(QMainWindow):
         boxes = []
         for axis, value in zip(("a", "b", "c"), self._supercell):
             box = QSpinBox()
-            # The old cap of 12 per axis was arbitrary and got in the way: what
-            # costs anything is the total atom count, not the repetition along
-            # any one direction, and a slab or a chain wants a large number down
-            # one axis and one along the others. So the number is free and the
-            # size is shown instead, with a confirmation past the point where it
-            # is genuinely slow.
+            # No cap per axis: what costs anything is the total atom count, not
+            # the repetition along any one direction, and a slab or a chain wants
+            # a large number down one axis and one along the others. The size is
+            # shown instead, with a confirmation past the point where it is
+            # genuinely slow.
             box.setRange(1, _MAX_SUPERCELL_REPEAT)
             box.setValue(value)
             form.addRow(f"Repeat along {axis}", box)
             boxes.append(box)
 
         size = QLabel()
-        size.setStyleSheet("color: palette(mid);")
         form.addRow("", size)
 
         def show_size() -> None:
@@ -3187,6 +3219,42 @@ class MainWindow(QMainWindow):
             na, nb, nc = self._supercell
             suffix = "" if self._supercell == (1, 1, 1) else f"  ({na}×{nb}×{nc})"
             action.setText(f"Supercell…{suffix}")
+        promote = getattr(self, "_supercell_to_cell_action", None)
+        if promote is not None:
+            promote.setEnabled(tuple(self._supercell) != (1, 1, 1))
+
+    def _supercell_to_cell(self) -> None:
+        """Make the supercell on screen the structure's own cell, edits and all.
+
+        A supercell is a way of drawing the crystal: an atom removed from one of
+        its cells is gone from that cell only, and a change of view, a deck or a
+        fold back to the unit cell takes no notice of it. Made the cell, the
+        supercell is the crystal — one vacancy per supercell is a defect at the
+        concentration its size sets — and what is done to it is done to the
+        structure. Shown as it stands, in the primitive view, at 1×1×1.
+
+        A lowered symmetry chosen for the old cell is dropped: its operators
+        were named in that cell. The phonon modes and the ADPs belong to the old
+        cell's atoms, and are set aside until an undo brings it back.
+        """
+        reps = tuple(self._supercell)
+        if reps == (1, 1, 1):
+            self.statusBar().showMessage(
+                "The cell on screen is already the unit cell: make a supercell "
+                "first (Cell ▸ Supercell…).", 6000)
+            return
+        box = np.diag(np.asarray(reps, dtype=float)) @ np.asarray(self._unit_cell, dtype=float)
+        atoms = to_analysis_cell(self.structure, box).to_ase()
+        atoms.info.pop(REDUCED_SYMMETRY_KEY, None)
+        self._source.restore(atoms)
+        self._cell_view = CellView.PRIMITIVE
+        self._tile_restore = None
+        self._set_supercell((1, 1, 1))
+        self._apply_cell_view()
+        self._update_cell_view_controls()
+        self.statusBar().showMessage(
+            f"The {reps[0]}×{reps[1]}×{reps[2]} supercell is now the cell: "
+            f"{len(atoms)} atoms  ·  in the undo history", 8000)
 
     # ── phonon q-points (a SCELPHONO run samples more than Gamma) ────────
     def _set_qmodes(self, qmodes) -> None:
@@ -3264,20 +3332,11 @@ class MainWindow(QMainWindow):
         would stay empty and grey for the rest of the session however the
         structure was put back. Moving an atom or changing an element keeps the
         count, so the panel keeps the modes and this does nothing.
-
-        When they genuinely do not apply, the panel says so. Going quiet and
-        greying out says only that something happened.
         """
         if self.phonon_panel.has_modes() or self._modes is None:
             return
-        if self._modes_natom == len(s) and self._reload_modes():
-            return
-        if self._modes_natom is not None:
-            self.phonon_panel.set_note(
-                f"The modes read from this file describe {self._modes_natom} atoms "
-                f"and the structure now has {len(s)}, so they cannot be shown on "
-                f"it. Undo the edit to animate them again."
-            )
+        if self._modes_natom == len(s):
+            self._reload_modes()
 
     def _tile_to_qpoint(self, reps) -> None:
         """Tile the cell to one whole period of the selected q — or undo that.
@@ -3306,16 +3365,20 @@ class MainWindow(QMainWindow):
         import are added to the structure on screen when nothing is being
         opened alongside them.
         """
+        from crystalline.crystalio import file_action
+
         to_open, to_import = self._dropped_files(event)
         if not to_open and not to_import:
-            self._say_if_only_atoms(self._dropped_paths(event))
             event.ignore()
             return
         event.acceptProposedAction()
         if len(to_open) > 1:
             self._drop_hint.show_hint(f"Open {len(to_open)} files", "each in a new tab")
         elif to_open:
-            self._drop_hint.show_hint(f"Open {os.path.basename(to_open[0])}", "in a new tab")
+            # An atom list opens as a molecule when there is nothing to add it to.
+            how = ("as a molecule, in a new tab" if file_action(to_open[0]) == "import"
+                   else "in a new tab")
+            self._drop_hint.show_hint(f"Open {os.path.basename(to_open[0])}", how)
         else:
             self._drop_hint.show_hint(
                 f"Add the atoms in {os.path.basename(to_import[0])}",
@@ -3407,8 +3470,9 @@ class MainWindow(QMainWindow):
         """
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Open structure files", self._open_folder(),
-            "Structure files (*.out *.gui *.f34 *.cif);;CRYSTAL files (*.out *.gui *.f34);;"
-            "CIF files (*.cif);;All files (*)",
+            "Structure files (*.out *.gui *.f34 *.cif *.xyz *.pdb);;"
+            "CRYSTAL files (*.out *.gui *.f34);;CIF files (*.cif);;"
+            "Molecules (*.xyz *.pdb);;All files (*)",
         )
         self._load_paths(paths)
 
@@ -3422,38 +3486,12 @@ class MainWindow(QMainWindow):
 
         The rest are read behind it, in order, so the file the user asked for
         first is the one they land in rather than the last to finish reading.
+        An atom list (.xyz, .pdb) chosen to be opened opens as a molecule.
         """
-        from crystalline.crystalio import file_action
-
-        # An atom list is not a structure of its own: it carries coordinates and
-        # nothing else — no cell, no calculation — so it is added to a structure
-        # rather than opened as one. Caught here, which is where every route in
-        # ends up, because the reader's own complaint about an .xyz is
-        # "EXITING: a .out file needs to be specified".
-        atoms_only = [path for path in paths if file_action(path) == "import"]
-        if atoms_only:
-            self._say_if_only_atoms(atoms_only)
-        paths = [path for path in paths if path not in set(atoms_only)]
+        paths = list(paths)
         for index, path in enumerate(paths):
             self._load_path(path, front=index == 0)
-        return list(paths)
-
-    def _say_if_only_atoms(self, paths) -> None:
-        """Say why an atom list was not opened, and what to do with it instead."""
-        from crystalline.crystalio import file_action
-
-        atoms_only = [path for path in paths if file_action(path) == "import"]
-        if not atoms_only:
-            return
-        named = (os.path.basename(atoms_only[0]) if len(atoms_only) == 1
-                 else f"{len(atoms_only)} files")
-        if len(self.structure) > 0:
-            told = (f"{named} holds atoms to add to a structure, not a structure "
-                    f"of its own — File ▸ Import atoms into structure…")
-        else:
-            told = (f"{named} holds atoms to add to a structure, and there is no "
-                    f"structure open to add them to.")
-        self.statusBar().showMessage(told, 8000)
+        return paths
 
     def _load_path(self, path: str, front: bool = True) -> None:
         """Open ``path`` in a tab of its own, reading it off the main thread.
@@ -3717,6 +3755,30 @@ class MainWindow(QMainWindow):
         self._reset_undo()
         # A note on what could not be read (modes, say) is kept on the tab and
         # said when the tab is seen — see _show_notice.
+
+    def _build_structure(self) -> None:
+        """Build a structure from nothing and open it, ready to be edited.
+
+        It opens in a tab like a file does — the empty one on screen, else a new
+        one — named Untitled until it is saved, and in editing mode, since
+        whatever is built here is a start.
+        """
+        from crystalline.crystalio import LoadedFile
+        from crystalline.ui.panels.build_dialog import BuildDialog
+
+        dialog = BuildDialog(self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        structure = dialog.structure()
+        tab = self._take_tab_for_file()
+        self._fill_tab(tab, None, _ReadFile(LoadedFile(structure=structure), None, None, {}, {}))
+        self._sync_welcome()
+        self._settle_tab(tab)
+        if not self._editing:
+            self._edit_mode_action.setChecked(True)  # toggles _set_editing(True)
+        self.statusBar().showMessage(
+            f"Built {len(structure)} atom{'' if len(structure) == 1 else 's'}  ·  "
+            "Add atom, in the Structure panel, adds more", 8000)
 
     def _import_atoms(self) -> None:
         """Read atoms from an .xyz/.pdb/.cif file and add them to the current structure.
@@ -4105,10 +4167,6 @@ class MainWindow(QMainWindow):
                 item.setEnabled(False)
                 item.setToolTip(VIDEO_MISSING_MESSAGE)
         form.addRow("Format:", fmt_box)
-        if not video:
-            hint = QLabel("Video formats need <code>pip install imageio-ffmpeg</code>", dialog)
-            hint.setStyleSheet("color: palette(mid);")
-            form.addRow("", hint)
 
         res_box = QComboBox(dialog)
         for label, size in resolutions:
@@ -4221,6 +4279,11 @@ class MainWindow(QMainWindow):
         # the ADP tensors themselves, keeps the cell operations ignorant of ADPs
         # and makes changing the temperature a re-index instead of a re-tile.
         base_index = np.arange(len(self._source))
+        if modes is not None and len(modes) and len(modes[0].eigenvector) != len(self._source):
+            # Modes of another cell: the source has been replaced by a supercell
+            # of the one they were computed in (_supercell_to_cell). An undo that
+            # puts that cell back brings them back with it.
+            modes = None
         if view is CellView.CRYSTALLOGRAPHIC:
             # One expansion produces a consistent structure + modes + index triple.
             base, expanded, base_index = expand_modes_to_conventional(
@@ -4333,11 +4396,13 @@ def _read_file(path: str) -> _ReadFile:
     most runs carry no ADPs, not every output has the rows the Info panel shows,
     and a probe that fails here is simply left for the window to ask again.
     """
-    from crystalline.crystalio import load, load_adp
+    from crystalline.crystalio import file_action, load, load_adp
 
     loaded = load(path)
-    # Geometry-only files (.gui/.f34/.cif) carry no results to plot.
-    output_path = None if path.lower().endswith((".gui", ".f34", ".cif")) else path
+    # Geometry-only files (.gui/.f34/.cif) and atom lists carry no results to plot.
+    geometry_only = (path.lower().endswith((".gui", ".f34", ".cif"))
+                     or file_action(path) == "import")
+    output_path = None if geometry_only else path
     try:
         adps = load_adp(path)
     except Exception:  # noqa: BLE001 - never let this break loading a file

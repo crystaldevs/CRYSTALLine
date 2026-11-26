@@ -59,7 +59,6 @@ def test_measure_dispatches_on_how_many_atoms_are_selected():
         assert result.indices == tuple(range(count))
     assert M.measure(positions, symbols, range(5)) is None  # a plane is fitted with the lattice planes
     assert M.measure(positions, symbols, []) is None
-    assert "Lattice planes" in M.selection_hint(5)          # and the hint says where
 
 
 def test_summaries_carry_the_symbols_and_units():
@@ -86,7 +85,3 @@ def test_degenerate_geometry_gives_nan_not_an_exception():
     assert np.isnan(M.dihedral(collinear, 0, 1, 2, 3))
 
 
-def test_selection_hint_describes_what_will_be_measured():
-    assert "distance" in M.selection_hint(2)
-    assert "angle" in M.selection_hint(3)
-    assert "plane" in M.selection_hint(9)

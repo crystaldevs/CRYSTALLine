@@ -68,7 +68,6 @@ def test_five_atoms_are_for_a_plane_fit_not_a_measurement(qapp):
     panel = GeometryPanel(Structure.from_ase(molecule("C6H6")))
     panel.set_selection(range(5))
     assert not panel._measure_btn.isEnabled()
-    assert "Lattice planes" in panel._hint.text()
     assert panel._fit_plane_btn.isEnabled()          # where the plane went
 
 

@@ -159,18 +159,6 @@ def _label(symbols: Sequence[str], indices: Sequence[int], joiner: str) -> str:
     return f"{text} +{extra} more" if extra > 0 else text
 
 
-def selection_hint(count: int) -> str:
-    """What the current number of selected atoms will measure."""
-    return {
-        0: "Select atoms in the 3D view to measure them.",
-        1: "1 atom: position. Select 2 for a distance.",
-        2: "2 atoms: distance. Select 3 for an angle.",
-        3: "3 atoms: angle.",
-        4: "4 atoms: dihedral.",
-    }.get(count, f"{count} atoms: select 4 or fewer to measure, or fit a plane "
-                 f"to them under Lattice planes.")
-
-
 __all__ = [
     "DEFAULT_THICKNESS",
     "Measurement",
@@ -184,5 +172,4 @@ __all__ = [
     "dihedral",
     "measure",
     "measure_point",
-    "selection_hint",
 ]

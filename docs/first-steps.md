@@ -3,8 +3,10 @@
 ## Opening a file
 
 **File → Open…** ({kbd}`Ctrl+O`) reads a CRYSTAL output (`.out`), a geometry
-file (`.gui`, `.f34`) or a crystallographic information file (`.cif`). A file
-dropped on the window is opened in the same way.
+file (`.gui`, `.f34`), a crystallographic information file (`.cif`) or a
+molecule (`.xyz`, `.pdb`). A file dropped on the window is opened in the same
+way; an `.xyz` or a `.pdb` dropped on a structure already open is added to it
+instead.
 
 No output to hand? [Installation](install.md#an-example-to-open) offers a small
 MgO calculation to open.

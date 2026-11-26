@@ -217,11 +217,6 @@ class GeometryPanel(QWidget):
         box = QVBoxLayout(group)
         box.setContentsMargins(0, 0, 0, 0)
 
-        self._hint = QLabel(measure_mod.selection_hint(0))
-        self._hint.setWordWrap(True)
-        self._hint.setStyleSheet("color: palette(mid);")
-        box.addWidget(self._hint)
-
         self._measure_btn = QPushButton("Measure selection")
         self._measure_btn.setToolTip(
             "1 atom → position, 2 → distance, 3 → angle, 4 → dihedral. "
@@ -632,7 +627,6 @@ class GeometryPanel(QWidget):
     def set_selection(self, indices: Sequence[int]) -> None:
         """Track the shared selection (driven by 3D picking)."""
         self._selection = [int(i) for i in indices]
-        self._hint.setText(measure_mod.selection_hint(len(self._selection)))
         self.sync_position()  # also calls _sync_buttons
 
     def set_editing_enabled(self, enabled: bool) -> None:

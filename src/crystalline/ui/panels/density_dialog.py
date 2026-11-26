@@ -138,7 +138,6 @@ class DensityDialog(QDialog):
         self._second_row = section.row_widgets("and")
 
         self.info = WrappedLabel("")
-        self.info.setStyleSheet("color: palette(mid);")
         section.append(self.info)
 
     def _build_view(self, column) -> None:
