@@ -53,9 +53,9 @@ def _stand_down():
     A panel left playing is not gone when its test returns: it lives until the
     garbage collector reaches it, and its timer goes on drawing frames through
     the tests after. Five of these left one running, and in a full run without
-    the git-ignored DAFADNP tests that made test_plot_recipe's drag take 400 ms
-    (12 frames of a dead file's animation), failing it, and a timer firing on a
-    panel being collected took the run down (SIGSEGV/SIGBUS in
+    the git-ignored tests on unpublished runs that made test_plot_recipe's drag
+    take 400 ms (12 frames of a dead file's animation), failing it, and a timer
+    firing on a panel being collected took the run down (SIGSEGV/SIGBUS in
     QTimerInfoList::activateTimers, 2026-10-20).
     """
     yield

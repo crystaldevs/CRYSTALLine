@@ -210,8 +210,8 @@ def series_labels(paths: Sequence[str]) -> List[str]:
     The names are taken in their parts (between ``_``, ``-``, ``.`` and
     spaces), and the parts every run shares are dropped; of what is left, the
     parts with a number in them, when there are any, since that is usually
-    what the series runs over. ``DAFADNP_FREQ_LOCMODES_02GPa_bugfix.out``
-    beside ``…_04GPa_bugfix.out`` and ``DAFADNP_FREQ_tight_LOCMODES.out`` is
+    what the series runs over. ``sample_FREQ_LOCMODES_02GPa_bugfix.out``
+    beside ``…_04GPa_bugfix.out`` and ``sample_FREQ_tight_LOCMODES.out`` is
     ``02GPa``, the last ``tight``. CRYSTAL does not print the pressure a
     geometry was optimised at, so this is a starting point for the label, to
     be written as the number it stands for. A single run, or names that come
@@ -417,7 +417,7 @@ def _hide_empty(bars) -> None:
     """Hide the bars of no height, which show nothing.
 
     CRYSTALClear's stacked bars give every group a bar on every mode, empty
-    where the group is under the threshold: 1560 bars on DAFADNP's 13 modes at
+    where the group is under the threshold: 1560 bars on a large run's 13 modes at
     1 %, 1181 of them empty. Each still cost its share of every draw (326 ms
     against 252 once hidden at 1×, 331 against 260 at 2×), its edge only
     stroked over the line it sits on. Hidden, not a pixel changes at 1×; at

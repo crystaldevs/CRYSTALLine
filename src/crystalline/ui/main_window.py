@@ -3703,7 +3703,7 @@ class MainWindow(QMainWindow):
         before any details: the Measure table's force constants, which a
         measurement made meanwhile is given when they come. Read with the
         structure, they held its first frame back by a third of a second on
-        DAFADNP (717 ms against 355, 2026-10-22).
+        a 104-atom run (717 ms against 355, 2026-10-22).
         """
         details = self._details_queue()
         local_modes = self._local_modes_queue()
@@ -4690,7 +4690,7 @@ def _read_local_modes(path: str) -> tuple:
     """A LOCMODES run's local modes, for the Measure section, as (modes, note).
 
     Read after its structure, not with it (see :meth:`MainWindow._read_next`):
-    0.3 s on DAFADNP, CRYSTALClear parsing the tables and summing the CNM
+    0.3 s on a 104-atom run, CRYSTALClear parsing the tables and summing the CNM
     once per internal coordinate, which held the tab's first frame back.
     Asked only of an output the probe found a LOCMODES section in, so every
     other output is scanned for one once. ``note`` says why there are none

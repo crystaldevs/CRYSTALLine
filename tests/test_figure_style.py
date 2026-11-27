@@ -259,7 +259,7 @@ def test_a_colour_chosen_against_the_data_stays_as_drawn_on_screen():
 
 def test_a_tick_the_axis_makes_on_screen_goes_back_on_paper_too():
     """An axis makes more ticks as it is zoomed, or drawn at the window's size,
-    each a copy of its first. Saved from the dark window, two of DAFADNP's
+    each a copy of its first. Saved from the dark window, two of a
     spectrum's minor ticks came out pale on the white paper."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 

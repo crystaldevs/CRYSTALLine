@@ -311,7 +311,7 @@ def to_screen(figure, *, background: str, ink: str, rule: str) -> None:
         # First, before the artists below: they include the tick lines, and
         # once those were changed one by one the first tick read as changed
         # already, so the settings never were — and a tick the axis made on
-        # screen (two more minor ticks at the window's size, DAFADNP's
+        # screen (two more minor ticks at the window's size, on a run's
         # spectra) took the screen's colour from the first and was saved in
         # it, pale on white.
         for name, axis in getattr(ax, "_axis_map", {}).items():

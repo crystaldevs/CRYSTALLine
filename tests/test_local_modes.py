@@ -205,7 +205,7 @@ def test_a_row_naming_an_atom_the_cell_has_not_got_is_left_out():
 
 # ── the window ────────────────────────────────────────────────────────────
 def test_a_file_is_read_without_its_local_modes_which_come_after(monkeypatch):
-    """Not with the structure: on DAFADNP they held the tab's first frame back
+    """Not with the structure: on a 104-atom run they held the tab's first frame back
     by a third of a second. The probe says there are some, for the window to
     read them once the tab is up; and when there is a LOCMODES section that
     will not read, the later read says why, for the window to say."""

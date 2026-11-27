@@ -99,10 +99,10 @@ def test_the_summary_says_whether_the_coordinates_are_grouped():
 
 # ── a series ──────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("names, labels", [
-    (["DAFADNP_FREQ_LOCMODES_02GPa_bugfix.out", "DAFADNP_FREQ_LOCMODES_04GPa_bugfix.out",
-      "DAFADNP_FREQ_LOCMODES_1GPa_bugfix.out"], ["02GPa", "04GPa", "1GPa"]),
-    (["DAFADNP_FREQ_tight_LOCMODES.out", "DAFADNP_FREQ_LOCMODES_02GPa_bugfix.out",
-      "DAFADNP_FREQ_LOCMODES_1GPa_bugfix.out"], ["tight", "02GPa", "1GPa"]),
+    (["sample_FREQ_LOCMODES_02GPa_bugfix.out", "sample_FREQ_LOCMODES_04GPa_bugfix.out",
+      "sample_FREQ_LOCMODES_1GPa_bugfix.out"], ["02GPa", "04GPa", "1GPa"]),
+    (["sample_FREQ_tight_LOCMODES.out", "sample_FREQ_LOCMODES_02GPa_bugfix.out",
+      "sample_FREQ_LOCMODES_1GPa_bugfix.out"], ["tight", "02GPa", "1GPa"]),
     (["run_0.out", "run_10.out"], ["0", "10"]),
     (["run_a_1.out", "run_b_1.out"], ["a", "b"]),             # the number is shared
     (["alpha.out", "beta.out"], ["alpha", "beta"]),            # nothing shared

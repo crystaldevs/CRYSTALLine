@@ -12,7 +12,7 @@ out: where CRYSTAL has the atoms.
 That has to come from the output too, and from a particular block of it. The
 cell indices are counted from CRYSTAL's Cartesian coordinates of the primitive
 cell, which fold the atoms into a cell differently from the fractional ones the
-structure is read from: in DAFADNP's monoclinic cell 18 of 104 atoms sit a
+structure is read from: in a monoclinic cell of 104 atoms, 18 of them sit a
 whole lattice vector apart in the two, and with the fractional positions a
 fifth of the bonds came out the wrong length. With the Cartesian block every
 one of them comes out as CRYSTAL prints it.

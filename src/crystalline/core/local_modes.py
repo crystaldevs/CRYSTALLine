@@ -161,7 +161,7 @@ class LocalModes:
         were measured. Usually one coordinate or none; two for a near-linear
         angle, which LOCMODES takes as two bends over the same atoms, or for
         two dihedral-like coordinates it defines over the same four atoms in
-        the same order (DAFADNP's 681 and 726). Sorted by CRYSTAL's number.
+        the same order. Sorted by CRYSTAL's number.
         """
         atoms = tuple(int(a) for a in atoms)
         points = np.asarray(points, dtype=float)
@@ -184,7 +184,7 @@ class LocalModes:
         """The listed coordinates a measurement is the symmetry image of.
 
         LOCMODES does not list every coordinate of a set the crystal's symmetry
-        makes equivalent — in DAFADNP 211 images of listed coordinates are not
+        makes equivalent — in one run, 211 images of listed coordinates are not
         themselves listed — and an equivalent coordinate has the same local
         mode. So a measurement not found as it is may be found once carried by
         an operation of the crystal onto a coordinate that is. What comes back
