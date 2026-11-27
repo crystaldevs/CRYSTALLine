@@ -56,6 +56,12 @@ from crystalline.crystalio.anscan import (
     load_anscan,
     plot_anscan,
 )
+from crystalline.crystalio.cnm import CNMRun, cnm_run, plot_cnm, plot_cnm_series
+from crystalline.crystalio.locmodes import (
+    LocalModesError,
+    has_local_modes,
+    read_local_modes,
+)
 from crystalline.crystalio.pes import (
     DIMENSIONS,
     QUANTITIES,
@@ -108,6 +114,13 @@ __all__ = [
     "has_anscan",
     "load_anscan",
     "plot_anscan",
+    "CNMRun",
+    "cnm_run",
+    "plot_cnm",
+    "plot_cnm_series",
+    "LocalModesError",
+    "has_local_modes",
+    "read_local_modes",
     "DIMENSIONS",
     "QUANTITIES",
     "PESMode",

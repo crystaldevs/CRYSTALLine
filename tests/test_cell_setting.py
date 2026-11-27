@@ -67,7 +67,7 @@ def _crystal(hall, lattice=None, sites=None):
 
 
 def _p21n():
-    """A P2₁/n molecular crystal in the cell of the DAFADNP 1 GPa run."""
+    """A P2₁/n molecular crystal, in the cell of a real run."""
     from pymatgen.core import Lattice
 
     lattice = Lattice.from_parameters(8.24000122, 13.44872633, 8.96772645, 90, 105.483151, 90)

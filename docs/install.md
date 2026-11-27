@@ -71,7 +71,7 @@ These are installed automatically if not already present:
 | pyvista ≥ 0.43, pyvistaqt ≥ 0.11.4, vtk ≥ 9.1 | the 3D viewport |
 | numpy ≥ 1.23, scipy ≥ 1.9 | geometry, bonds, statistics |
 | ase ≥ 3.23, pymatgen ≥ 2023.11.10, spglib ≥ 2.5 | structures, symmetry, Brillouin zones |
-| CRYSTALClear ≥ 0.2.16 | reading CRYSTAL output and drawing the property plots |
+| CRYSTALClear ≥ 0.2.18 | reading CRYSTAL output and drawing the property plots |
 | matplotlib ≥ 3.6, Pillow ≥ 9.0 | plots and images |
 
 ## Checking the installation

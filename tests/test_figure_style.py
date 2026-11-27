@@ -241,9 +241,25 @@ def test_back_on_paper_it_is_exactly_as_drawn_however_often_it_was_shown():
             to_hex(ax.xaxis.label.get_color())] == before
 
 
+def test_a_colour_chosen_against_the_data_stays_as_drawn_on_screen():
+    """A number in ink on a light bar is not the paper's ink: in the dark
+    window it would have turned light on the light bar."""
+    from crystalline.crystalio import figure_style
+
+    figure, ax = _drawn()
+    on_bar = figure_style.keep_as_drawn(ax.text(0.5, 0.5, "60", color=figure_style.INK))
+    on_paper = ax.text(0.2, 0.8, "label", color=figure_style.INK)
+    _dark(figure)
+
+    assert to_hex(on_bar.get_color()) == figure_style.INK
+    assert to_hex(on_paper.get_color()) == "#e7eaef"
+    figure_style.to_paper(figure)
+    assert to_hex(on_bar.get_color()) == to_hex(on_paper.get_color()) == figure_style.INK
+
+
 def test_a_tick_the_axis_makes_on_screen_goes_back_on_paper_too():
     """An axis makes more ticks as it is zoomed, or drawn at the window's size,
-    each a copy of its first. Saved from the dark window, two of DAFADNP's
+    each a copy of its first. Saved from the dark window, two of a
     spectrum's minor ticks came out pale on the white paper."""
     from matplotlib.backends.backend_agg import FigureCanvasAgg
 
